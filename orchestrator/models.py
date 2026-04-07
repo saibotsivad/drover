@@ -53,12 +53,17 @@ class CommandStatus(str, Enum):
     complete = "complete"
 
 
+class CommandMessage(BaseModel):
+    seq: int
+    stream: str
+    data: str
+
+
 class ExecStatusResponse(BaseModel):
     command_id: str
     status: CommandStatus
-    stdout: str = ""
-    stderr: str = ""
     exit_code: int | None = None
+    messages: list[CommandMessage] = Field(default_factory=list)
 
 
 # --- Image models ---

@@ -18,6 +18,31 @@ CREATE TABLE IF NOT EXISTS containers (
     created_at      TEXT NOT NULL,
     stopped_at      TEXT
 );
+
+CREATE TABLE IF NOT EXISTS commands (
+    id              TEXT PRIMARY KEY,
+    container_id    TEXT NOT NULL,
+    command         TEXT NOT NULL,
+    status          TEXT NOT NULL DEFAULT 'pending',
+    exit_code       INTEGER,
+    created_at      TEXT NOT NULL,
+    FOREIGN KEY (container_id) REFERENCES containers(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_commands_container_id
+    ON commands(container_id);
+
+CREATE TABLE IF NOT EXISTS command_messages (
+    seq             INTEGER PRIMARY KEY AUTOINCREMENT,
+    command_id      TEXT NOT NULL,
+    stream          TEXT NOT NULL,
+    data            TEXT NOT NULL,
+    received_at     TEXT NOT NULL,
+    FOREIGN KEY (command_id) REFERENCES commands(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_command_messages_command_id
+    ON command_messages(command_id);
 """
 
 
