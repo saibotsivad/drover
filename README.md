@@ -174,22 +174,13 @@ The exact data model for containers is not yet decided, but it will look somethi
 
 Applies equally to standard and privileged containers.
 
-```
-   POST /containers
-         │
-         ▼
-     [ running ] ◄──── POST /resume
-         │                    ▲
-    POST /stop                │
- (or idle timeout)            │
-         │                    │
-         ▼                    │
-    [ stopped ] ──────────────┘
-         │
-DELETE /containers/{id}
-         │
-         ▼
-   [ destroyed ]
+```mermaid
+stateDiagram-v2
+    [*] --> running: POST /containers
+    running --> stopped: POST /stop\n(or idle timeout)
+    stopped --> running: POST /resume
+    stopped --> destroyed: DELETE /containers/{id}
+    destroyed --> [*]
 ```
 
 A stopped container retains its filesystem layer and can be resumed. Destroyed containers are fully removed.
