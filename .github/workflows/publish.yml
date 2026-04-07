@@ -40,6 +40,9 @@ jobs:
             type=semver,pattern={{major}}
             type=sha
 
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
       - name: Install cosign
         uses: sigstore/cosign-installer@v3
 
