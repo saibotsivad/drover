@@ -37,18 +37,18 @@ orchestrator/
 └── requirements.txt
 ```
 
-- [ ] Define project layout and create empty modules
-- [ ] Implement `config.py` — read env vars with the following defaults:
+- [x] Define project layout and create empty modules
+- [x] Implement `config.py` — read env vars with the following defaults:
   - `PRIVILEGED_IMAGE`: no default — if unset, privileged container requests are rejected
   - `DB_PATH`: `/var/lib/orchestrator/db.sqlite`
   - `SOCKET_DIR`: `/var/run/microcontainers`
   - `DOCKER_SOCK`: `/var/run/docker.sock`
   - `REAPER_INTERVAL_SECONDS`: `5`
-- [ ] Implement `database.py` — async context manager for DB connection, `init_db()` that creates tables on startup
-- [ ] Define SQLite schema: `containers` table (id, docker_id, image, privileged, status, socket_path, label, timeout_seconds, last_seen, created_at, stopped_at)
-- [ ] Implement `models.py` — Pydantic models for API request/response bodies and internal container state
-- [ ] Wire up `app.py` — FastAPI lifespan that initializes DB, starts background tasks, and cleans up on shutdown
-- [ ] Keep existing `/health` endpoint working throughout
+- [x] Implement `database.py` — async context manager for DB connection, `init_db()` that creates tables on startup
+- [x] Define SQLite schema: `containers` table (id, docker_id, image, privileged, status, socket_path, label, timeout_seconds, last_seen, created_at, stopped_at)
+- [x] Implement `models.py` — Pydantic models for API request/response bodies and internal container state
+- [x] Wire up `app.py` — FastAPI lifespan that initializes DB, starts background tasks, and cleans up on shutdown
+- [x] Keep existing `/health` endpoint working throughout
 
 ## Phase 2 — Docker Engine Client
 
