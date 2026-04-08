@@ -8,6 +8,7 @@ Message types (guest -> orchestrator):
   - heartbeat: {"type": "heartbeat"}
   - output:    {"type": "output", "id": "<cmd_id>", "stream": "stdout|stderr", "data": "..."}
   - result:    {"type": "result", "id": "<cmd_id>", "exit_code": N}
+  - done:      {"type": "done"}
 
 Message types (orchestrator -> guest):
   - command:   {"type": "command", "id": "<cmd_id>", "exec": "..."}
@@ -17,6 +18,7 @@ import asyncio
 import json
 import logging
 import os
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
 
 from orchestrator.config import Config
@@ -36,6 +38,11 @@ class SocketManager:
         self._servers: dict[str, asyncio.AbstractServer] = {}
         self._writers: dict[str, asyncio.StreamWriter] = {}
         self._tasks: dict[str, asyncio.Task] = {}
+        self._done_callback: Callable[[str], Awaitable[None]] | None = None
+
+    def set_done_callback(self, callback: Callable[[str], Awaitable[None]]) -> None:
+        """Register a callback invoked when a container sends a done signal."""
+        self._done_callback = callback
 
     async def create_socket(self, container_id: str) -> str:
         """Create a Unix socket for a container and start listening.
@@ -193,6 +200,8 @@ class SocketManager:
             await self._handle_output(msg)
         elif msg_type == "result":
             await self._handle_result(msg)
+        elif msg_type == "done":
+            await self._handle_done(container_id)
         else:
             logger.warning(
                 "Unknown message type from container %s: %s",
@@ -243,3 +252,8 @@ class SocketManager:
         logger.info(
             "Command %s completed with exit_code=%s", command_id, exit_code
         )
+
+    async def _handle_done(self, container_id: str) -> None:
+        logger.info("Done signal from container %s", container_id)
+        if self._done_callback:
+            asyncio.create_task(self._done_callback(container_id))

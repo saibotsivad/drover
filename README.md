@@ -106,9 +106,14 @@ The socket at `/run/orchestrator.sock` is the single bidirectional communication
 { "type": "output", "id": "abc123", "stream": "stdout", "data": "Cloning into 'repo'..." }
 { "type": "output", "id": "abc123", "stream": "stderr", "data": "Receiving objects: 100%" }
 { "type": "result", "id": "abc123", "exit_code": 0 }
+{ "type": "done" }
 ```
 
 The normal stdout captured by Docker logs is unstructured debug output only, it has no semantic meaning to the orchestrator or Drover overall.
+
+### Done Signal
+
+A container can send `{"type": "done"}` to indicate it has finished its work and is ready to be stopped. The orchestrator immediately initiates the `running → stopping → stopped` transition, without waiting for the idle timeout. This is useful for short-lived containers that complete a task and want to release resources promptly.
 
 ### Timeout and Auto-Stop
 
@@ -119,8 +124,9 @@ This means:
 - A container that never connects is stopped after timeout
 - A container that finishes work and goes quiet is stopped after timeout
 - A container whose process crashes stops sending heartbeats and is stopped after timeout
+- A container that sends a `done` signal is stopped immediately
 
-The guest agent is responsible for sending heartbeats at an interval shorter than the configured timeout, and can send an exit-code prior to timeout to shut down early.
+The guest agent is responsible for sending heartbeats at an interval shorter than the configured timeout. To shut down early, the agent can send a `done` signal.
 
 ---
 
@@ -182,7 +188,7 @@ Applies equally to standard and privileged containers.
 ```mermaid
 stateDiagram-v2
     [*] --> running: POST /containers
-    running --> stopping: POST /stop (or idle timeout)
+    running --> stopping: POST /stop (or idle timeout or done signal)
     stopping --> stopped: Docker confirms stop
     stopped --> resuming: POST /resume
     resuming --> running: Docker confirms start
