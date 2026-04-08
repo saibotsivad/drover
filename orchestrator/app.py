@@ -107,14 +107,29 @@ async def lifespan(app: FastAPI):
     docker = DockerClient(config)
     sockets = SocketManager(config, db)
 
+    container_manager = ContainerManager(config, db, docker, sockets)
+
+    async def _handle_container_done(container_id: str) -> None:
+        try:
+            await container_manager.stop_container(container_id)
+            logger.info("Container %s stopped via done signal", container_id)
+        except (ContainerStateConflict, ContainerNotFound):
+            pass
+        except Exception:
+            logger.exception(
+                "Failed to stop container %s after done signal", container_id
+            )
+
+    sockets.set_done_callback(_handle_container_done)
+
     app.state.config = config
     app.state.db = db
     app.state.docker = docker
     app.state.sockets = sockets
-    app.state.container_manager = ContainerManager(config, db, docker, sockets)
+    app.state.container_manager = container_manager
 
     reaper_task = asyncio.create_task(
-        _reaper_loop(config, db, app.state.container_manager)
+        _reaper_loop(config, db, container_manager)
     )
 
     yield

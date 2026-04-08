@@ -16,12 +16,6 @@ The current exec API uses polling (`GET /containers/{id}/exec/{cmd_id}`). Real-t
 
 The REST API has no auth layer. Before any external exposure, we need to decide on an auth scheme — API keys, mTLS, OAuth tokens, or something else — and whether authorization is flat or scoped (e.g. per-image or per-container permissions).
 
-### Container "ready to delete" signal
-
-Containers currently rely on the idle timeout to get reaped. A new message type (e.g. `{"type": "done"}`) from the guest agent would let short-lived containers signal completion immediately, avoiding unnecessary timeout waits and enabling tighter orchestration workflows.
-
----
-
 ## Follow-Up Items
 
 Concrete work items that can proceed without further design discussion.
