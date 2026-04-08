@@ -3,7 +3,13 @@
 from fastapi import APIRouter, HTTPException, Request
 
 from orchestrator.container_manager import ContainerError, ContainerManager
-from orchestrator.models import ContainerResponse, CreateContainerRequest
+from orchestrator.models import (
+    ContainerResponse,
+    CreateContainerRequest,
+    ExecRequest,
+    ExecResponse,
+    ExecStatusResponse,
+)
 
 router = APIRouter(prefix="/containers", tags=["containers"])
 
@@ -50,5 +56,26 @@ async def resume_container(container_id: str, request: Request) -> ContainerResp
 async def destroy_container(container_id: str, request: Request) -> ContainerResponse:
     try:
         return await _manager(request).destroy_container(container_id)
+    except ContainerError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.detail)
+
+
+@router.post("/{container_id}/exec", status_code=201)
+async def exec_command(
+    container_id: str, req: ExecRequest, request: Request
+) -> ExecResponse:
+    try:
+        command_id = await _manager(request).exec_command(container_id, req.command)
+        return ExecResponse(command_id=command_id)
+    except ContainerError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.detail)
+
+
+@router.get("/{container_id}/exec/{command_id}")
+async def get_exec_status(
+    container_id: str, command_id: str, request: Request
+) -> ExecStatusResponse:
+    try:
+        return await _manager(request).get_command_status(container_id, command_id)
     except ContainerError as e:
         raise HTTPException(status_code=e.status_code, detail=e.detail)
