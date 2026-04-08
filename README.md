@@ -35,9 +35,14 @@ To run this system, the host requires:
 
 The orchestrator is configured via environment variables at startup:
 
-| Variable | Required | Description |
-|---|---|---|
-| `PRIVILEGED_IMAGE` | No | Name of the Docker image to use for privileged micro-containers. If unset, privileged container requests are rejected. |
+| Variable | Required | Default | Description |
+|---|---|---|---|
+| `PRIVILEGED_IMAGE` | No | _(unset)_ | Docker image for privileged micro-containers. If unset, privileged container requests are rejected. |
+| `DB_PATH` | No | `/var/lib/orchestrator/db.sqlite` | Path to the SQLite database file. |
+| `SOCKET_DIR` | No | `/var/run/microcontainers` | Directory for per-container Unix socket files. |
+| `DOCKER_SOCK` | No | `/var/run/docker.sock` | Path to the Docker daemon Unix socket. |
+| `REAPER_INTERVAL_SECONDS` | No | `5` | How often (in seconds) the idle-timeout reaper runs. |
+| `LOG_LEVEL` | No | `INFO` | Python log level (`DEBUG`, `INFO`, `WARNING`, `ERROR`). |
 
 ---
 
@@ -50,6 +55,10 @@ The orchestrator is configured via environment variables at startup:
 | `/run/user/1000/docker.sock` | `/var/run/docker.sock` | Docker-out-of-Docker: talks to the host Docker daemon |
 | `/var/run/microcontainers/` | `/var/run/microcontainers/` | Shared directory for per-micro-container Unix sockets |
 | `/var/lib/orchestrator/db.sqlite` | `/var/lib/orchestrator/db.sqlite` | Persistent state database |
+
+### Dependencies
+
+The orchestrator is built on FastAPI (with Uvicorn), aiosqlite for async SQLite access, and httpx for Docker API communication. Notably, there is no Docker Python SDK — the orchestrator talks directly to the Docker Engine REST API over the mounted Unix socket via httpx. This keeps the dependency tree minimal and gives full control over API calls.
 
 ### Responsibilities
 
@@ -83,8 +92,6 @@ A privileged micro-container uses the image named by `PRIVILEGED_IMAGE` and does
 ### Socket Protocol
 
 The socket at `/run/orchestrator.sock` is the single bidirectional communication channel, carrying newline-delimited JSON. The guest agent connects once at startup and maintains a persistent connection.
-
-The exact data structure is not yet defined, but will look something like this:
 
 **Inbound (orchestrator-to-container):**
 
@@ -153,8 +160,6 @@ The only constraint is that whatever process builds the image must tag it with t
 
 ### Create Request Example
 
-The exact data model for containers is not yet decided, but it will look something like this:
-
 ```json
 {
   "image": "python-runner",
@@ -177,21 +182,22 @@ Applies equally to standard and privileged containers.
 ```mermaid
 stateDiagram-v2
     [*] --> running: POST /containers
-    running --> stopped: POST /stop\n(or idle timeout)
-    stopped --> running: POST /resume
-    stopped --> destroyed: DELETE /containers/{id}
+    running --> stopping: POST /stop (or idle timeout)
+    stopping --> stopped: Docker confirms stop
+    stopped --> resuming: POST /resume
+    resuming --> running: Docker confirms start
+    running --> destroying: DELETE
+    stopped --> destroying: DELETE
+    destroying --> destroyed: Docker confirms removal
     destroyed --> [*]
 ```
 
 A stopped container retains its filesystem layer and can be resumed. Destroyed containers are fully removed.
 
+The intermediate states (`stopping`, `resuming`, `destroying`) are transient guard rails. The API returns `409 Conflict` if you attempt an action that conflicts with a transition already in progress.
+
 ---
 
 ## Open Issues
 
-- **Command streaming**: Decide between SSE, WebSocket, or polling for streaming exec output to callers.
-- **Auth**: The orchestrator REST API has no auth defined yet.
-- **Container message types** - The data structure between orchestrator and container is not defined yet.
-  - Need some way for the container to send a message that it can be shut down and deleted.
-- **Container logs** - Docker logs from a container should be retained for some amount of time, even after the container is fully shut down / deleted. Logs should be an API endpoint.
-- **Container API structure** - The exact data model for containers is not yet decided
+See `TODO.md` for the full list of remaining work and open design decisions.

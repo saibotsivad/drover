@@ -1,6 +1,6 @@
 # Drover Orchestrator — Remaining Work
 
-All six implementation phases from `PLAN.md` are complete. The items below are follow-up work and open design decisions identified during planning that were intentionally deferred.
+All six implementation phases are complete. The items below are follow-up work and open design decisions identified during planning that were intentionally deferred.
 
 ---
 
