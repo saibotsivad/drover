@@ -97,3 +97,21 @@ class ImageDetail(ImageSummary):
     id: str
     architecture: str | None = None
     os: str | None = None
+
+    @classmethod
+    def from_docker_inspect(cls, short_name: str, data: dict) -> "ImageDetail":
+        repo_tags = data.get("RepoTags") or []
+        tags = []
+        for tag in repo_tags:
+            _, _, t = tag.partition(":")
+            if t:
+                tags.append(t)
+        return cls(
+            name=short_name,
+            tags=tags,
+            size=data.get("Size", 0),
+            created=datetime.fromisoformat(data["Created"]),
+            id=data["Id"],
+            architecture=data.get("Architecture"),
+            os=data.get("Os"),
+        )
