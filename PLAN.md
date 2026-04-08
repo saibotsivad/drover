@@ -54,16 +54,16 @@ orchestrator/
 
 Build a thin async client that talks to the Docker daemon over its Unix socket.
 
-- [ ] Implement `docker_client.py` with an `httpx.AsyncClient` using a Unix socket transport to `/var/run/docker.sock`
-- [ ] `list_images(prefix)` — `GET /images` filtered to `drover/*` references via `docker_client.list_images`, return name, tags, size, created date
-- [ ] `inspect_image(name)` — `GET /images/{name}` inspect a specific `drover/{name}` image, return metadata and status
-- [ ] `create_container(config)` — `POST /containers` with image, env, binds, runtime, etc.
-- [ ] `start_container(id)` — `POST /containers/{id}/start`
-- [ ] `stop_container(id)` — `POST /containers/{id}/stop`
-- [ ] `remove_container(id)` — `DELETE /containers/{id}`
-- [ ] `inspect_container(id)` — `GET /containers/{id}`
-- [ ] `get_container_logs(id, tail)` — `GET /containers/{id}/logs`
-- [ ] Add error handling — translate Docker API errors into meaningful exceptions
+- [x] Implement `docker_client.py` with an `httpx.AsyncClient` using a Unix socket transport to `/var/run/docker.sock`
+- [x] `list_images(prefix)` — `GET /images` filtered to `drover/*` references via `docker_client.list_images`, return name, tags, size, created date
+- [x] `inspect_image(name)` — `GET /images/{name}` inspect a specific `drover/{name}` image, return metadata and status
+- [x] `create_container(config)` — `POST /containers` with image, env, binds, runtime, etc.
+- [x] `start_container(id)` — `POST /containers/{id}/start`
+- [x] `stop_container(id)` — `POST /containers/{id}/stop`
+- [x] `remove_container(id)` — `DELETE /containers/{id}`
+- [x] `inspect_container(id)` — `GET /containers/{id}`
+- [x] `get_container_logs(id, tail)` — `GET /containers/{id}/logs`
+- [x] Add error handling — translate Docker API errors into meaningful exceptions
 
 ## Phase 3 — Container Lifecycle (without socket protocol)
 
