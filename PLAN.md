@@ -118,10 +118,10 @@ Implement the background idle-timeout reaper.
 
 Replace the stub Dockerfile with a production build.
 
-- [ ] Write `requirements.txt` (pinned versions)
-- [ ] Write production `Dockerfile` — multi-stage build, non-root user (UID 1000), minimal image
-- [ ] Expose port 8000, set `CMD` to run uvicorn
-- [ ] Add structured logging throughout (Python `logging`, JSON format)
+- [x] Write `requirements.txt` (pinned versions)
+- [x] Write production `Dockerfile` — multi-stage build, non-root user (UID 1000), minimal image
+- [x] Expose port 8000, set `CMD` to run uvicorn
+- [x] Add structured logging throughout (Python `logging`, JSON format)
 
 ---
 
