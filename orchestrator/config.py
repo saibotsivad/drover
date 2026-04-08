@@ -9,6 +9,7 @@ class Config:
     socket_dir: str
     docker_sock: str
     reaper_interval_seconds: int
+    log_level: str
 
 
 def load_config() -> Config:
@@ -20,4 +21,5 @@ def load_config() -> Config:
         reaper_interval_seconds=int(
             os.environ.get("REAPER_INTERVAL_SECONDS", "5")
         ),
+        log_level=os.environ.get("LOG_LEVEL", "INFO").upper(),
     )

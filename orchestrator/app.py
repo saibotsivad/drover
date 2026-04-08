@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 import time
 from contextlib import asynccontextmanager
@@ -17,6 +18,35 @@ from orchestrator.database import Database
 from orchestrator.docker_client import DockerClient
 from orchestrator.routers import containers, images
 from orchestrator.socket_manager import SocketManager
+
+
+class _JsonFormatter(logging.Formatter):
+    """Formats log records as single-line JSON objects."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        obj = {
+            "ts": self.formatTime(record, "%Y-%m-%dT%H:%M:%S.") + f"{record.msecs:03.0f}Z",
+            "level": record.levelname,
+            "logger": record.name,
+            "msg": record.getMessage(),
+        }
+        if record.exc_info and record.exc_info[0] is not None:
+            obj["exc"] = self.formatException(record.exc_info)
+        return json.dumps(obj, default=str)
+
+
+def setup_logging(level: str = "INFO") -> None:
+    handler = logging.StreamHandler()
+    handler.setFormatter(_JsonFormatter())
+    root = logging.getLogger()
+    root.handlers.clear()
+    root.addHandler(handler)
+    root.setLevel(getattr(logging, level, logging.INFO))
+    # Suppress noisy third-party loggers
+    logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
+
 
 logger = logging.getLogger(__name__)
 
@@ -70,6 +100,8 @@ async def _reaper_loop(
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     config = load_config()
+    setup_logging(config.log_level)
+    logger.info("Starting Drover orchestrator")
     db = Database(config.db_path)
     await db.connect()
     docker = DockerClient(config)
