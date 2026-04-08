@@ -5,7 +5,6 @@ client.  All container state transitions flow through this module.
 """
 
 import logging
-import os
 from datetime import datetime, timezone
 
 from orchestrator.config import Config
@@ -17,7 +16,14 @@ from orchestrator.docker_client import (
     ImageNotFoundError,
 )
 from orchestrator.id_gen import generate_id
-from orchestrator.models import ContainerResponse, ContainerStatus, CreateContainerRequest
+from orchestrator.models import (
+    CommandMessage,
+    ContainerResponse,
+    ContainerStatus,
+    CreateContainerRequest,
+    ExecStatusResponse,
+)
+from orchestrator.socket_manager import SocketManager
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +66,22 @@ class PrivilegedNotConfigured(ContainerError):
 class ImageNotFound(ContainerError):
     def __init__(self, image: str) -> None:
         super().__init__(404, f"Image 'drover/{image}' not found")
+
+
+class ContainerNotConnected(ContainerError):
+    def __init__(self, container_id: str) -> None:
+        super().__init__(
+            409,
+            f"Container '{container_id}' has no active guest agent connection",
+        )
+
+
+class CommandNotFound(ContainerError):
+    def __init__(self, container_id: str, command_id: str) -> None:
+        super().__init__(
+            404,
+            f"Command '{command_id}' not found on container '{container_id}'",
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -105,10 +127,13 @@ def _docker_state_to_status(inspection: dict) -> ContainerStatus | None:
 
 
 class ContainerManager:
-    def __init__(self, config: Config, db: Database, docker: DockerClient) -> None:
+    def __init__(
+        self, config: Config, db: Database, docker: DockerClient, sockets: SocketManager
+    ) -> None:
         self._config = config
         self._db = db
         self._docker = docker
+        self._sockets = sockets
 
     # -- create -------------------------------------------------------------
 
@@ -125,23 +150,20 @@ class ContainerManager:
             except ImageNotFoundError:
                 raise ImageNotFound(req.image)
 
-        # 2. Generate ID and derive socket path
+        # 2. Generate ID and create the Unix socket (must exist before container
+        #    start so the bind mount targets a file, not a directory).
         container_id = generate_id()
-        socket_path = os.path.join(self._config.socket_dir, f"{container_id}.sock")
+        socket_path = await self._sockets.create_socket(container_id)
 
         # 3. Build Docker container configuration
         env_list = [f"{k}={v}" for k, v in req.env.items()]
         env_list.append(f"DROVER_CONTAINER_ID={container_id}")
 
-        # Socket bind mount is added in Phase 4 once socket_manager creates
-        # the Unix socket file before container start.  Including the mount
-        # now would cause Docker to create a *directory* at the socket path
-        # (the file doesn't exist yet), which breaks later socket creation.
-        binds: list[str] = []
+        binds: list[str] = [f"{socket_path}:/run/orchestrator.sock"]
         if req.privileged:
             binds.append(f"{self._config.docker_sock}:/run/docker.sock")
 
-        host_config: dict = {"Binds": binds} if binds else {}
+        host_config: dict = {"Binds": binds}
         if not req.privileged:
             host_config["Runtime"] = "runsc"
 
@@ -151,17 +173,15 @@ class ContainerManager:
             "HostConfig": host_config,
         }
 
-        # 4. Ensure socket directory exists (needed later by socket_manager)
-        os.makedirs(self._config.socket_dir, exist_ok=True)
-
-        # 5. Create and start Docker container
+        # 4. Create and start Docker container
         result = await self._docker.create_container(docker_config)
         docker_id = result["Id"]
 
         try:
             await self._docker.start_container(docker_id)
         except Exception:
-            # Clean up the Docker container if start fails
+            # Clean up the Docker container and socket if start fails
+            await self._sockets.destroy_socket(container_id)
             try:
                 await self._docker.remove_container(docker_id, force=True)
             except Exception:
@@ -269,6 +289,9 @@ class ContainerManager:
             (container_id,),
         )
 
+        # Close the socket connection but preserve the socket file for resume
+        await self._sockets.close_socket(container_id)
+
         try:
             await self._docker.stop_container(row["docker_id"])
         except ContainerNotFoundError:
@@ -302,6 +325,9 @@ class ContainerManager:
             (container_id,),
         )
 
+        # Re-create the socket listener before starting the container
+        await self._sockets.create_socket(container_id)
+
         await self._docker.start_container(row["docker_id"])
 
         now = _now_iso()
@@ -332,7 +358,9 @@ class ContainerManager:
             (container_id,),
         )
 
-        # Stop first (if running), then remove
+        # Close and remove the socket, then stop and remove the Docker container
+        await self._sockets.destroy_socket(container_id)
+
         docker_id = row["docker_id"]
         try:
             await self._docker.stop_container(docker_id)
@@ -343,14 +371,6 @@ class ContainerManager:
             await self._docker.remove_container(docker_id, force=True)
         except ContainerNotFoundError:
             pass  # Already removed
-
-        # Clean up socket file if present
-        socket_path = row["socket_path"]
-        if socket_path:
-            try:
-                os.unlink(socket_path)
-            except FileNotFoundError:
-                pass
 
         # Preserve existing stopped_at if already set (container was stopped
         # before being destroyed), otherwise record the current time.
@@ -365,3 +385,73 @@ class ContainerManager:
             "SELECT * FROM containers WHERE id = ?", (container_id,)
         )
         return _row_to_response(row)
+
+    # -- exec ---------------------------------------------------------------
+
+    async def exec_command(self, container_id: str, command: str) -> str:
+        """Send a command to a running container.  Returns the command ID."""
+        row = await self._db.fetchone(
+            "SELECT * FROM containers WHERE id = ?", (container_id,)
+        )
+        if not row:
+            raise ContainerNotFound(container_id)
+        if row["status"] != "running":
+            raise ContainerStateConflict(container_id, row["status"], "exec on")
+
+        if not self._sockets.is_connected(container_id):
+            raise ContainerNotConnected(container_id)
+
+        command_id = generate_id()
+        now = _now_iso()
+
+        await self._db.execute_insert(
+            "INSERT INTO commands (id, container_id, command, status, created_at) "
+            "VALUES (?, ?, ?, 'pending', ?)",
+            (command_id, container_id, command, now),
+        )
+
+        await self._sockets.send_command(container_id, command_id, command)
+
+        logger.info(
+            "Exec command %s on container %s: %s",
+            command_id,
+            container_id,
+            command[:80],
+        )
+        return command_id
+
+    async def get_command_status(
+        self, container_id: str, command_id: str
+    ) -> ExecStatusResponse:
+        """Get the status and output of a command."""
+        # Verify container exists
+        container = await self._db.fetchone(
+            "SELECT id FROM containers WHERE id = ?", (container_id,)
+        )
+        if not container:
+            raise ContainerNotFound(container_id)
+
+        # Fetch command
+        cmd_row = await self._db.fetchone(
+            "SELECT * FROM commands WHERE id = ? AND container_id = ?",
+            (command_id, container_id),
+        )
+        if not cmd_row:
+            raise CommandNotFound(container_id, command_id)
+
+        # Fetch messages ordered by seq
+        msg_rows = await self._db.fetchall(
+            "SELECT seq, stream, data FROM command_messages "
+            "WHERE command_id = ? ORDER BY seq",
+            (command_id,),
+        )
+
+        return ExecStatusResponse(
+            command_id=command_id,
+            status=cmd_row["status"],
+            exit_code=cmd_row["exit_code"],
+            messages=[
+                CommandMessage(seq=r["seq"], stream=r["stream"], data=r["data"])
+                for r in msg_rows
+            ],
+        )

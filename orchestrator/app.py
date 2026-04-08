@@ -10,6 +10,7 @@ from orchestrator.container_manager import ContainerManager
 from orchestrator.database import Database
 from orchestrator.docker_client import DockerClient
 from orchestrator.routers import containers, images
+from orchestrator.socket_manager import SocketManager
 
 logger = logging.getLogger(__name__)
 
@@ -20,16 +21,19 @@ async def lifespan(app: FastAPI):
     db = Database(config.db_path)
     await db.connect()
     docker = DockerClient(config)
+    sockets = SocketManager(config, db)
 
     app.state.config = config
     app.state.db = db
     app.state.docker = docker
-    app.state.container_manager = ContainerManager(config, db, docker)
+    app.state.sockets = sockets
+    app.state.container_manager = ContainerManager(config, db, docker, sockets)
 
     # Placeholder - Background tasks (reaper, etc.) will be started here in later phases.
 
     yield
 
+    await sockets.close_all()
     await docker.close()
     await db.close()
 

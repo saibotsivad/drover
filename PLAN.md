@@ -90,19 +90,19 @@ Implement the per-container Unix socket, the newline-delimited JSON protocol, an
 
 No response streaming in this phase — exec output is persisted to SQLite and retrieved via polling. Streaming (SSE, WebSocket) is a follow-up architectural decision. See `docs/exec-commands.md` for the full flow.
 
-- [ ] Implement `socket_manager.py` — manages creation and cleanup of Unix sockets under `/var/run/microcontainers/`
-- [ ] On container creation: create a Unix socket at `{SOCKET_DIR}/{container_id}.sock`, start an asyncio listener
-- [ ] On guest connect: accept connection, begin reading newline-delimited JSON messages
-- [ ] Handle inbound message types from container: `heartbeat`, `output`, `result`
-- [ ] On `heartbeat`: update `last_seen` in DB
-- [ ] On `output`: INSERT row into `command_messages` table (seq, command_id, stream, data, received_at)
-- [ ] On first `output` for a command: UPDATE `commands` status from `pending` to `running`
-- [ ] On `result`: UPDATE `commands` SET status=`complete`, exit_code=N
-- [ ] Implement command sending: generate command ID, INSERT into `commands` table, write `{"type": "command", "id": "...", "exec": "..."}` to socket
-- [ ] Wire `POST /containers/{id}/exec` — send command via socket, return command ID immediately
-- [ ] `GET /containers/{id}/exec/{cmd_id}` — query `commands` + `command_messages` tables, return status and ordered messages
-- [ ] On container stop: close the socket connection but **do not** remove the socket file (container may be resumed)
-- [ ] On container destroy: close the socket connection **and** remove the socket file from disk
+- [x] Implement `socket_manager.py` — manages creation and cleanup of Unix sockets under `/var/run/microcontainers/`
+- [x] On container creation: create a Unix socket at `{SOCKET_DIR}/{container_id}.sock`, start an asyncio listener
+- [x] On guest connect: accept connection, begin reading newline-delimited JSON messages
+- [x] Handle inbound message types from container: `heartbeat`, `output`, `result`
+- [x] On `heartbeat`: update `last_seen` in DB
+- [x] On `output`: INSERT row into `command_messages` table (seq, command_id, stream, data, received_at)
+- [x] On first `output` for a command: UPDATE `commands` status from `pending` to `running`
+- [x] On `result`: UPDATE `commands` SET status=`complete`, exit_code=N
+- [x] Implement command sending: generate command ID, INSERT into `commands` table, write `{"type": "command", "id": "...", "exec": "..."}` to socket
+- [x] Wire `POST /containers/{id}/exec` — send command via socket, return command ID immediately
+- [x] `GET /containers/{id}/exec/{cmd_id}` — query `commands` + `command_messages` tables, return status and ordered messages
+- [x] On container stop: close the socket connection but **do not** remove the socket file (container may be resumed)
+- [x] On container destroy: close the socket connection **and** remove the socket file from disk
 
 ## Phase 5 — Timeout & Auto-Stop
 
