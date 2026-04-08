@@ -6,9 +6,10 @@ from fastapi import FastAPI, Request
 from starlette.responses import Response
 
 from orchestrator.config import Config, load_config
+from orchestrator.container_manager import ContainerManager
 from orchestrator.database import Database
 from orchestrator.docker_client import DockerClient
-from orchestrator.routers import images
+from orchestrator.routers import containers, images
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +24,7 @@ async def lifespan(app: FastAPI):
     app.state.config = config
     app.state.db = db
     app.state.docker = docker
+    app.state.container_manager = ContainerManager(config, db, docker)
 
     # Placeholder - Background tasks (reaper, etc.) will be started here in later phases.
 
@@ -34,6 +36,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Drover Orchestrator", lifespan=lifespan)
 app.include_router(images.router)
+app.include_router(containers.router)
 
 
 @app.middleware("http")
