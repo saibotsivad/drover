@@ -108,11 +108,11 @@ No response streaming in this phase — exec output is persisted to SQLite and r
 
 Implement the background idle-timeout reaper.
 
-- [ ] Add background task in app lifespan that runs every `REAPER_INTERVAL_SECONDS` (env var, default `5`)
-- [ ] Query DB for all `running` containers where `now - last_seen > timeout_seconds`
-- [ ] Stop timed-out containers via `container_manager.stop_container()`
-- [ ] Log timeout events
-- [ ] Handle edge cases: container already stopped externally, DB/Docker state drift
+- [x] Add background task in app lifespan that runs every `REAPER_INTERVAL_SECONDS` (env var, default `5`)
+- [x] Query DB for all `running` containers where `now - last_seen > timeout_seconds`
+- [x] Stop timed-out containers via `container_manager.stop_container()`
+- [x] Log timeout events
+- [x] Handle edge cases: container already stopped externally, DB/Docker state drift
 
 ## Phase 6 — Dockerfile & Packaging
 
