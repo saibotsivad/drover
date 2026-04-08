@@ -1,18 +1,70 @@
+import asyncio
 import logging
 import time
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 
 from fastapi import FastAPI, Request
 from starlette.responses import Response
 
 from orchestrator.config import Config, load_config
-from orchestrator.container_manager import ContainerManager
+from orchestrator.container_manager import (
+    ContainerManager,
+    ContainerNotFound,
+    ContainerStateConflict,
+)
 from orchestrator.database import Database
 from orchestrator.docker_client import DockerClient
 from orchestrator.routers import containers, images
 from orchestrator.socket_manager import SocketManager
 
 logger = logging.getLogger(__name__)
+
+
+async def _reaper_loop(
+    config: Config, db: Database, container_manager: ContainerManager
+) -> None:
+    """Background task: stop containers that have exceeded their idle timeout."""
+    while True:
+        await asyncio.sleep(config.reaper_interval_seconds)
+        try:
+            rows = await db.fetchall(
+                "SELECT id, last_seen, timeout_seconds FROM containers "
+                "WHERE status = 'running' AND last_seen IS NOT NULL AND timeout_seconds > 0",
+            )
+            now = datetime.now(timezone.utc)
+            for row in rows:
+                last_seen = datetime.fromisoformat(row["last_seen"])
+                elapsed = (now - last_seen).total_seconds()
+                if elapsed > row["timeout_seconds"]:
+                    logger.info(
+                        "Container %s timed out (last_seen=%s, elapsed=%.1fs, timeout=%ds), stopping",
+                        row["id"],
+                        row["last_seen"],
+                        elapsed,
+                        row["timeout_seconds"],
+                    )
+                    try:
+                        await container_manager.stop_container(row["id"])
+                    except ContainerStateConflict:
+                        # State changed between query and stop (e.g. already stopping)
+                        logger.debug(
+                            "Container %s state changed before reaper could stop it",
+                            row["id"],
+                        )
+                    except ContainerNotFound:
+                        logger.debug(
+                            "Container %s not found when reaper tried to stop it",
+                            row["id"],
+                        )
+                    except Exception:
+                        logger.exception(
+                            "Reaper failed to stop container %s", row["id"]
+                        )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("Reaper loop encountered an error")
 
 
 @asynccontextmanager
@@ -29,9 +81,17 @@ async def lifespan(app: FastAPI):
     app.state.sockets = sockets
     app.state.container_manager = ContainerManager(config, db, docker, sockets)
 
-    # Placeholder - Background tasks (reaper, etc.) will be started here in later phases.
+    reaper_task = asyncio.create_task(
+        _reaper_loop(config, db, app.state.container_manager)
+    )
 
     yield
+
+    reaper_task.cancel()
+    try:
+        await reaper_task
+    except asyncio.CancelledError:
+        pass
 
     await sockets.close_all()
     await docker.close()
