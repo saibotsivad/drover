@@ -15,7 +15,7 @@ async def lifespan(app: FastAPI):
     app.state.config = config
     app.state.db = db
 
-    # Background tasks (reaper, etc.) will be started here in later phases.
+    # Placeholder - Background tasks (reaper, etc.) will be started here in later phases.
 
     yield
 
