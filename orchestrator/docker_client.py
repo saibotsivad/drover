@@ -1,9 +1,12 @@
 import json
+import logging
 from urllib.parse import quote
 
 import httpx
 
 from orchestrator.config import Config
+
+logger = logging.getLogger(__name__)
 
 
 class DockerError(Exception):
@@ -67,31 +70,39 @@ class DockerClient:
     # --- Images ---
 
     async def list_images(self, prefix: str = "drover/*") -> list[dict]:
+        logger.debug("GET /images/json prefix=%s", prefix)
         resp = await self._client.get(
             "/images/json",
             params={"filters": json.dumps({"reference": [prefix]})},
         )
+        logger.debug("GET /images/json -> %s", resp.status_code)
         self._check(resp, entity="image")
         return resp.json()
 
     async def inspect_image(self, name: str) -> dict:
+        logger.debug("GET /images/%s/json", name)
         resp = await self._client.get(
             f"/images/{quote(name, safe='')}/json",
         )
+        logger.debug("GET /images/%s/json -> %s", name, resp.status_code)
         self._check(resp, entity="image")
         return resp.json()
 
     # --- Containers ---
 
     async def create_container(self, config: dict) -> dict:
+        logger.debug("POST /containers/create")
         resp = await self._client.post("/containers/create", json=config)
+        logger.debug("POST /containers/create -> %s", resp.status_code)
         self._check(resp, entity="container")
         return resp.json()
 
     async def start_container(self, container_id: str) -> None:
+        logger.debug("POST /containers/%s/start", container_id)
         resp = await self._client.post(
             f"/containers/{container_id}/start",
         )
+        logger.debug("POST /containers/%s/start -> %s", container_id, resp.status_code)
         if resp.status_code == 304:
             return  # already started
         self._check(resp, entity="container")
@@ -99,10 +110,12 @@ class DockerClient:
     async def stop_container(
         self, container_id: str, timeout: int = 10
     ) -> None:
+        logger.debug("POST /containers/%s/stop", container_id)
         resp = await self._client.post(
             f"/containers/{container_id}/stop",
             params={"t": timeout},
         )
+        logger.debug("POST /containers/%s/stop -> %s", container_id, resp.status_code)
         if resp.status_code == 304:
             return  # already stopped
         self._check(resp, entity="container")
@@ -110,25 +123,31 @@ class DockerClient:
     async def remove_container(
         self, container_id: str, *, force: bool = False
     ) -> None:
+        logger.debug("DELETE /containers/%s force=%s", container_id, force)
         resp = await self._client.delete(
             f"/containers/{container_id}",
             params={"force": str(force).lower(), "v": "true"},
         )
+        logger.debug("DELETE /containers/%s -> %s", container_id, resp.status_code)
         self._check(resp, entity="container")
 
     async def inspect_container(self, container_id: str) -> dict:
+        logger.debug("GET /containers/%s/json", container_id)
         resp = await self._client.get(
             f"/containers/{container_id}/json",
         )
+        logger.debug("GET /containers/%s/json -> %s", container_id, resp.status_code)
         self._check(resp, entity="container")
         return resp.json()
 
     async def get_container_logs(
         self, container_id: str, tail: str = "all"
     ) -> str:
+        logger.debug("GET /containers/%s/logs tail=%s", container_id, tail)
         resp = await self._client.get(
             f"/containers/{container_id}/logs",
             params={"stdout": "true", "stderr": "true", "tail": tail},
         )
+        logger.debug("GET /containers/%s/logs -> %s", container_id, resp.status_code)
         self._check(resp, entity="container")
         return resp.text
