@@ -19,7 +19,7 @@ RUN groupadd -g 1000 orchestrator && \
     chown orchestrator:orchestrator /var/lib/orchestrator /var/run/microcontainers
 
 WORKDIR /app
-COPY . .
+COPY . ./orchestrator/
 
 USER 1000
 
