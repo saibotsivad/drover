@@ -179,6 +179,18 @@ The only constraint is that whatever process builds the image must tag it with t
 - If `privileged` is `true` and `PRIVILEGED_IMAGE` is not set, the request is rejected.
 - If `privileged` is `false` or omitted, the orchestrator validates that `drover/<image>` exists and is in a ready state.
 
+### Request Validation
+
+All fields on the create request are validated before the container is created.
+
+| Field | Constraints |
+|---|---|
+| `image` | Alphanumeric, dots, hyphens, and underscores only. Slashes separate path components (e.g. `myorg/my-image`). Each component must start and end with an alphanumeric character. Max 256 characters. |
+| `label` | Printable characters only (tabs and newlines are allowed, control characters are rejected). Max 1024 characters. |
+| `env` keys | POSIX-style identifiers: must start with a letter or underscore, followed by letters, digits, or underscores (`[A-Za-z_][A-Za-z0-9_]*`). Max 256 characters per key. |
+| `env` values | Max 32 768 characters (32 KB) per value. |
+| `timeout_seconds` | Must be between 1 and 86 400 (24 hours). Defaults to 300 (5 minutes). |
+
 ---
 
 ## Lifecycle State Machine
