@@ -135,6 +135,76 @@ class ContainerManager:
         self._docker = docker
         self._sockets = sockets
 
+    # -- startup sync -------------------------------------------------------
+
+    async def sync_containers(self) -> None:
+        """Reconcile all non-terminal containers against Docker state.
+
+        Called once at startup to handle the case where the orchestrator
+        crashed or restarted while containers were running.  For each
+        non-destroyed container we inspect Docker and:
+          - mark it destroyed if the Docker container is gone,
+          - update the DB status if Docker disagrees (and we're not
+            mid-transition),
+          - re-establish a socket listener for containers still running.
+        """
+        rows = await self._db.fetchall(
+            "SELECT id, docker_id, status, socket_path FROM containers "
+            "WHERE status != 'destroyed'",
+        )
+        if not rows:
+            return
+
+        logger.info("Startup sync: reconciling %d non-terminal containers", len(rows))
+
+        for row in rows:
+            container_id = row["id"]
+            docker_id = row["docker_id"]
+            db_status = row["status"]
+
+            try:
+                inspection = await self._docker.inspect_container(docker_id)
+                mapped = _docker_state_to_status(inspection)
+
+                if (
+                    mapped
+                    and mapped.value != db_status
+                    and db_status not in ("stopping", "resuming", "destroying")
+                ):
+                    await self._db.execute_insert(
+                        "UPDATE containers SET status = ? WHERE id = ?",
+                        (mapped.value, container_id),
+                    )
+                    logger.info(
+                        "Startup sync: container %s status %s -> %s",
+                        container_id,
+                        db_status,
+                        mapped.value,
+                    )
+                    db_status = mapped.value
+
+                # Re-establish socket listener for containers still running
+                if db_status == "running":
+                    await self._sockets.create_socket(container_id)
+                    logger.info(
+                        "Startup sync: re-established socket for container %s",
+                        container_id,
+                    )
+
+            except ContainerNotFoundError:
+                await self._db.execute_insert(
+                    "UPDATE containers SET status = 'destroyed' WHERE id = ?",
+                    (container_id,),
+                )
+                logger.warning(
+                    "Startup sync: container %s not found in Docker, marked destroyed",
+                    container_id,
+                )
+            except Exception:
+                logger.exception(
+                    "Startup sync: failed to reconcile container %s", container_id
+                )
+
     # -- create -------------------------------------------------------------
 
     async def create_container(self, req: CreateContainerRequest) -> ContainerResponse:

@@ -270,6 +270,125 @@ async def test_get_command_status(manager, db):
     assert status.messages == []
 
 
+# -- sync_containers (startup reconciliation) ------------------------------
+
+
+async def test_sync_running_container_still_running(manager, docker, sockets, db):
+    """Running container still alive in Docker → re-establish socket listener."""
+    resp = await manager.create_container(
+        CreateContainerRequest(image="test-img")
+    )
+    sockets.create_socket.reset_mock()
+
+    # Docker says still running
+    docker.inspect_container.return_value = {"State": {"Status": "running"}}
+    await manager.sync_containers()
+
+    sockets.create_socket.assert_called_once_with(resp.id)
+    fetched = await manager.get_container(resp.id)
+    assert fetched.status == ContainerStatus.running
+
+
+async def test_sync_running_container_now_stopped(manager, docker, sockets, db):
+    """Running in DB but Docker says exited → update to stopped, no socket."""
+    resp = await manager.create_container(
+        CreateContainerRequest(image="test-img")
+    )
+    sockets.create_socket.reset_mock()
+
+    docker.inspect_container.return_value = {"State": {"Status": "exited"}}
+    await manager.sync_containers()
+
+    sockets.create_socket.assert_not_called()
+    fetched = await manager.get_container(resp.id)
+    assert fetched.status == ContainerStatus.stopped
+
+
+async def test_sync_running_container_gone(manager, docker, sockets, db):
+    """Running in DB but Docker container gone → mark destroyed."""
+    resp = await manager.create_container(
+        CreateContainerRequest(image="test-img")
+    )
+    docker.inspect_container.side_effect = ContainerNotFoundError(404, "gone")
+    await manager.sync_containers()
+
+    # Reset side_effect so get_container can re-fetch from DB
+    docker.inspect_container.side_effect = None
+    docker.inspect_container.return_value = {"State": {"Status": "running"}}
+
+    fetched = await manager.get_container(resp.id)
+    assert fetched.status == ContainerStatus.destroyed
+
+
+async def test_sync_stopped_container_still_stopped(manager, docker, sockets, db):
+    """Stopped in DB and Docker agrees → no status change, no socket."""
+    resp = await manager.create_container(
+        CreateContainerRequest(image="test-img")
+    )
+    await manager.stop_container(resp.id)
+    sockets.create_socket.reset_mock()
+
+    docker.inspect_container.return_value = {"State": {"Status": "exited"}}
+    await manager.sync_containers()
+
+    sockets.create_socket.assert_not_called()
+    fetched = await manager.get_container(resp.id)
+    assert fetched.status == ContainerStatus.stopped
+
+
+async def test_sync_stopped_container_gone(manager, docker, sockets, db):
+    """Stopped in DB but Docker container gone → mark destroyed."""
+    resp = await manager.create_container(
+        CreateContainerRequest(image="test-img")
+    )
+    await manager.stop_container(resp.id)
+
+    docker.inspect_container.side_effect = ContainerNotFoundError(404, "gone")
+    await manager.sync_containers()
+
+    docker.inspect_container.side_effect = None
+    docker.inspect_container.return_value = {"State": {"Status": "running"}}
+
+    fetched = await manager.get_container(resp.id)
+    assert fetched.status == ContainerStatus.destroyed
+
+
+async def test_sync_skips_destroyed_containers(manager, docker, sockets, db):
+    """Already-destroyed containers should not be inspected at all."""
+    resp = await manager.create_container(
+        CreateContainerRequest(image="test-img")
+    )
+    await manager.destroy_container(resp.id)
+    docker.inspect_container.reset_mock()
+
+    await manager.sync_containers()
+    docker.inspect_container.assert_not_called()
+
+
+async def test_sync_no_containers(manager, docker, db):
+    """Empty database → sync completes without errors."""
+    await manager.sync_containers()
+    docker.inspect_container.assert_not_called()
+
+
+async def test_sync_skips_transitional_states(manager, docker, sockets, db):
+    """Containers in transitional states (stopping) keep their DB status."""
+    resp = await manager.create_container(
+        CreateContainerRequest(image="test-img")
+    )
+    # Manually set to a transitional state
+    await db.execute_insert(
+        "UPDATE containers SET status = 'stopping' WHERE id = ?",
+        (resp.id,),
+    )
+
+    docker.inspect_container.return_value = {"State": {"Status": "exited"}}
+    await manager.sync_containers()
+
+    row = await db.fetchone("SELECT status FROM containers WHERE id = ?", (resp.id,))
+    assert row["status"] == "stopping"
+
+
 # -- helper: _docker_state_to_status ---------------------------------------
 
 
