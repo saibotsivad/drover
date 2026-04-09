@@ -108,6 +108,7 @@ async def lifespan(app: FastAPI):
     sockets = SocketManager(config, db)
 
     container_manager = ContainerManager(config, db, docker, sockets)
+    await container_manager.sync_containers()
 
     async def _handle_container_done(container_id: str) -> None:
         try:
