@@ -204,6 +204,10 @@ The intermediate states (`stopping`, `resuming`, `destroying`) are transient gua
 
 ---
 
+## Testing
+
+Run `pytest tests/ -v` from the repo root to execute the test suite (unit tests for ID generation, config, models, database, and the container manager state machine). The `test.yml` GitHub Actions workflow runs these on every PR along with a Docker build and `/health` smoke test.
+
 ## Open Issues
 
 See `TODO.md` for the full list of remaining work and open design decisions.

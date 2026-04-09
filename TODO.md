@@ -20,13 +20,9 @@ The REST API has no auth layer. Before any external exposure, we need to decide 
 
 Concrete work items that can proceed without further design discussion.
 
-### Test suite
-
-No tests exist yet. Needs unit tests for ID generation, database operations, socket protocol parsing, and container state machine transitions. Integration tests should exercise the full lifecycle against a real Docker socket.
-
 ### Verify GHCR publish workflow
 
-The `publish.yml` GitHub Actions workflow was written against the original stub Dockerfile. After the Dockerfile was replaced with the production multi-stage build, the workflow needs a manual end-to-end verification to confirm it still builds, tags, and pushes correctly.
+The `publish.yml` GitHub Actions workflow was written against the original stub Dockerfile. After the Dockerfile was replaced with the production multi-stage build, the workflow needs a manual end-to-end verification to confirm it still builds, tags, and pushes correctly. The `test.yml` workflow now builds the image and smoke-tests the `/health` endpoint on every PR, but `publish.yml` has not yet been validated end-to-end with a real tag push.
 
 ### Orchestrator restart reconciliation
 
