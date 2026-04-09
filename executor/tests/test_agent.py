@@ -15,6 +15,90 @@ from drover_executor.agent import Agent
 
 
 # ---------------------------------------------------------------------------
+# Diagnostics — isolate asyncio / Unix socket health from Agent logic.
+# ---------------------------------------------------------------------------
+
+class TestAsyncDiagnostics:
+    """Minimal tests to verify asyncio primitives work on this Python."""
+
+    async def test_basic_event_loop(self):
+        """Event loop runs tasks and sleeps."""
+        import sys
+        print(f"\n  [diag] Python {sys.version}", flush=True)
+        loop = asyncio.get_running_loop()
+        print(f"  [diag] running loop: {type(loop).__name__}", flush=True)
+        result = await asyncio.create_task(asyncio.sleep(0, result=42))
+        assert result == 42
+        print("  [diag] basic event loop OK", flush=True)
+
+    async def test_unix_socket_roundtrip(self, tmp_path):
+        """Create a server, connect a client, send/receive data."""
+        path = str(tmp_path / "diag.sock")
+        print(f"\n  [diag] socket path: {path} (len={len(path)})", flush=True)
+        connected = asyncio.Event()
+
+        async def on_connect(reader, writer):
+            print("  [diag] server: client connected", flush=True)
+            data = await reader.readline()
+            writer.write(data)
+            await writer.drain()
+            connected.set()
+
+        server = await asyncio.start_unix_server(on_connect, path=path)
+        print(f"  [diag] server listening, exists={os.path.exists(path)}", flush=True)
+
+        reader, writer = await asyncio.open_unix_connection(path)
+        print("  [diag] client connected", flush=True)
+
+        writer.write(b"ping\n")
+        await writer.drain()
+        reply = await asyncio.wait_for(reader.readline(), timeout=5)
+        assert reply == b"ping\n"
+        print("  [diag] roundtrip OK", flush=True)
+
+        writer.close()
+        await writer.wait_closed()
+        server.close()
+        await server.wait_closed()
+
+    async def test_agent_connect_only(self, tmp_path):
+        """Agent connects and sends one heartbeat — no command execution."""
+        path = _socket_path(tmp_path)
+        connected = asyncio.Event()
+        reader_holder = {}
+
+        async def on_connect(reader, writer):
+            reader_holder["r"] = reader
+            reader_holder["w"] = writer
+            connected.set()
+
+        server = await asyncio.start_unix_server(on_connect, path=path)
+        print(f"\n  [diag] agent test: server up at {path}", flush=True)
+
+        agent = Agent(socket_path=path, heartbeat_interval=0.2)
+        print("  [diag] agent created, starting run()...", flush=True)
+        agent_task = asyncio.create_task(agent.run())
+
+        try:
+            print("  [diag] waiting for connection...", flush=True)
+            await asyncio.wait_for(connected.wait(), timeout=5)
+            print("  [diag] connected! reading heartbeat...", flush=True)
+            reader = reader_holder["r"]
+            msg = await _read_message(reader)
+            print(f"  [diag] got message: {msg}", flush=True)
+            assert msg["type"] == "heartbeat"
+        finally:
+            agent_task.cancel()
+            try:
+                await agent_task
+            except asyncio.CancelledError:
+                pass
+            server.close()
+            await server.wait_closed()
+            print("  [diag] agent connect test done", flush=True)
+
+
+# ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
