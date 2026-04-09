@@ -21,9 +21,13 @@ jobs:
       - name: Install executor
         run: pip install -e executor/
 
-      - name: Run tests
+      - name: Run orchestrator tests
         timeout-minutes: 5
-        run: pytest tests/ executor/tests/ -v
+        run: pytest tests/ -v
+
+      - name: Run executor tests
+        timeout-minutes: 5
+        run: pytest executor/tests/ -v -p no:anyio
 
   docker-build:
     runs-on: ubuntu-latest
