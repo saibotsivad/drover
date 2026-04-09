@@ -23,7 +23,7 @@ jobs:
 
       - name: Run orchestrator tests
         timeout-minutes: 5
-        run: pytest tests/ -v
+        run: pytest tests/ -v --asyncio-mode=auto -o asyncio_default_fixture_loop_scope=function
 
       - name: Run executor tests
         timeout-minutes: 5

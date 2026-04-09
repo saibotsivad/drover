@@ -3,6 +3,11 @@
 Each test creates a real Unix socket server (via tmp_path) and runs the Agent
 against it.  The mock server speaks the same newline-delimited JSON protocol as
 the orchestrator.
+
+NOTE: Python 3.12 changed ``Server.wait_closed()`` to wait for *all* accepted
+connections to close, not just the listening socket.  Every test must close the
+server-side writer (from ``on_connect``) before calling ``server.wait_closed()``
+or the test will hang.
 """
 
 import asyncio
@@ -57,6 +62,23 @@ async def _collect_messages_until_result(
     return messages
 
 
+async def _shutdown_test(agent_task, reader_holder, server):
+    """Common cleanup: cancel agent, close server-side conn, close server.
+
+    Python 3.12 requires the server-side writer to be closed before
+    ``server.wait_closed()`` returns.
+    """
+    agent_task.cancel()
+    try:
+        await agent_task
+    except asyncio.CancelledError:
+        pass
+    if "w" in reader_holder:
+        reader_holder["w"].close()
+    server.close()
+    await server.wait_closed()
+
+
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
@@ -90,13 +112,7 @@ class TestAgentConnection:
             msg2 = await _read_message(reader)
             assert msg2["type"] == "heartbeat"
         finally:
-            agent_task.cancel()
-            try:
-                await agent_task
-            except asyncio.CancelledError:
-                pass
-            server.close()
-            await server.wait_closed()
+            await _shutdown_test(agent_task, reader_holder, server)
 
     async def test_no_auto_heartbeat(self, tmp_path):
         """When auto_heartbeat=False, no heartbeats are sent automatically."""
@@ -135,13 +151,7 @@ class TestAgentConnection:
             types_before = [m["type"] for m in messages if m.get("id") != "probe"]
             assert "heartbeat" not in types_before
         finally:
-            agent_task.cancel()
-            try:
-                await agent_task
-            except asyncio.CancelledError:
-                pass
-            server.close()
-            await server.wait_closed()
+            await _shutdown_test(agent_task, reader_holder, server)
 
 
 class TestAgentCommandExecution:
@@ -184,13 +194,7 @@ class TestAgentCommandExecution:
             assert len(result_msgs) == 1
             assert result_msgs[0]["exit_code"] == 0
         finally:
-            agent_task.cancel()
-            try:
-                await agent_task
-            except asyncio.CancelledError:
-                pass
-            server.close()
-            await server.wait_closed()
+            await _shutdown_test(agent_task, reader_holder, server)
 
     async def test_failing_command(self, tmp_path):
         """Agent reports non-zero exit code."""
@@ -220,13 +224,7 @@ class TestAgentCommandExecution:
             result = [m for m in messages if m["type"] == "result"][0]
             assert result["exit_code"] == 7
         finally:
-            agent_task.cancel()
-            try:
-                await agent_task
-            except asyncio.CancelledError:
-                pass
-            server.close()
-            await server.wait_closed()
+            await _shutdown_test(agent_task, reader_holder, server)
 
     async def test_stderr_output(self, tmp_path):
         """Agent forwards stderr from commands."""
@@ -260,13 +258,7 @@ class TestAgentCommandExecution:
             assert len(stderr_msgs) >= 1
             assert "oops" in stderr_msgs[0]["data"]
         finally:
-            agent_task.cancel()
-            try:
-                await agent_task
-            except asyncio.CancelledError:
-                pass
-            server.close()
-            await server.wait_closed()
+            await _shutdown_test(agent_task, reader_holder, server)
 
 
 class TestConcurrentCommands:
@@ -313,13 +305,7 @@ class TestConcurrentCommands:
             assert results["c1"]["exit_code"] == 0
             assert results["c2"]["exit_code"] == 0
         finally:
-            agent_task.cancel()
-            try:
-                await agent_task
-            except asyncio.CancelledError:
-                pass
-            server.close()
-            await server.wait_closed()
+            await _shutdown_test(agent_task, reader_holder, server)
 
     async def test_max_concurrent_commands(self, tmp_path):
         """Semaphore limits concurrent command execution."""
@@ -367,13 +353,7 @@ class TestConcurrentCommands:
             assert results["s1"]["exit_code"] == 0
             assert results["s2"]["exit_code"] == 0
         finally:
-            agent_task.cancel()
-            try:
-                await agent_task
-            except asyncio.CancelledError:
-                pass
-            server.close()
-            await server.wait_closed()
+            await _shutdown_test(agent_task, reader_holder, server)
 
 
 class TestWriteSerialization:
@@ -421,13 +401,7 @@ class TestWriteSerialization:
 
             assert results == {"w1", "w2"}
         finally:
-            agent_task.cancel()
-            try:
-                await agent_task
-            except asyncio.CancelledError:
-                pass
-            server.close()
-            await server.wait_closed()
+            await _shutdown_test(agent_task, reader_holder, server)
 
 
 class TestGracefulShutdown:
@@ -495,13 +469,7 @@ class TestGracefulShutdown:
             await asyncio.wait_for(connected_to_server.wait(), timeout=5)
             assert on_connect_called.is_set()
         finally:
-            agent_task.cancel()
-            try:
-                await agent_task
-            except asyncio.CancelledError:
-                pass
-            server.close()
-            await server.wait_closed()
+            await _shutdown_test(agent_task, reader_holder, server)
 
     async def test_send_done(self, tmp_path):
         """Agent can send a done signal explicitly."""
@@ -535,13 +503,7 @@ class TestGracefulShutdown:
                 msg = await _read_message(reader)
             assert msg["type"] == "done"
         finally:
-            agent_task.cancel()
-            try:
-                await agent_task
-            except asyncio.CancelledError:
-                pass
-            server.close()
-            await server.wait_closed()
+            await _shutdown_test(agent_task, reader_holder, server)
 
     async def test_send_heartbeat_manual(self, tmp_path):
         """send_heartbeat() works when auto_heartbeat=False."""
@@ -575,13 +537,7 @@ class TestGracefulShutdown:
             msg = await _read_message(reader)
             assert msg["type"] == "heartbeat"
         finally:
-            agent_task.cancel()
-            try:
-                await agent_task
-            except asyncio.CancelledError:
-                pass
-            server.close()
-            await server.wait_closed()
+            await _shutdown_test(agent_task, reader_holder, server)
 
 
 class TestCustomAgent:
@@ -624,10 +580,4 @@ class TestCustomAgent:
             assert len(output_msgs) == 1
             assert output_msgs[0]["data"] == "custom: anything"
         finally:
-            agent_task.cancel()
-            try:
-                await agent_task
-            except asyncio.CancelledError:
-                pass
-            server.close()
-            await server.wait_closed()
+            await _shutdown_test(agent_task, reader_holder, server)
