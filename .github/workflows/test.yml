@@ -27,7 +27,7 @@ jobs:
 
       - name: Run executor tests
         timeout-minutes: 5
-        run: pytest executor/tests/ -v -p no:asyncio -p no:anyio
+        run: pytest executor/tests/ -v -s -p no:asyncio -p no:anyio
 
   docker-build:
     runs-on: ubuntu-latest
