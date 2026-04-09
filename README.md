@@ -206,7 +206,21 @@ The intermediate states (`stopping`, `resuming`, `destroying`) are transient gua
 
 ## Testing
 
-Run `pytest tests/ -v` from the repo root to execute the test suite (unit tests for ID generation, config, models, database, and the container manager state machine). The `test.yml` GitHub Actions workflow runs these on every PR along with a Docker build and `/health` smoke test.
+The test suite is split into two independent test runs:
+
+**Orchestrator tests** (`tests/`): Unit tests for ID generation, config, models, database, and the container manager state machine. Uses pytest-asyncio for async fixture and test support.
+
+```
+pytest tests/ -v
+```
+
+**Executor tests** (`executor/tests/`): Tests for the guest-agent library — wire protocol encode/decode, real subprocess execution with streaming, and full agent lifecycle against mock Unix socket servers. These run with pytest-asyncio disabled to avoid event-loop conflicts on Python 3.12; async tests are executed via a custom conftest hook using `loop.run_until_complete()` (see `executor/tests/conftest.py` for details).
+
+```
+pytest executor/tests/ -v -p no:asyncio -p no:anyio
+```
+
+The `test.yml` GitHub Actions workflow runs both test suites on every PR, along with a Docker build and `/health` smoke test.
 
 ## Open Issues
 
