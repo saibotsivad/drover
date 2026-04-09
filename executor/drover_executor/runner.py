@@ -2,6 +2,8 @@
 
 import asyncio
 import logging
+import os
+import signal as _signal
 import subprocess
 from collections.abc import Callable, Coroutine
 from typing import Any
@@ -24,13 +26,15 @@ async def run_command(
 
     Returns the process exit code.
 
-    On asyncio cancellation the child process is killed to prevent orphans.
+    On asyncio cancellation the entire process group is killed to prevent
+    orphaned child processes (e.g. a shell's children surviving the shell).
     """
     proc = await asyncio.create_subprocess_shell(
         exec_str,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         stdin=subprocess.DEVNULL,
+        start_new_session=True,
     )
     try:
         async def _stream(pipe: asyncio.StreamReader, name: str) -> None:
@@ -47,6 +51,9 @@ async def run_command(
         await proc.wait()
         return proc.returncode
     except asyncio.CancelledError:
-        proc.kill()
+        try:
+            os.killpg(proc.pid, _signal.SIGKILL)
+        except (ProcessLookupError, OSError):
+            pass
         await proc.wait()
         raise

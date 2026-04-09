@@ -46,8 +46,15 @@ class Agent:
     async def run(self) -> None:
         """Connect to the orchestrator socket and process messages."""
         loop = asyncio.get_running_loop()
+
+        installed_signals: list[signal.Signals] = []
         for sig in (signal.SIGTERM, signal.SIGINT):
-            loop.add_signal_handler(sig, self._request_shutdown)
+            try:
+                loop.add_signal_handler(sig, self._request_shutdown)
+                installed_signals.append(sig)
+            except (OSError, RuntimeError):
+                # Not the main thread, or signal not supported — skip.
+                pass
 
         logger.info("Connecting to %s", self.socket_path)
         reader, writer = await asyncio.open_unix_connection(self.socket_path)
@@ -62,6 +69,8 @@ class Agent:
             await self._read_loop(reader)
         finally:
             await self._shutdown(writer)
+            for sig in installed_signals:
+                loop.remove_signal_handler(sig)
 
     async def send_done(self) -> None:
         """Send a done signal to the orchestrator."""
@@ -104,6 +113,7 @@ class Agent:
     async def _read_loop(self, reader: asyncio.StreamReader) -> None:
         """Read and dispatch messages until the connection closes or shutdown."""
         read_task: asyncio.Task | None = None
+        shutdown_task: asyncio.Task | None = None
         try:
             while not self._shutdown_event.is_set():
                 read_task = asyncio.create_task(reader.readline())
@@ -137,6 +147,12 @@ class Agent:
                 read_task.cancel()
                 try:
                     await read_task
+                except asyncio.CancelledError:
+                    pass
+            if shutdown_task and not shutdown_task.done():
+                shutdown_task.cancel()
+                try:
+                    await shutdown_task
                 except asyncio.CancelledError:
                     pass
             raise
