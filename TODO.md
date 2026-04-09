@@ -32,9 +32,14 @@ If the orchestrator crashes or restarts, SQLite may contain `running` containers
 
 Docker container logs are fetched live from the Docker API and are lost once a container is removed. To preserve diagnostic information after destruction, logs should be captured and stored (in SQLite or on disk) before the Docker container is removed.
 
-### Input validation hardening
+### ~~Input validation hardening~~ ✓
 
-Validation is minimal — image names, labels, and environment variables are accepted as bare strings with no format checks. Needs constraints on image name patterns (e.g. alphanumeric, hyphens, slashes only), timeout upper bounds, label length limits, and environment variable key validation to prevent injection or misuse.
+Implemented in `orchestrator/models.py` via Pydantic field validators on `CreateContainerRequest`:
+
+- **Image names** — must match `[a-zA-Z0-9][a-zA-Z0-9._-]*` per path component (slash-separated), max 256 chars. Rejects special characters, leading/trailing hyphens, and empty strings.
+- **Labels** — max 1024 chars, rejects control characters (tabs and newlines allowed).
+- **Environment variable keys** — POSIX-style `[A-Za-z_][A-Za-z0-9_]*`, max 256 chars. Values capped at 32 KB.
+- **Timeout** — max 86 400 seconds (24 hours), default 300 seconds (5 minutes).
 
 ### Container API data model refinement
 
