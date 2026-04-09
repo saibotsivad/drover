@@ -1,7 +1,25 @@
+import re
 from datetime import datetime
 from enum import Enum
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+# Image names: alphanumeric start, then alphanumeric/dots/hyphens/underscores.
+# Slashes separate path components (e.g. "myorg/myimage").  Each component
+# must start with an alphanumeric character.
+_IMAGE_RE = re.compile(r"^[a-zA-Z0-9]([a-zA-Z0-9._-]*[a-zA-Z0-9])?(/[a-zA-Z0-9]([a-zA-Z0-9._-]*[a-zA-Z0-9])?)*$")
+_IMAGE_MAX_LEN = 256
+
+# Labels: printable characters only (no control chars), generous max length.
+_LABEL_MAX_LEN = 1024
+
+# Environment variable keys: POSIX-style identifiers.
+_ENV_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_ENV_KEY_MAX_LEN = 256
+_ENV_VALUE_MAX_LEN = 32_768  # 32 KB
+
+# Timeout bounds: minimum 1 second (via gt=0), maximum 24 hours.
+_TIMEOUT_MAX = 86_400
 
 
 # --- Container models ---
@@ -17,11 +35,57 @@ class ContainerStatus(str, Enum):
 
 
 class CreateContainerRequest(BaseModel):
-    image: str
+    image: str = Field(max_length=_IMAGE_MAX_LEN)
     privileged: bool = False
     env: dict[str, str] = Field(default_factory=dict)
-    label: str | None = None
-    timeout_seconds: int = Field(default=300, gt=0)
+    label: str | None = Field(default=None, max_length=_LABEL_MAX_LEN)
+    timeout_seconds: int = Field(default=300, gt=0, le=_TIMEOUT_MAX)
+
+    @field_validator("image")
+    @classmethod
+    def validate_image(cls, v: str) -> str:
+        if not _IMAGE_RE.match(v):
+            raise ValueError(
+                "Image name must contain only alphanumeric characters, dots, "
+                "hyphens, and underscores, with slashes separating path "
+                "components. Each component must start and end with an "
+                "alphanumeric character."
+            )
+        return v
+
+    @field_validator("label")
+    @classmethod
+    def validate_label(cls, v: str | None) -> str | None:
+        if v is not None and any(
+            c != "\n" and c != "\t" and (c < " " or c == "\x7f") for c in v
+        ):
+            raise ValueError(
+                "Label must contain only printable characters "
+                "(tabs and newlines are allowed)."
+            )
+        return v
+
+    @field_validator("env")
+    @classmethod
+    def validate_env(cls, v: dict[str, str]) -> dict[str, str]:
+        for key, value in v.items():
+            if len(key) > _ENV_KEY_MAX_LEN:
+                raise ValueError(
+                    f"Environment variable key '{key[:64]}...' exceeds "
+                    f"maximum length of {_ENV_KEY_MAX_LEN} characters."
+                )
+            if not _ENV_KEY_RE.match(key):
+                raise ValueError(
+                    f"Environment variable key '{key}' is invalid. Keys must "
+                    "start with a letter or underscore and contain only "
+                    "letters, digits, and underscores."
+                )
+            if len(value) > _ENV_VALUE_MAX_LEN:
+                raise ValueError(
+                    f"Environment variable value for '{key}' exceeds "
+                    f"maximum length of {_ENV_VALUE_MAX_LEN} characters."
+                )
+        return v
 
 
 class ContainerResponse(BaseModel):

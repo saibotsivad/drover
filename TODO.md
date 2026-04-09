@@ -32,10 +32,6 @@ If the orchestrator crashes or restarts, SQLite may contain `running` containers
 
 Docker container logs are fetched live from the Docker API and are lost once a container is removed. To preserve diagnostic information after destruction, logs should be captured and stored (in SQLite or on disk) before the Docker container is removed.
 
-### Input validation hardening
-
-Validation is minimal — image names, labels, and environment variables are accepted as bare strings with no format checks. Needs constraints on image name patterns (e.g. alphanumeric, hyphens, slashes only), timeout upper bounds, label length limits, and environment variable key validation to prevent injection or misuse.
-
 ### Container API data model refinement
 
 The Pydantic models in `models.py` cover the initial contract but will likely need adjustment as real usage patterns emerge — e.g. adding pagination to container listings, richer error responses, or additional metadata fields.
