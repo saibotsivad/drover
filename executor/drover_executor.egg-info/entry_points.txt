@@ -1,0 +1,2 @@
+[console_scripts]
+drover-executor = drover_executor.__main__:main

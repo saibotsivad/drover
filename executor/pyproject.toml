@@ -1,0 +1,13 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "drover-executor"
+version = "0.1.0"
+description = "Guest-agent library for Drover micro-containers"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.scripts]
+drover-executor = "drover_executor.__main__:main"

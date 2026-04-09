@@ -18,8 +18,11 @@ jobs:
       - name: Install dependencies
         run: pip install -r orchestrator/requirements.txt -r requirements-test.txt
 
+      - name: Install executor
+        run: pip install -e executor/
+
       - name: Run tests
-        run: pytest tests/ -v
+        run: pytest tests/ executor/tests/ -v
 
   docker-build:
     runs-on: ubuntu-latest
