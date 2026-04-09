@@ -18,8 +18,16 @@ jobs:
       - name: Install dependencies
         run: pip install -r orchestrator/requirements.txt -r requirements-test.txt
 
-      - name: Run tests
-        run: pytest tests/ -v
+      - name: Install executor
+        run: pip install -e executor/
+
+      - name: Run orchestrator tests
+        timeout-minutes: 5
+        run: pytest tests/ -v --asyncio-mode=auto -o asyncio_default_fixture_loop_scope=function
+
+      - name: Run executor tests
+        timeout-minutes: 5
+        run: pytest executor/tests/ -v -s -p no:asyncio -p no:anyio
 
   docker-build:
     runs-on: ubuntu-latest
