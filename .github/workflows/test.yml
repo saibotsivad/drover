@@ -27,7 +27,7 @@ jobs:
 
       - name: Run executor tests
         timeout-minutes: 5
-        run: pytest executor/tests/ -v -p no:anyio
+        run: pytest executor/tests/ -v -p no:anyio -o asyncio_default_fixture_loop_scope=function
 
   docker-build:
     runs-on: ubuntu-latest
