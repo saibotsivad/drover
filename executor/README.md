@@ -56,6 +56,12 @@ You can also run it as a module:
 python -m drover_executor --log-level DEBUG
 ```
 
+In a Dockerfile, pass options via the `CMD` instruction:
+
+```dockerfile
+CMD ["drover-executor", "--heartbeat-interval", "5", "--max-concurrent-commands", "4", "--log-level", "DEBUG"]
+```
+
 ---
 
 ## Custom Agents
