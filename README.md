@@ -37,6 +37,7 @@ The orchestrator is configured via environment variables at startup:
 
 | Variable | Required | Default | Description |
 |---|---|---|---|
+| `DROVER_API_KEY` | No | _(unset)_ | SHA-256 hash of the API key. When set, all API requests (except `GET /health`) require a valid `Authorization: Bearer <key>` header. See [Authentication](#authentication). |
 | `PRIVILEGED_IMAGE` | No | _(unset)_ | Docker image for privileged micro-containers. If unset, privileged container requests are rejected. |
 | `DB_PATH` | No | `/var/lib/orchestrator/db.sqlite` | Path to the SQLite database file. |
 | `SOCKET_DIR` | No | `/var/run/microcontainers` | Directory for per-container Unix socket files. |
@@ -72,6 +73,61 @@ The orchestrator is built on FastAPI (with Uvicorn), aiosqlite for async SQLite 
 
 - Standard micro-containers run under gVisor (`--runtime=runsc`) for syscall interception
 - Orchestrator itself runs as UID 1000 to match the rootless Docker daemon
+
+---
+
+## Authentication
+
+The orchestrator supports optional bearer-token authentication via the `DROVER_API_KEY` environment variable. When set, every API request (except `GET /health`) must include an `Authorization: Bearer <key>` header. Requests without a valid token receive a `401 Unauthorized` response.
+
+This is designed as a simple security layer for homelab use. If you plan to expose the API to the public internet, you should add additional layers of security (reverse proxy with TLS, IP allowlisting, etc.).
+
+### Setup
+
+1. Generate a key and its SHA-256 hash using the included helper script:
+
+```
+python scripts/generate_api_key.py
+```
+
+Example output:
+
+```
+Plain-text key : m7x...Qf8
+SHA-256 hash   : a1b2c3d4...
+
+Set the hash as your environment variable:
+  export DROVER_API_KEY="a1b2c3d4..."
+
+Pass the plain-text key in API requests:
+  curl -H 'Authorization: Bearer m7x...Qf8' http://localhost:8000/images
+```
+
+You can also hash an existing key:
+
+```
+python scripts/generate_api_key.py --key "my-secret-key"
+```
+
+2. Pass the **hash** (not the plain-text key) to the orchestrator via the `DROVER_API_KEY` environment variable:
+
+```
+docker run -e DROVER_API_KEY="a1b2c3d4..." ...
+```
+
+3. Include the **plain-text key** in API requests:
+
+```
+curl -H "Authorization: Bearer m7x...Qf8" http://localhost:8000/containers
+```
+
+### How It Works
+
+The caller sends the plain-text API key in the `Authorization: Bearer` header. The orchestrator hashes the provided key with SHA-256 and compares it (using constant-time comparison) against the pre-hashed value in `DROVER_API_KEY`. The plain-text key is never stored on the server.
+
+If `DROVER_API_KEY` is not set, authentication is disabled and all requests are allowed. The orchestrator logs a warning at startup when authentication is disabled.
+
+The `GET /health` endpoint is always accessible without authentication so that load balancers and monitoring tools can check availability.
 
 ---
 

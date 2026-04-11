@@ -91,6 +91,7 @@ async def test_create_privileged_with_config(config, db, docker, sockets):
         docker_sock=config.docker_sock,
         reaper_interval_seconds=config.reaper_interval_seconds,
         log_level=config.log_level,
+        api_key_hash=None,
     )
     mgr = ContainerManager(priv_config, db, docker, sockets)
     resp = await mgr.create_container(

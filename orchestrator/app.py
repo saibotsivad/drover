@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from fastapi import FastAPI, Request
 from starlette.responses import Response
 
+from orchestrator.auth import auth_middleware
 from orchestrator.config import Config, load_config
 from orchestrator.container_manager import (
     ContainerManager,
@@ -102,6 +103,10 @@ async def lifespan(app: FastAPI):
     config = load_config()
     setup_logging(config.log_level)
     logger.info("Starting Drover orchestrator")
+    if config.api_key_hash is None:
+        logger.warning(
+            "DROVER_API_KEY is not set — API authentication is disabled"
+        )
     db = Database(config.db_path)
     await db.connect()
     docker = DockerClient(config)
@@ -161,6 +166,9 @@ async def log_requests(request: Request, call_next) -> Response:
     duration_ms = (time.perf_counter() - start) * 1000
     logger.info("%s %s -> %d (%.0fms)", method, path, response.status_code, duration_ms)
     return response
+
+
+app.middleware("http")(auth_middleware)
 
 
 @app.get("/health")

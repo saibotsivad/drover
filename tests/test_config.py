@@ -10,6 +10,7 @@ def test_load_config_defaults(monkeypatch):
     monkeypatch.delenv("DOCKER_SOCK", raising=False)
     monkeypatch.delenv("REAPER_INTERVAL_SECONDS", raising=False)
     monkeypatch.delenv("LOG_LEVEL", raising=False)
+    monkeypatch.delenv("DROVER_API_KEY", raising=False)
 
     config = load_config()
 
@@ -19,6 +20,7 @@ def test_load_config_defaults(monkeypatch):
     assert config.docker_sock == "/var/run/docker.sock"
     assert config.reaper_interval_seconds == 5
     assert config.log_level == "INFO"
+    assert config.api_key_hash is None
 
 
 def test_load_config_from_env(monkeypatch):
@@ -28,6 +30,7 @@ def test_load_config_from_env(monkeypatch):
     monkeypatch.setenv("DOCKER_SOCK", "/tmp/docker.sock")
     monkeypatch.setenv("REAPER_INTERVAL_SECONDS", "30")
     monkeypatch.setenv("LOG_LEVEL", "debug")
+    monkeypatch.setenv("DROVER_API_KEY", "abc123hash")
 
     config = load_config()
 
@@ -37,6 +40,7 @@ def test_load_config_from_env(monkeypatch):
     assert config.docker_sock == "/tmp/docker.sock"
     assert config.reaper_interval_seconds == 30
     assert config.log_level == "DEBUG"
+    assert config.api_key_hash == "abc123hash"
 
 
 def test_config_is_frozen():
@@ -47,6 +51,7 @@ def test_config_is_frozen():
         docker_sock="/tmp/d",
         reaper_interval_seconds=5,
         log_level="INFO",
+        api_key_hash=None,
     )
     try:
         config.db_path = "/other"  # type: ignore

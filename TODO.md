@@ -12,9 +12,9 @@ These require design decisions before implementation can begin.
 
 The current exec API uses polling (`GET /containers/{id}/exec/{cmd_id}`). Real-time delivery via SSE or WebSocket would reduce latency and load for long-running commands. The choice between SSE (simpler, HTTP-based, one-directional) and WebSocket (bidirectional, more complex) depends on whether callers ever need to send input to a running command.
 
-### Authentication & authorization
+### ~~Authentication & authorization~~
 
-The REST API has no auth layer. Before any external exposure, we need to decide on an auth scheme — API keys, mTLS, OAuth tokens, or something else — and whether authorization is flat or scoped (e.g. per-image or per-container permissions).
+Resolved — bearer-token authentication is implemented. Set `DROVER_API_KEY` (a SHA-256 hash of the API key) to enable it. See the Authentication section in the README for details. Authorization is currently flat (a single key grants full API access). Scoped permissions (e.g. per-image or per-container) could be added later if needed.
 
 ## Follow-Up Items
 
