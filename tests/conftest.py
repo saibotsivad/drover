@@ -16,6 +16,7 @@ def config(tmp_path):
         docker_sock="/dev/null",
         reaper_interval_seconds=5,
         log_level="DEBUG",
+        api_key_hash=None,
     )
 
 

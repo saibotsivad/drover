@@ -10,6 +10,7 @@ class Config:
     docker_sock: str
     reaper_interval_seconds: int
     log_level: str
+    api_key_hash: str | None
 
 
 def load_config() -> Config:
@@ -22,4 +23,5 @@ def load_config() -> Config:
             os.environ.get("REAPER_INTERVAL_SECONDS", "5")
         ),
         log_level=os.environ.get("LOG_LEVEL", "INFO").upper(),
+        api_key_hash=os.environ.get("DROVER_API_KEY"),
     )
