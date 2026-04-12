@@ -17,7 +17,8 @@ from orchestrator.container_manager import (
 )
 from orchestrator.database import Database
 from orchestrator.docker_client import DockerClient
-from orchestrator.routers import containers, images
+from orchestrator.exec_subscription_manager import ExecSubscriptionManager
+from orchestrator.routers import containers, images, ws as ws_router
 from orchestrator.socket_manager import SocketManager
 
 
@@ -128,11 +129,15 @@ async def lifespan(app: FastAPI):
 
     sockets.set_done_callback(_handle_container_done)
 
+    exec_subs = ExecSubscriptionManager()
+    sockets.set_exec_subscription_manager(exec_subs)
+
     app.state.config = config
     app.state.db = db
     app.state.docker = docker
     app.state.sockets = sockets
     app.state.container_manager = container_manager
+    app.state.exec_subs = exec_subs
 
     reaper_task = asyncio.create_task(
         _reaper_loop(config, db, container_manager)
@@ -154,6 +159,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Drover Orchestrator", lifespan=lifespan)
 app.include_router(images.router)
 app.include_router(containers.router)
+app.include_router(ws_router.router)
 
 
 @app.middleware("http")

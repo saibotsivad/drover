@@ -23,6 +23,7 @@ from datetime import datetime, timezone
 
 from orchestrator.config import Config
 from orchestrator.database import Database
+from orchestrator.exec_subscription_manager import ExecSubscriptionManager
 
 logger = logging.getLogger(__name__)
 
@@ -39,10 +40,15 @@ class SocketManager:
         self._writers: dict[str, asyncio.StreamWriter] = {}
         self._tasks: dict[str, asyncio.Task] = {}
         self._done_callback: Callable[[str], Awaitable[None]] | None = None
+        self._exec_subs: ExecSubscriptionManager | None = None
 
     def set_done_callback(self, callback: Callable[[str], Awaitable[None]]) -> None:
         """Register a callback invoked when a container sends a done signal."""
         self._done_callback = callback
+
+    def set_exec_subscription_manager(self, mgr: ExecSubscriptionManager) -> None:
+        """Register the subscription manager for real-time WS output fanout."""
+        self._exec_subs = mgr
 
     async def create_socket(self, container_id: str) -> str:
         """Create a Unix socket for a container and start listening.
@@ -197,9 +203,9 @@ class SocketManager:
         if msg_type == "heartbeat":
             await self._handle_heartbeat(container_id)
         elif msg_type == "output":
-            await self._handle_output(msg)
+            await self._handle_output(container_id, msg)
         elif msg_type == "result":
-            await self._handle_result(msg)
+            await self._handle_result(container_id, msg)
         elif msg_type == "done":
             await self._handle_done(container_id)
         else:
@@ -217,7 +223,7 @@ class SocketManager:
         )
         logger.debug("Heartbeat from container %s", container_id)
 
-    async def _handle_output(self, msg: dict) -> None:
+    async def _handle_output(self, container_id: str, msg: dict) -> None:
         command_id = msg.get("id")
         stream = msg.get("stream", "stdout")
         data = msg.get("data", "")
@@ -240,7 +246,10 @@ class SocketManager:
             "Output for command %s: [%s] %d bytes", command_id, stream, len(data)
         )
 
-    async def _handle_result(self, msg: dict) -> None:
+        if self._exec_subs:
+            self._exec_subs.notify_output(container_id, command_id, stream, data)
+
+    async def _handle_result(self, container_id: str, msg: dict) -> None:
         command_id = msg.get("id")
         exit_code = msg.get("exit_code")
 
@@ -252,6 +261,9 @@ class SocketManager:
         logger.info(
             "Command %s completed with exit_code=%s", command_id, exit_code
         )
+
+        if self._exec_subs:
+            self._exec_subs.notify_result(container_id, command_id, exit_code)
 
     async def _handle_done(self, container_id: str) -> None:
         logger.info("Done signal from container %s", container_id)

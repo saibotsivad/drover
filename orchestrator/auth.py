@@ -28,13 +28,23 @@ def hash_api_key(plain_key: str) -> str:
     return hashlib.sha256(plain_key.encode()).hexdigest()
 
 
+def verify_token(token: str | None, api_key_hash: str | None) -> bool:
+    """Return True if the token is valid, or if authentication is disabled.
+
+    Args:
+        token: The plain-text token to verify (e.g. from a query parameter).
+        api_key_hash: The SHA-256 hash stored in config. None means auth is disabled.
+    """
+    if api_key_hash is None:
+        return True
+    if not token:
+        return False
+    return hmac.compare_digest(hash_api_key(token), api_key_hash)
+
+
 async def auth_middleware(request: Request, call_next) -> Response:
     """FastAPI middleware that enforces bearer-token authentication."""
     api_key_hash: str | None = request.app.state.config.api_key_hash
-
-    # Auth disabled — pass through.
-    if api_key_hash is None:
-        return await call_next(request)
 
     # Public endpoints are always accessible.
     if request.url.path in _PUBLIC_PATHS:
@@ -42,15 +52,15 @@ async def auth_middleware(request: Request, call_next) -> Response:
 
     auth_header = request.headers.get("authorization", "")
     if not auth_header.startswith("Bearer "):
-        return JSONResponse(
-            status_code=401,
-            content={"detail": "Missing or malformed Authorization header"},
-        )
+        if not verify_token(None, api_key_hash):
+            return JSONResponse(
+                status_code=401,
+                content={"detail": "Missing or malformed Authorization header"},
+            )
+        return await call_next(request)
 
     token = auth_header[7:]  # strip "Bearer "
-    token_hash = hash_api_key(token)
-
-    if not hmac.compare_digest(token_hash, api_key_hash):
+    if not verify_token(token, api_key_hash):
         return JSONResponse(
             status_code=401,
             content={"detail": "Invalid API key"},

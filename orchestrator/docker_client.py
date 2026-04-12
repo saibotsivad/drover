@@ -1,5 +1,6 @@
 import json
 import logging
+from collections.abc import AsyncGenerator
 from urllib.parse import quote
 
 import httpx
@@ -151,3 +152,46 @@ class DockerClient:
         logger.debug("GET /containers/%s/logs -> %s", container_id, resp.status_code)
         self._check(resp, entity="container")
         return resp.text
+
+    async def stream_container_logs(
+        self, container_id: str, tail: str = "all"
+    ) -> AsyncGenerator[tuple[str, str], None]:
+        """Stream container logs as (stream, data) tuples.
+
+        Docker's log endpoint returns a multiplexed binary stream.  Each frame
+        has an 8-byte header: byte 0 is the stream type (1=stdout, 2=stderr),
+        bytes 4-7 are the payload length as a big-endian uint32.
+
+        This generator yields ``("stdout"|"stderr", text)`` tuples until the
+        container stops (Docker closes the stream).
+
+        Args:
+            container_id: Docker container ID.
+            tail: Number of lines to show from end of existing logs, or "all".
+        """
+        logger.debug(
+            "GET /containers/%s/logs follow=true tail=%s", container_id, tail
+        )
+        async with self._client.stream(
+            "GET",
+            f"/containers/{container_id}/logs",
+            params={
+                "stdout": "true",
+                "stderr": "true",
+                "follow": "true",
+                "tail": tail,
+            },
+            timeout=None,  # long-lived stream; override 30s global timeout
+        ) as resp:
+            self._check(resp, entity="container")
+            buffer = b""
+            async for chunk in resp.aiter_bytes():
+                buffer += chunk
+                while len(buffer) >= 8:
+                    size = int.from_bytes(buffer[4:8], "big")
+                    if len(buffer) < 8 + size:
+                        break
+                    stream = "stdout" if buffer[0] == 1 else "stderr"
+                    payload = buffer[8 : 8 + size].decode("utf-8", errors="replace")
+                    buffer = buffer[8 + size :]
+                    yield stream, payload
