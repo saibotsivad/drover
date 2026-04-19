@@ -75,12 +75,12 @@ Consistent vocabulary across the orchestrator, executor, and API.
 
 | Direction | Type | Purpose |
 |---|---|---|
-| G → O | `hello` | Executor is connected; here is its metadata |
-| O → G | `init` | Orchestrator's init payload: optional startup script, auto-init config, env overrides |
-| G → O | `ready` | Bootstrap complete; ready for commands |
-| G → O | `init_failed` | Bootstrap failed; carries reason and optional log excerpt |
-| O → G | `command` | Existing |
-| G → O | `heartbeat` / `output` / `result` / `done` | Existing |
+| E → O | `hello` | Executor is connected; here is its metadata |
+| O → E | `init` | Orchestrator's init payload: optional startup script, auto-init config, env overrides |
+| E → O | `ready` | Bootstrap complete; ready for commands |
+| E → O | `init_failed` | Bootstrap failed; carries reason and optional log excerpt |
+| O → E | `command` | Existing |
+| E → O | `heartbeat` / `output` / `result` / `done` | Existing |
 
 `hello` replaces the implicit "socket connected" signal. `init` is always sent, even if empty, so the executor has a single synchronization point before it proceeds. `ready` is the new barrier that gates command dispatch.
 
@@ -92,7 +92,7 @@ Consistent vocabulary across the orchestrator, executor, and API.
 
 ## Wire Protocol Additions
 
-### `hello` (G → O)
+### `hello` (E → O)
 
 ```json
 {
@@ -105,7 +105,7 @@ Consistent vocabulary across the orchestrator, executor, and API.
 
 `capabilities` lets a future minimal custom executor advertise only what it implements (e.g. no `auto_init`). The orchestrator refuses to send an `init` payload that requires a missing capability and fails the container with a clear error.
 
-### `init` (O → G)
+### `init` (O → E)
 
 ```json
 {
@@ -123,7 +123,7 @@ Consistent vocabulary across the orchestrator, executor, and API.
 
 All fields optional. An empty init (`{"type": "init"}`) means "nothing to do, go straight to ready." Secrets (tokens) travel over the Unix socket, not as Docker env vars visible to `docker inspect`. See *Security* below.
 
-### `ready` (G → O)
+### `ready` (E → O)
 
 ```json
 {
@@ -135,7 +135,7 @@ All fields optional. An empty init (`{"type": "init"}`) means "nothing to do, go
 
 Diagnostic metadata; none of it is required by the orchestrator but all of it is useful in logs and returned in `GET /containers/{id}`.
 
-### `init_failed` (G → O)
+### `init_failed` (E → O)
 
 ```json
 {
