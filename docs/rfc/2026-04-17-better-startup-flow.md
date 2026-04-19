@@ -34,7 +34,9 @@ POST /containers
 }
 ```
 
-The orchestrator launches the container, the executor runs the optional `startup_script`, clones the repo, reads `drover.yaml` (or auto-detects), installs dependencies, and signals `ready`. The `POST` response returns when the container reaches `ready` (or fails). Subsequent `POST /exec` calls land in a prepared workspace.
+The orchestrator launches the container, the executor runs the optional `startup_script`, clones the repo, reads `drover.yaml`, installs dependencies, and signals `ready`. The `POST` response returns when the container reaches `ready` (or fails). Subsequent `POST /exec` calls land in a prepared workspace.
+
+If the cloned repo contains no `drover.yaml`, the executor performs the clone only and goes straight to `ready` — no implicit dependency installation.
 
 ### Minimal `drover.yaml`
 
@@ -47,10 +49,6 @@ setup:
 env:
   PYTHONUNBUFFERED: "1"
 ```
-
-### Zero-config auto-detection
-
-If no `drover.yaml` is present the executor falls back to detectors keyed off well-known files (`requirements.txt`, `pyproject.toml`, `package.json`, `Cargo.toml`, `go.mod`, `Gemfile`). First match wins; nothing happens if none match.
 
 ---
 
@@ -131,7 +129,6 @@ All fields optional. An empty init (`{"type": "init"}`) means "nothing to do, go
 {
   "type": "ready",
   "workdir": "/workspace",
-  "detected": "requirements.txt",
   "duration_ms": 8421
 }
 ```
@@ -188,7 +185,6 @@ On `containers`:
 - `init_started_at TEXT`
 - `ready_at TEXT`
 - `init_error TEXT` (reason string if `init_failed`)
-- `detected_bootstrap TEXT` (e.g. `requirements.txt`, `drover.yaml`)
 - `workdir TEXT`
 
 On the request side, `CreateContainerRequest` gains:
@@ -226,8 +222,8 @@ Orchestrator sets `DROVER_RESUMED=1` when calling Docker `start` on an existing 
 
 Pure functions + a coordinator. Keeps `agent.py` focused on protocol framing.
 
-- `detect_bootstrap(repo_dir) -> DetectedBootstrap | None`
-  Returns drover.yaml parse result OR a synthetic config built from one of the known files.
+- `load_drover_config(repo_dir) -> DroverConfig | None`
+  Reads and strictly parses `drover.yaml` at the repo root. Returns `None` if absent.
 - `clone_repo(url, ref, token, provider, dest) -> None`
   Wraps `git clone` (and for `radicle` provider, `rad clone`). Token injected via a short-lived `GIT_ASKPASS` helper, never placed in the URL and never written to disk.
 - `run_setup(config, send_output) -> int`
@@ -245,21 +241,6 @@ Called after `hello`/`init` handshake, before `ready` is sent. Raises `Bootstrap
 ### Init command ID
 
 Bootstrap output is valuable; it is the thing that most often goes wrong. The executor reserves a synthetic command ID (e.g. `__init__`) and wraps `startup_script` and each `setup` line as `output` messages with that ID. Callers can `GET /containers/{id}/exec/__init__` to stream bootstrap logs just like any other command. A single `result` with the final init exit code is sent immediately before `ready` (or in lieu of it on failure).
-
-### Auto-detection order
-
-First match wins:
-
-1. `drover.yaml` at repo root — authoritative, no further detection
-2. `pyproject.toml` — `pip install .` (with `[dev]` extras if declared)
-3. `requirements.txt` — `pip install -r requirements.txt`
-4. `package.json` with `package-lock.json` — `npm ci`
-5. `package.json` — `npm install`
-6. `Cargo.toml` — `cargo fetch`
-7. `go.mod` — `go mod download`
-8. `Gemfile` — `bundle install`
-
-No match: executor logs `detected=none` and goes straight to `ready`. This is intentional; some workloads need only the source tree.
 
 ### `drover.yaml` schema v1
 
@@ -328,7 +309,7 @@ This is a breaking change to the state enum and the socket protocol. Drover has 
 ### Orchestrator
 
 - [ ] Add `starting`, `initializing`, `ready` to `ContainerStatus`; remove `running`.
-- [ ] DB migration: add `init_started_at`, `ready_at`, `init_error`, `detected_bootstrap`, `workdir`. Rewrite `running → ready`.
+- [ ] DB migration: add `init_started_at`, `ready_at`, `init_error`, `workdir`. Rewrite `running → ready`.
 - [ ] `CreateContainerRequest`: add `startup_script`, `init_timeout_seconds`.
 - [ ] `SocketManager`: add `send_init`, handlers for `hello`, `ready`, `init_failed`; move token env vars into init payload before Docker create.
 - [ ] `ContainerManager`: compose init payload; update state transitions; enforce `ready` gate on exec; separate init timeout in the reaper.
@@ -347,7 +328,7 @@ This is a breaking change to the state enum and the socket protocol. Drover has 
 
 - [ ] Protocol round-trip for new message types.
 - [ ] Orchestrator: state transitions, init timeout vs idle timeout, `POST /containers` blocking behavior, resume path.
-- [ ] Executor: detectors (one fixture repo per detector), `drover.yaml` parse failure cases, `GIT_ASKPASS` does not leak the token, `init_failed` propagation, `DROVER_RESUMED` fast path.
+- [ ] Executor: `drover.yaml` parse (happy path + failure cases), missing-file path (clone-only, goes straight to ready), `GIT_ASKPASS` does not leak the token, `init_failed` propagation, `DROVER_RESUMED` fast path.
 - [ ] End-to-end (in `test.yml`): build image, create container with `DROVER_AUTO_GIT_URL` pointing at a tiny public fixture repo in this repo's `tests/fixtures/`, assert `ready` and that `requirements.txt` deps are installed.
 
 ### Documentation
