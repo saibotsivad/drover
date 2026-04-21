@@ -17,6 +17,12 @@ POST /containers
   → orchestrator updates status: initializing → running
 ```
 
+At its most basic, the ready message can be sent from any language or shell:
+
+```bash
+echo '{"type": "ready"}' | socat - UNIX-CONNECT:/run/orchestrator.sock
+```
+
 Callers should poll `GET /containers/{id}` until `status` is `running` before
 submitting exec commands. If initialization fails or times out, status
 transitions to `error` with an `error_code` field explaining the cause.
