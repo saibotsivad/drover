@@ -84,8 +84,7 @@ Split the existing method into two phases:
    `error_code = NULL`.
 4. Return the `ContainerResponse` immediately (HTTP 201).
 
-**Phase 2 (background task via `asyncio.create_task`, wrapped in
-`asyncio.wait_for` using the configured timeout):**
+**Phase 2 (background task via `asyncio.create_task`):**
 1. Create the Unix socket (`sockets.create_socket`). The socket must exist
    before the Docker container starts so the bind-mount target is a file rather
    than a directory.
@@ -93,21 +92,61 @@ Split the existing method into two phases:
 3. Call `docker.create_container(...)` to get a `docker_id`.
 4. Update the DB row with the `docker_id`.
 5. Call `docker.start_container(docker_id)`.
-6. On success: update DB `status` to `'running'`.
-7. On `asyncio.TimeoutError`: update DB `status` to `'error'` with
-   `error_code = 'init_timeout'`, destroy the socket, and force-remove the
-   Docker container if one was created.
-8. On any other failure: update DB `status` to `'error'` with
+6. On success: leave DB status as `'initializing'` — the transition to
+   `'running'` happens only when the guest agent sends a `ready` message (see
+   socket_manager change below).
+7. On failure: update DB `status` to `'error'` with
    `error_code = 'init_docker_error'`, destroy the socket, and force-remove
    the Docker container if one was created.
 
-### 5. `container_manager.py` — `exec_command`
+A separate **init timeout watchdog task** is created alongside the background
+task. It sleeps for `DROVER_INIT_TIMEOUT_SECONDS` and then checks whether the
+container is still `initializing`. If so, it transitions to `error` with
+`error_code = 'init_timeout'`, destroys the socket, and force-removes the
+Docker container. The watchdog is cancelled if the container reaches `running`
+(i.e. `ready` is received) or enters any error/terminal state before the
+deadline. This covers both Docker failure and agent startup failure with a
+single timeout.
+
+### 5. `orchestrator/socket_manager.py` — new `ready` message handler
+
+Add `ready` to the recognized message types. On receipt, issue:
+
+```sql
+UPDATE containers SET status = 'running' WHERE id = ? AND status = 'initializing'
+```
+
+The conditional `AND status = 'initializing'` ensures a late-arriving `ready`
+(e.g. after a timeout has already fired) is silently ignored.
+
+Cancel the init timeout watchdog task for this container if one is running.
+
+### 6. `executor/drover_executor/protocol.py` — new message encoder
+
+Add `encode_ready() -> bytes` alongside the existing `encode_heartbeat()` etc.
+
+### 7. `executor/drover_executor/agent.py` — send ready after on_connect
+
+In `Agent.run()`, send `ready` immediately after `await self.on_connect()`
+returns:
+
+```python
+await self.on_connect()
+await self._send(protocol.encode_ready())
+```
+
+Subclasses perform any startup work inside `on_connect()`. When it returns,
+the framework sends `ready` automatically — no manual call needed. If
+`on_connect()` raises, `ready` is never sent and the container stays
+`initializing` until the watchdog fires.
+
+### 8. `container_manager.py` — `exec_command`
 
 `POST /containers/{id}/exec` must return a 409 if the container's current
 status is anything other than `running`. This prevents exec commands from
 silently queueing against a container that may never reach `running`.
 
-### 6. `container_manager.py` — `sync_containers` (startup reconciliation)
+### 9. `container_manager.py` — `sync_containers` (startup reconciliation)
 
 `sync_containers` runs at startup to reconcile DB state against Docker.
 Currently it skips rows in mid-transition statuses (`stopping`, `resuming`,
