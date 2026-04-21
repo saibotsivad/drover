@@ -9,6 +9,7 @@ def test_load_config_defaults(monkeypatch):
     monkeypatch.delenv("SOCKET_DIR", raising=False)
     monkeypatch.delenv("DOCKER_SOCK", raising=False)
     monkeypatch.delenv("REAPER_INTERVAL_SECONDS", raising=False)
+    monkeypatch.delenv("DROVER_INIT_TIMEOUT_SECONDS", raising=False)
     monkeypatch.delenv("LOG_LEVEL", raising=False)
     monkeypatch.delenv("DROVER_API_KEY", raising=False)
 
@@ -19,6 +20,7 @@ def test_load_config_defaults(monkeypatch):
     assert config.socket_dir == "/var/run/microcontainers"
     assert config.docker_sock == "/var/run/docker.sock"
     assert config.reaper_interval_seconds == 5
+    assert config.init_timeout_seconds == 20
     assert config.log_level == "INFO"
     assert config.api_key_hash is None
 
@@ -29,6 +31,7 @@ def test_load_config_from_env(monkeypatch):
     monkeypatch.setenv("SOCKET_DIR", "/tmp/socks")
     monkeypatch.setenv("DOCKER_SOCK", "/tmp/docker.sock")
     monkeypatch.setenv("REAPER_INTERVAL_SECONDS", "30")
+    monkeypatch.setenv("DROVER_INIT_TIMEOUT_SECONDS", "45")
     monkeypatch.setenv("LOG_LEVEL", "debug")
     monkeypatch.setenv("DROVER_API_KEY", "abc123hash")
 
@@ -39,6 +42,7 @@ def test_load_config_from_env(monkeypatch):
     assert config.socket_dir == "/tmp/socks"
     assert config.docker_sock == "/tmp/docker.sock"
     assert config.reaper_interval_seconds == 30
+    assert config.init_timeout_seconds == 45
     assert config.log_level == "DEBUG"
     assert config.api_key_hash == "abc123hash"
 
@@ -50,6 +54,7 @@ def test_config_is_frozen():
         socket_dir="/tmp/s",
         docker_sock="/tmp/d",
         reaper_interval_seconds=5,
+        init_timeout_seconds=20,
         log_level="INFO",
         api_key_hash=None,
     )

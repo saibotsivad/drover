@@ -26,12 +26,14 @@ _TIMEOUT_MAX = 86_400
 
 
 class ContainerStatus(str, Enum):
+    initializing = "initializing"
     running = "running"
     stopping = "stopping"
     stopped = "stopped"
     resuming = "resuming"
     destroying = "destroying"
     destroyed = "destroyed"
+    error = "error"
 
 
 class CreateContainerRequest(BaseModel):
@@ -98,6 +100,8 @@ class ContainerResponse(BaseModel):
     created_at: datetime
     stopped_at: datetime | None = None
     last_seen: datetime | None = None
+    # Populated only when status == 'error'; identifies the failure cause.
+    error_code: str | None = None
 
 
 # --- Exec models ---

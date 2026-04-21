@@ -9,6 +9,7 @@ class Config:
     socket_dir: str
     docker_sock: str
     reaper_interval_seconds: int
+    init_timeout_seconds: int
     log_level: str
     api_key_hash: str | None
 
@@ -21,6 +22,9 @@ def load_config() -> Config:
         docker_sock=os.environ.get("DOCKER_SOCK", "/var/run/docker.sock"),
         reaper_interval_seconds=int(
             os.environ.get("REAPER_INTERVAL_SECONDS", "5")
+        ),
+        init_timeout_seconds=int(
+            os.environ.get("DROVER_INIT_TIMEOUT_SECONDS", "20")
         ),
         log_level=os.environ.get("LOG_LEVEL", "INFO").upper(),
         api_key_hash=os.environ.get("DROVER_API_KEY"),

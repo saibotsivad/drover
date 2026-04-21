@@ -127,6 +127,7 @@ async def lifespan(app: FastAPI):
             )
 
     sockets.set_done_callback(_handle_container_done)
+    sockets.set_ready_callback(container_manager.on_container_ready)
 
     app.state.config = config
     app.state.db = db
@@ -146,6 +147,7 @@ async def lifespan(app: FastAPI):
     except asyncio.CancelledError:
         pass
 
+    await container_manager.shutdown()
     await sockets.close_all()
     await docker.close()
     await db.close()

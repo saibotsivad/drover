@@ -10,13 +10,14 @@ CREATE TABLE IF NOT EXISTS containers (
     docker_id       TEXT,
     image           TEXT NOT NULL,
     privileged      INTEGER NOT NULL DEFAULT 0,
-    status          TEXT NOT NULL DEFAULT 'running',
+    status          TEXT NOT NULL DEFAULT 'initializing',
     socket_path     TEXT,
     label           TEXT,
     timeout_seconds INTEGER NOT NULL,
     last_seen       TEXT,
     created_at      TEXT NOT NULL,
-    stopped_at      TEXT
+    stopped_at      TEXT,
+    error_code      TEXT
 );
 
 CREATE TABLE IF NOT EXISTS commands (

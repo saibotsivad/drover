@@ -43,6 +43,7 @@ The orchestrator is configured via environment variables at startup:
 | `SOCKET_DIR` | No | `/var/run/microcontainers` | Directory for per-container Unix socket files. |
 | `DOCKER_SOCK` | No | `/var/run/docker.sock` | Path to the Docker daemon Unix socket. |
 | `REAPER_INTERVAL_SECONDS` | No | `5` | How often (in seconds) the idle-timeout reaper runs. |
+| `DROVER_INIT_TIMEOUT_SECONDS` | No | `20` | Maximum time a container may spend in `initializing` before the watchdog transitions it to `error`. |
 | `LOG_LEVEL` | No | `INFO` | Python log level (`DEBUG`, `INFO`, `WARNING`, `ERROR`). |
 
 ---
@@ -158,12 +159,15 @@ The socket at `/run/orchestrator.sock` is the single bidirectional communication
 **Outbound (container-to-orchestrator):**
 
 ```json
+{ "type": "ready" }
 { "type": "heartbeat" }
 { "type": "output", "id": "abc123", "stream": "stdout", "data": "Cloning into 'repo'..." }
 { "type": "output", "id": "abc123", "stream": "stderr", "data": "Receiving objects: 100%" }
 { "type": "result", "id": "abc123", "exit_code": 0 }
 { "type": "done" }
 ```
+
+The `ready` message is sent once after the guest agent finishes its startup work (see [Container Initialization](docs/container-initialization.md)). The orchestrator transitions the container from `initializing` to `running` only when this message arrives.
 
 The normal stdout captured by Docker logs is unstructured debug output only, it has no semantic meaning to the orchestrator or Drover overall.
 
@@ -255,7 +259,9 @@ Applies equally to standard and privileged containers.
 
 ```mermaid
 stateDiagram-v2
-    [*] --> running: POST /containers
+    [*] --> initializing: POST /containers
+    initializing --> running: guest agent sends ready
+    initializing --> error: init failure / timeout / crash
     running --> stopping: POST /stop (or idle timeout or done signal)
     stopping --> stopped: Docker confirms stop
     stopped --> resuming: POST /resume
@@ -264,9 +270,20 @@ stateDiagram-v2
     stopped --> destroying: DELETE
     destroying --> destroyed: Docker confirms removal
     destroyed --> [*]
+    error --> [*]
 ```
 
 A stopped container retains its filesystem layer and can be resumed. Destroyed containers are fully removed.
+
+`POST /containers` returns immediately with status `initializing`. The Docker create/start work and the guest-agent startup happen in the background; the container is ready to accept exec commands only once status reaches `running`. See [Container Initialization](docs/container-initialization.md) for the full flow.
+
+When initialization fails (Docker error, timeout, or an orchestrator restart mid-init), the container moves to `error` with an `error_code` field explaining the cause:
+
+| `error_code` | Meaning |
+|---|---|
+| `init_docker_error` | Docker create or start call failed during initialization. |
+| `init_timeout` | Initialization did not complete within `DROVER_INIT_TIMEOUT_SECONDS`. |
+| `orchestrator_crash` | The orchestrator restarted while the container was still initializing. |
 
 The intermediate states (`stopping`, `resuming`, `destroying`) are transient guard rails. The API returns `409 Conflict` if you attempt an action that conflicts with a transition already in progress.
 
