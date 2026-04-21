@@ -23,81 +23,106 @@ The DB schema default for the `status` column (`database.py`) changes from
 `'running'` to `'initializing'` for clarity, even though explicit values are
 always passed on insert.
 
-Full status lifecycle:
+### Full status lifecycle
 
+```mermaid
+flowchart TD
+    initializing -->|init succeeds| running
+    initializing -->|init fails / timeout / crash| error
+
+    running -->|stop requested| stopping
+    stopping -->|stopped cleanly| stopped
+    stopping -->|destroy requested| destroying
+    stopped -->|resume requested| resuming
+    resuming -->|resume succeeds| running
+    destroying --> destroyed
 ```
-initializing → running → stopping → stopped → resuming → running → ...
-                                  ↘ destroyed
-initializing → error
-running      → error  (unexpected Docker failure)
-```
+
+## Error Codes
+
+A new `error_code` column is added to the `containers` table and exposed as an
+optional field on `ContainerResponse`. It is `NULL` unless `status = 'error'`.
+Values are strings drawn from a defined set:
+
+| Code | Scenario |
+|---|---|
+| `init_docker_error` | Docker create or start call failed during initialization |
+| `init_timeout` | Background init task exceeded the configured timeout |
+| `orchestrator_crash` | Orchestrator restarted and found this container stuck in `initializing` |
 
 ## Code Changes
 
-### 1. `models.py` — `ContainerStatus` enum
+### 1. `models.py` — `ContainerStatus` enum and `ContainerResponse`
 
-Add `initializing` and `error` values.
+- Add `initializing` and `error` values to `ContainerStatus`.
+- Add `error_code: str | None = None` field to `ContainerResponse`.
 
-### 2. `database.py` — schema default
+### 2. `database.py` — schema
 
-Change the `status` column default from `'running'` to `'initializing'`.
+- Change the `status` column default from `'running'` to `'initializing'`.
+- Add `error_code TEXT` column to the `containers` table.
 
-### 3. `container_manager.py` — `create_container`
+### 3. `config.py` — new setting
+
+Add `DROVER_INIT_TIMEOUT_SECONDS` environment variable (default: `20`). This
+caps how long the background init task is allowed to run before the container
+is transitioned to `error` with code `init_timeout`.
+
+Whether this should alternatively be a per-request field on
+`CreateContainerRequest` is still under discussion. The env-var approach is
+simpler and treats init time as an infrastructure concern rather than a
+per-container one; feedback welcome before implementation.
+
+### 4. `container_manager.py` — `create_container`
 
 Split the existing method into two phases:
 
 **Phase 1 (synchronous, before returning):**
 1. Validate image / privileged config (unchanged).
-2. Generate container ID and create the Unix socket (unchanged — must exist
-   before the container starts so the bind-mount target is a file).
-3. Insert the DB row with `status = 'initializing'` and `docker_id = NULL`.
+2. Generate a container ID.
+3. Insert the DB row with `status = 'initializing'`, `docker_id = NULL`, and
+   `error_code = NULL`.
 4. Return the `ContainerResponse` immediately (HTTP 201).
 
-**Phase 2 (background task via `asyncio.create_task`):**
-1. Call `docker.create_container(...)` to get a `docker_id`.
-2. Update the DB row with the `docker_id`.
-3. Call `docker.start_container(docker_id)`.
-4. On success: update DB status to `'running'`.
-5. On any failure: update DB status to `'error'`, destroy the socket, and
-   force-remove the Docker container if one was created — same cleanup logic
-   as today, just moved into the background task.
+**Phase 2 (background task via `asyncio.create_task`, wrapped in
+`asyncio.wait_for` using the configured timeout):**
+1. Create the Unix socket (`sockets.create_socket`). The socket must exist
+   before the Docker container starts so the bind-mount target is a file rather
+   than a directory.
+2. Update the DB row with the `socket_path`.
+3. Call `docker.create_container(...)` to get a `docker_id`.
+4. Update the DB row with the `docker_id`.
+5. Call `docker.start_container(docker_id)`.
+6. On success: update DB `status` to `'running'`.
+7. On `asyncio.TimeoutError`: update DB `status` to `'error'` with
+   `error_code = 'init_timeout'`, destroy the socket, and force-remove the
+   Docker container if one was created.
+8. On any other failure: update DB `status` to `'error'` with
+   `error_code = 'init_docker_error'`, destroy the socket, and force-remove
+   the Docker container if one was created.
 
-### 4. `container_manager.py` — `sync_containers` (startup reconciliation)
+### 5. `container_manager.py` — `exec_command`
+
+`POST /containers/{id}/exec` must return a 409 if the container's current
+status is anything other than `running`. This prevents exec commands from
+silently queueing against a container that may never reach `running`.
+
+### 6. `container_manager.py` — `sync_containers` (startup reconciliation)
 
 `sync_containers` runs at startup to reconcile DB state against Docker.
 Currently it skips rows in mid-transition statuses (`stopping`, `resuming`,
-`destroying`). `initializing` must be added to that list so a crash mid-init
-doesn't get incorrectly reconciled against a Docker container that may not
-exist yet.
+`destroying`). `initializing` must be added to that skip list so a crash
+mid-init doesn't get incorrectly reconciled against a Docker container that
+may not exist yet.
 
-Additionally: if a row is still `initializing` after the reconciliation pass
-(i.e. Docker has no matching container), it should be transitioned to `error`
-rather than left stuck.
+After the Docker reconciliation pass, any row still in `initializing` (i.e.
+no matching Docker container was found) should be transitioned to `error` with
+`error_code = 'orchestrator_crash'` rather than left stuck.
 
 ## What Does Not Change
 
 - `GET /containers/{id}` — already reads directly from the DB row; no changes
-  needed.
-- `GET /containers/{id}/exec/{command_id}` and `POST /containers/{id}/exec` —
-  unaffected.
-- Socket creation timing — the socket is still created synchronously before
-  the DB insert, so the bind-mount path always exists when Docker needs it.
+  needed beyond the new `error_code` field being populated.
+- `GET /containers/{id}/exec/{command_id}` — unaffected.
 - Error cleanup logic — same socket destruction and force-remove steps, just
   relocated into the background task.
-
-## Open Questions
-
-1. **Should `POST /containers/{id}/exec` be rejected while status is
-   `initializing`?** Currently exec commands are only dispatched over the Unix
-   socket once the guest agent connects, so a command submitted during
-   `initializing` would just sit as `pending`. This is arguably fine, but we
-   could also return a 409 to make the contract explicit.
-
-2. **Should there be a timeout on the background init task?** If Docker hangs,
-   the container stays `initializing` forever. A configurable deadline (e.g.
-   same `timeout_seconds` as the container itself) that transitions to `error`
-   on expiry would bound the stuck-state window.
-
-3. **Error detail visibility.** The `error` status tells the caller something
-   went wrong, but not what. Should `ContainerResponse` include an optional
-   `error_message` field, or is the status alone sufficient for now?
