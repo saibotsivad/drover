@@ -84,8 +84,75 @@ async def _shutdown_test(agent_task, reader_holder, server):
 # ---------------------------------------------------------------------------
 
 class TestAgentConnection:
+    async def test_ready_sent_before_heartbeat(self, tmp_path):
+        """The first message from the agent is always ``ready``.
+
+        The Agent base class emits ``ready`` immediately after
+        ``on_connect()`` returns so the orchestrator can transition the
+        container from ``initializing`` to ``running``.
+        """
+        path = _socket_path(tmp_path)
+        connected = asyncio.Event()
+        reader_holder = {}
+
+        async def on_connect(reader, writer):
+            reader_holder["r"] = reader
+            reader_holder["w"] = writer
+            connected.set()
+
+        server = await asyncio.start_unix_server(on_connect, path=path)
+        os.chmod(path, 0o777)
+
+        agent = Agent(socket_path=path, heartbeat_interval=60)
+        agent_task = asyncio.create_task(agent.run())
+
+        try:
+            await asyncio.wait_for(connected.wait(), timeout=5)
+            reader = reader_holder["r"]
+
+            msg = await _read_message(reader)
+            assert msg == {"type": "ready"}
+        finally:
+            await _shutdown_test(agent_task, reader_holder, server)
+
+    async def test_ready_sent_after_on_connect_completes(self, tmp_path):
+        """Ready is sent only after ``on_connect()`` finishes its work."""
+        path = _socket_path(tmp_path)
+        connected = asyncio.Event()
+        reader_holder = {}
+
+        async def on_connect(reader, writer):
+            reader_holder["r"] = reader
+            reader_holder["w"] = writer
+            connected.set()
+
+        server = await asyncio.start_unix_server(on_connect, path=path)
+        os.chmod(path, 0o777)
+
+        startup_order: list[str] = []
+
+        class SlowAgent(Agent):
+            async def on_connect(self) -> None:
+                await asyncio.sleep(0.1)
+                startup_order.append("on_connect_done")
+
+        agent = SlowAgent(socket_path=path, heartbeat_interval=60)
+        agent_task = asyncio.create_task(agent.run())
+
+        try:
+            await asyncio.wait_for(connected.wait(), timeout=5)
+            reader = reader_holder["r"]
+
+            msg = await _read_message(reader)
+            startup_order.append("ready_received")
+            assert msg == {"type": "ready"}
+            # on_connect ran to completion first, then ready was emitted
+            assert startup_order == ["on_connect_done", "ready_received"]
+        finally:
+            await _shutdown_test(agent_task, reader_holder, server)
+
     async def test_connect_and_heartbeat(self, tmp_path):
-        """Agent connects and sends heartbeats."""
+        """Agent connects and sends heartbeats after the initial ready."""
         path = _socket_path(tmp_path)
         connected = asyncio.Event()
         reader_holder = {}
@@ -105,7 +172,11 @@ class TestAgentConnection:
             await asyncio.wait_for(connected.wait(), timeout=5)
             reader = reader_holder["r"]
 
-            # Should receive heartbeats
+            # Consume the initial ready message
+            msg = await _read_message(reader)
+            assert msg["type"] == "ready"
+
+            # Then heartbeats flow
             msg = await _read_message(reader)
             assert msg["type"] == "heartbeat"
 
@@ -496,12 +567,15 @@ class TestGracefulShutdown:
             await asyncio.wait_for(connected.wait(), timeout=5)
             reader = reader_holder["r"]
 
-            # Should receive the done message
-            msg = await _read_message(reader)
-            # Might get a heartbeat first
-            if msg["type"] == "heartbeat":
+            # Should receive the done message.  A ready is always sent
+            # after on_connect returns, and a heartbeat may arrive first.
+            for _ in range(3):
                 msg = await _read_message(reader)
-            assert msg["type"] == "done"
+                if msg["type"] == "done":
+                    break
+                assert msg["type"] in ("ready", "heartbeat")
+            else:
+                raise AssertionError("Never received a done message")
         finally:
             await _shutdown_test(agent_task, reader_holder, server)
 
@@ -534,8 +608,12 @@ class TestGracefulShutdown:
             await asyncio.wait_for(connected.wait(), timeout=5)
             reader = reader_holder["r"]
 
+            # on_connect sends a manual heartbeat, then the framework sends
+            # ready.  Both should arrive in order.
             msg = await _read_message(reader)
             assert msg["type"] == "heartbeat"
+            msg2 = await _read_message(reader)
+            assert msg2["type"] == "ready"
         finally:
             await _shutdown_test(agent_task, reader_holder, server)
 

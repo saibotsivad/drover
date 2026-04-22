@@ -2,8 +2,16 @@
 
 Sits between the REST API layer, the SQLite database, and the Docker
 client.  All container state transitions flow through this module.
+
+Initialization is asynchronous: ``create_container`` inserts the DB row with
+status ``initializing`` and returns immediately.  A background task performs
+the Docker create/start work, and the container transitions to ``running``
+only once the guest agent sends a ``ready`` message.  A watchdog task fails
+the container to ``error`` if initialization does not complete within
+``init_timeout_seconds``.
 """
 
+import asyncio
 import logging
 from datetime import datetime, timezone
 
@@ -104,6 +112,7 @@ def _row_to_response(row) -> ContainerResponse:
         created_at=row["created_at"],
         stopped_at=row["stopped_at"],
         last_seen=row["last_seen"],
+        error_code=row["error_code"],
     )
 
 
@@ -134,6 +143,37 @@ class ContainerManager:
         self._db = db
         self._docker = docker
         self._sockets = sockets
+        # In-flight background initialization tasks keyed by container id.
+        # Used for cancellation on ready-receipt and on orchestrator shutdown.
+        self._init_tasks: dict[str, asyncio.Task] = {}
+        self._init_watchdogs: dict[str, asyncio.Task] = {}
+
+    # -- shutdown -----------------------------------------------------------
+
+    async def shutdown(self) -> None:
+        """Cancel any in-flight init and watchdog tasks on app shutdown."""
+        tasks = list(self._init_watchdogs.values()) + list(self._init_tasks.values())
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        for task in tasks:
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):
+                pass
+        self._init_tasks.clear()
+        self._init_watchdogs.clear()
+
+    async def on_container_ready(self, container_id: str) -> None:
+        """Cancel the init watchdog after a ``ready`` message is received.
+
+        Invoked by ``SocketManager`` via the ready callback.  The DB status
+        has already been transitioned from ``initializing`` to ``running``
+        by the socket manager before this is called.
+        """
+        watchdog = self._init_watchdogs.pop(container_id, None)
+        if watchdog and not watchdog.done():
+            watchdog.cancel()
 
     # -- startup sync -------------------------------------------------------
 
@@ -147,10 +187,16 @@ class ContainerManager:
           - update the DB status if Docker disagrees (and we're not
             mid-transition),
           - re-establish a socket listener for containers still running.
+
+        Rows in ``initializing`` are skipped during reconciliation because
+        the background init task that owned them was interrupted by the
+        restart and the Docker container may or may not exist yet.  After
+        the reconciliation pass, any remaining ``initializing`` rows are
+        transitioned to ``error`` with code ``orchestrator_crash``.
         """
         rows = await self._db.fetchall(
             "SELECT id, docker_id, status, socket_path FROM containers "
-            "WHERE status != 'destroyed'",
+            "WHERE status NOT IN ('destroyed', 'error')",
         )
         if not rows:
             return
@@ -161,6 +207,10 @@ class ContainerManager:
             container_id = row["id"]
             docker_id = row["docker_id"]
             db_status = row["status"]
+
+            if db_status == "initializing":
+                # Crashed mid-init; handled by the post-reconciliation pass.
+                continue
 
             try:
                 inspection = await self._docker.inspect_container(docker_id)
@@ -205,9 +255,33 @@ class ContainerManager:
                     "Startup sync: failed to reconcile container %s", container_id
                 )
 
+        # Any container still in ``initializing`` was interrupted by the
+        # restart.  Force-remove the Docker container if one was created and
+        # transition to ``error`` with code ``orchestrator_crash``.
+        stuck_rows = await self._db.fetchall(
+            "SELECT id, docker_id FROM containers WHERE status = 'initializing'",
+        )
+        for row in stuck_rows:
+            container_id = row["id"]
+            docker_id = row["docker_id"]
+            await self._fail_init(container_id, "orchestrator_crash", docker_id)
+            logger.warning(
+                "Startup sync: container %s was stuck initializing, marked error",
+                container_id,
+            )
+
     # -- create -------------------------------------------------------------
 
     async def create_container(self, req: CreateContainerRequest) -> ContainerResponse:
+        """Create a container row and schedule background Docker initialization.
+
+        Returns immediately with status ``initializing``.  The background
+        task creates the socket, creates and starts the Docker container,
+        and the container transitions to ``running`` only when the guest
+        agent sends a ``ready`` message.  A watchdog task transitions the
+        container to ``error`` if initialization exceeds the configured
+        timeout.
+        """
         # 1. Validate image / privileged config
         if req.privileged:
             if not self._config.privileged_image:
@@ -220,58 +294,18 @@ class ContainerManager:
             except ImageNotFoundError:
                 raise ImageNotFound(req.image)
 
-        # 2. Generate ID and create the Unix socket (must exist before container
-        #    start so the bind mount targets a file, not a directory).
+        # 2. Generate ID and insert DB row in initializing state
         container_id = generate_id()
-        socket_path = await self._sockets.create_socket(container_id)
-
-        # 3. Build Docker container configuration
-        env_list = [f"{k}={v}" for k, v in req.env.items()]
-        env_list.append(f"DROVER_CONTAINER_ID={container_id}")
-
-        binds: list[str] = [f"{socket_path}:/run/orchestrator.sock"]
-        if req.privileged:
-            binds.append(f"{self._config.docker_sock}:/run/docker.sock")
-
-        host_config: dict = {"Binds": binds}
-        if not req.privileged:
-            host_config["Runtime"] = "runsc"
-
-        docker_config = {
-            "Image": image,
-            "Env": env_list,
-            "HostConfig": host_config,
-        }
-
-        # 4. Create and start Docker container
-        result = await self._docker.create_container(docker_config)
-        docker_id = result["Id"]
-
-        try:
-            await self._docker.start_container(docker_id)
-        except Exception:
-            # Clean up the Docker container and socket if start fails
-            await self._sockets.destroy_socket(container_id)
-            try:
-                await self._docker.remove_container(docker_id, force=True)
-            except Exception:
-                pass
-            raise
-
-        # 6. Persist to SQLite
         now = _now_iso()
         await self._db.execute_insert(
             """INSERT INTO containers
                (id, docker_id, image, privileged, status, socket_path,
-                label, timeout_seconds, last_seen, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                label, timeout_seconds, last_seen, created_at, error_code)
+               VALUES (?, NULL, ?, ?, 'initializing', NULL, ?, ?, ?, ?, NULL)""",
             (
                 container_id,
-                docker_id,
                 req.image,
                 int(req.privileged),
-                "running",
-                socket_path,
                 req.label,
                 req.timeout_seconds,
                 now,
@@ -279,10 +313,26 @@ class ContainerManager:
             ),
         )
 
+        # 3. Schedule the background Docker init and the timeout watchdog.
+        init_task = asyncio.create_task(
+            self._init_container(container_id, req, image)
+        )
+        self._init_tasks[container_id] = init_task
+        init_task.add_done_callback(
+            lambda _t, cid=container_id: self._init_tasks.pop(cid, None)
+        )
+
+        watchdog_task = asyncio.create_task(
+            self._init_watchdog(container_id, init_task)
+        )
+        self._init_watchdogs[container_id] = watchdog_task
+        watchdog_task.add_done_callback(
+            lambda _t, cid=container_id: self._init_watchdogs.pop(cid, None)
+        )
+
         logger.info(
-            "Created container %s (docker=%s, image=%s, privileged=%s)",
+            "Created container %s (image=%s, privileged=%s); init scheduled",
             container_id,
-            docker_id[:12],
             req.image,
             req.privileged,
         )
@@ -291,6 +341,141 @@ class ContainerManager:
             "SELECT * FROM containers WHERE id = ?", (container_id,)
         )
         return _row_to_response(row)
+
+    # -- background init ---------------------------------------------------
+
+    async def _init_container(
+        self, container_id: str, req: CreateContainerRequest, image: str
+    ) -> None:
+        """Phase-2 initialization: socket, Docker create, Docker start.
+
+        Runs as a background task.  On Docker failure, transitions the
+        container to ``error`` with code ``init_docker_error`` and cleans
+        up.  On success, the container remains ``initializing`` until the
+        guest agent sends ``ready``.
+        """
+        docker_id: str | None = None
+        try:
+            # Socket must exist before the Docker container starts so the
+            # bind-mount target is a file rather than a directory.
+            socket_path = await self._sockets.create_socket(container_id)
+            await self._db.execute_insert(
+                "UPDATE containers SET socket_path = ? WHERE id = ?",
+                (socket_path, container_id),
+            )
+
+            env_list = [f"{k}={v}" for k, v in req.env.items()]
+            env_list.append(f"DROVER_CONTAINER_ID={container_id}")
+
+            binds: list[str] = [f"{socket_path}:/run/orchestrator.sock"]
+            if req.privileged:
+                binds.append(f"{self._config.docker_sock}:/run/docker.sock")
+
+            host_config: dict = {"Binds": binds}
+            if not req.privileged:
+                host_config["Runtime"] = "runsc"
+
+            docker_config = {
+                "Image": image,
+                "Env": env_list,
+                "HostConfig": host_config,
+            }
+
+            result = await self._docker.create_container(docker_config)
+            docker_id = result["Id"]
+            await self._db.execute_insert(
+                "UPDATE containers SET docker_id = ? WHERE id = ?",
+                (docker_id, container_id),
+            )
+
+            await self._docker.start_container(docker_id)
+
+            logger.info(
+                "Container %s Docker init complete (docker=%s); awaiting ready",
+                container_id,
+                docker_id[:12],
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception(
+                "Container %s failed during Docker initialization", container_id
+            )
+            await self._fail_init(container_id, "init_docker_error", docker_id)
+
+    async def _init_watchdog(
+        self, container_id: str, init_task: asyncio.Task
+    ) -> None:
+        """Fail a container to ``error`` if init does not complete in time.
+
+        Sleeps for ``init_timeout_seconds`` and then checks whether the
+        container is still ``initializing``.  If so, cancels the init task,
+        marks the row as ``error`` with code ``init_timeout``, and cleans
+        up.  The watchdog is cancelled when ``ready`` is received or when
+        init itself fails and transitions to ``error`` first.
+        """
+        try:
+            await asyncio.sleep(self._config.init_timeout_seconds)
+        except asyncio.CancelledError:
+            return
+
+        row = await self._db.fetchone(
+            "SELECT status, docker_id FROM containers WHERE id = ?",
+            (container_id,),
+        )
+        if not row or row["status"] != "initializing":
+            return
+
+        if not init_task.done():
+            init_task.cancel()
+            try:
+                await init_task
+            except (asyncio.CancelledError, Exception):
+                pass
+
+        logger.warning(
+            "Container %s init timed out after %ds",
+            container_id,
+            self._config.init_timeout_seconds,
+        )
+        await self._fail_init(container_id, "init_timeout", row["docker_id"])
+
+    async def _fail_init(
+        self, container_id: str, error_code: str, docker_id: str | None
+    ) -> None:
+        """Transition an initializing container to ``error`` and clean up.
+
+        The UPDATE is conditional on the row still being ``initializing``
+        so a late ``ready`` or a racing watchdog fire cannot overwrite a
+        successful transition.  Cleanup (socket + Docker) only runs if this
+        call actually performed the transition.
+        """
+        async with self._db.execute(
+            "UPDATE containers SET status = 'error', error_code = ? "
+            "WHERE id = ? AND status = 'initializing'",
+            (error_code, container_id),
+        ) as cursor:
+            rowcount = cursor.rowcount
+
+        if rowcount == 0:
+            return
+
+        try:
+            await self._sockets.destroy_socket(container_id)
+        except Exception:
+            logger.exception(
+                "Failed to destroy socket for container %s", container_id
+            )
+
+        if docker_id:
+            try:
+                await self._docker.remove_container(docker_id, force=True)
+            except Exception:
+                logger.exception(
+                    "Failed to force-remove Docker container %s for %s",
+                    docker_id,
+                    container_id,
+                )
 
     # -- get ----------------------------------------------------------------
 
@@ -301,9 +486,11 @@ class ContainerManager:
         if not row:
             raise ContainerNotFound(container_id)
 
-        # Sync with Docker unless the container is already in a terminal state
+        # Sync with Docker unless the container is in a terminal state or
+        # still initializing (the background task owns state transitions for
+        # the latter, and docker_id may still be NULL).
         current_status = row["status"]
-        if current_status != "destroyed":
+        if current_status not in ("destroyed", "error", "initializing"):
             try:
                 inspection = await self._docker.inspect_container(row["docker_id"])
                 mapped = _docker_state_to_status(inspection)
@@ -432,15 +619,18 @@ class ContainerManager:
         await self._sockets.destroy_socket(container_id)
 
         docker_id = row["docker_id"]
-        try:
-            await self._docker.stop_container(docker_id)
-        except (ContainerNotFoundError, ContainerConflictError):
-            pass  # Already stopped or gone
+        # docker_id may be NULL for containers that failed init before the
+        # Docker create call completed (status 'error').
+        if docker_id:
+            try:
+                await self._docker.stop_container(docker_id)
+            except (ContainerNotFoundError, ContainerConflictError):
+                pass  # Already stopped or gone
 
-        try:
-            await self._docker.remove_container(docker_id, force=True)
-        except ContainerNotFoundError:
-            pass  # Already removed
+            try:
+                await self._docker.remove_container(docker_id, force=True)
+            except ContainerNotFoundError:
+                pass  # Already removed
 
         # Preserve existing stopped_at if already set (container was stopped
         # before being destroyed), otherwise record the current time.

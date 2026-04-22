@@ -18,8 +18,22 @@ from drover_executor.protocol import (
     encode_done,
     encode_heartbeat,
     encode_output,
+    encode_ready,
     encode_result,
 )
+
+
+class TestEncodeReady:
+    def test_format(self):
+        """Ready is a single JSON line with type field only."""
+        raw = encode_ready()
+        assert raw.endswith(b"\n")
+        msg = json.loads(raw)
+        assert msg == {"type": "ready"}
+
+    def test_bytes_type(self):
+        """All encoders return bytes, ready to write to the socket."""
+        assert isinstance(encode_ready(), bytes)
 
 
 class TestEncodeHeartbeat:

@@ -5,6 +5,7 @@ The guest agent inside the container connects to this socket and communicates
 using newline-delimited JSON messages.
 
 Message types (guest -> orchestrator):
+  - ready:     {"type": "ready"}
   - heartbeat: {"type": "heartbeat"}
   - output:    {"type": "output", "id": "<cmd_id>", "stream": "stdout|stderr", "data": "..."}
   - result:    {"type": "result", "id": "<cmd_id>", "exit_code": N}
@@ -39,10 +40,20 @@ class SocketManager:
         self._writers: dict[str, asyncio.StreamWriter] = {}
         self._tasks: dict[str, asyncio.Task] = {}
         self._done_callback: Callable[[str], Awaitable[None]] | None = None
+        self._ready_callback: Callable[[str], Awaitable[None]] | None = None
 
     def set_done_callback(self, callback: Callable[[str], Awaitable[None]]) -> None:
         """Register a callback invoked when a container sends a done signal."""
         self._done_callback = callback
+
+    def set_ready_callback(self, callback: Callable[[str], Awaitable[None]]) -> None:
+        """Register a callback invoked after a ready transition succeeds.
+
+        Fired only when the ``ready`` message actually transitions the row
+        from ``initializing`` to ``running``.  The orchestrator uses this
+        to cancel the init timeout watchdog for the container.
+        """
+        self._ready_callback = callback
 
     async def create_socket(self, container_id: str) -> str:
         """Create a Unix socket for a container and start listening.
@@ -194,7 +205,9 @@ class SocketManager:
         """Route a message from the guest agent."""
         msg_type = msg.get("type")
 
-        if msg_type == "heartbeat":
+        if msg_type == "ready":
+            await self._handle_ready(container_id)
+        elif msg_type == "heartbeat":
             await self._handle_heartbeat(container_id)
         elif msg_type == "output":
             await self._handle_output(msg)
@@ -208,6 +221,33 @@ class SocketManager:
                 container_id,
                 msg_type,
             )
+
+    async def _handle_ready(self, container_id: str) -> None:
+        """Transition an initializing container to running.
+
+        The UPDATE is conditional on the current status being
+        ``initializing`` so a late-arriving ready (e.g. after the init
+        watchdog has already fired and transitioned the row to ``error``)
+        is silently ignored.  Only a successful transition fires the ready
+        callback so the orchestrator can cancel the watchdog.
+        """
+        async with self._db.execute(
+            "UPDATE containers SET status = 'running' "
+            "WHERE id = ? AND status = 'initializing'",
+            (container_id,),
+        ) as cursor:
+            rowcount = cursor.rowcount
+
+        if rowcount == 0:
+            logger.debug(
+                "Ignored ready from container %s (not in initializing state)",
+                container_id,
+            )
+            return
+
+        logger.info("Container %s ready; status initializing -> running", container_id)
+        if self._ready_callback:
+            asyncio.create_task(self._ready_callback(container_id))
 
     async def _handle_heartbeat(self, container_id: str) -> None:
         now = _now_iso()

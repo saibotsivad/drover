@@ -209,7 +209,16 @@ class TestImageDetail:
 
 class TestContainerStatus:
     def test_all_statuses(self):
-        expected = {"running", "stopping", "stopped", "resuming", "destroying", "destroyed"}
+        expected = {
+            "initializing",
+            "running",
+            "stopping",
+            "stopped",
+            "resuming",
+            "destroying",
+            "destroyed",
+            "error",
+        }
         assert {s.value for s in ContainerStatus} == expected
 
 

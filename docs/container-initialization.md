@@ -66,3 +66,18 @@ asyncio.run(agent.run())
 If `on_connect()` raises an exception, `ready` is never sent, the container
 stays in `initializing`, and the orchestrator's init timeout will eventually
 transition it to `error`.
+
+## Error states
+
+A container in status `error` carries an `error_code` field that identifies
+the cause:
+
+| `error_code` | Meaning |
+|---|---|
+| `init_docker_error` | The Docker create or start call failed during initialization. |
+| `init_timeout` | The orchestrator's watchdog fired because initialization did not complete within `DROVER_INIT_TIMEOUT_SECONDS` (default `20`). This covers both Docker hang-ups and agent startup failures (e.g. an exception in `on_connect()` that prevents `ready` from being sent). |
+| `orchestrator_crash` | The orchestrator restarted while the container was still in `initializing`. Startup reconciliation transitions these rows to `error` rather than leaving them stuck. |
+
+Once a container is in `error`, its socket has been destroyed and its Docker
+container (if one was created) has been force-removed. The DB row is retained
+for diagnostic purposes; callers should `DELETE` it to clean up.

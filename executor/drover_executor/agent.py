@@ -62,6 +62,11 @@ class Agent:
 
         try:
             await self.on_connect()
+            # Signal readiness to the orchestrator after any subclass
+            # startup work in on_connect has completed.  If on_connect
+            # raises, this is skipped and the orchestrator's init timeout
+            # watchdog eventually fails the container.
+            await self._send(protocol.encode_ready())
 
             if self.auto_heartbeat:
                 self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
