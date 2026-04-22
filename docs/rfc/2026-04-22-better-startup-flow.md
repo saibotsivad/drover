@@ -1,11 +1,19 @@
-proposed better startup flow
+# goal
 
-in docs/rfc/2026-04-21-git-clone-startup.md we proposed a git clone
+auto setup of repository
 
-the next step is to be able to include some optional auto initialization for the repo 
+# short version
 
-for example if your repo is a particular Nodejs version
+in @docs/rfc/2026-04-21-git-clone-startup.md we proposed a git clone at startup
 
-so in this rfc we propose a root file like "drover.yaml" that holds setup info
+the next step is to be able to specify an optional auto initialization for the repo
 
-the proposed change is that, after the git clone, we look for this file and run it to finish setup
+# general thought
+
+we propose a file that lives at the repository root named `drover.yaml` that holds setup info
+
+for example if your repo is a particular Nodejs version, or has some OS level dependencies (apt install imagemagik or whatever)
+
+after the git clone step, we look for this `drover.yaml` file and run it to finish setup
+
+we would need to defined some specification for the YAML
