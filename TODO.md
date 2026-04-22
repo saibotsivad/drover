@@ -19,3 +19,11 @@ Docker container logs are fetched live from the Docker API and are lost once a c
 ## Container API data model refinement
 
 The Pydantic models in `models.py` cover the initial contract but will likely need adjustment as real usage patterns emerge — e.g. adding pagination to container listings, richer error responses, or additional metadata fields.
+
+---
+
+## Different container auth
+
+I was thinkking about what if we didn't have any auth on the orchestrator at all, but then we offered a web UI as a different (optional) container and have it set up so that the orchestrator and web UI container share a network, and the web UI container exposes a port. The mini containers would not share a port or network with anything else, they are intended to run fully isolated.
+
+The main motivation here is to be able to run the core orchestrator container without any auth for cleanliness. I want a nice UI to monitor things, so I was kind of thinking about combining those two ideas.
