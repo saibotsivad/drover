@@ -1,16 +1,14 @@
 # Zero-Config Bootstrap Detection
 
-**Status:** Proposed. **Depends on:** [2026-04-17-better-startup-flow.md](2026-04-17-better-startup-flow.md).
+**Status:** Proposed.
 
 This RFC adds zero-configuration dependency installation to the auto-init flow defined in the Better Startup Flow RFC. When a cloned repository contains no `drover.yaml`, the executor inspects the working tree for well-known manifest files and runs a conventional install command for the first match.
-
-This is strictly a follow-up: the parent RFC must ship first, because detection hooks into the same `on_init` phase and reuses the `__init__` synthetic command ID, the init timeout, and the `init_failed` reporting path.
 
 ---
 
 ## Motivation
 
-The parent RFC already delivers the common case: clone a repo, run `drover.yaml`'s `setup` commands, report `ready`. But most small repos do not carry a `drover.yaml` — they carry a `requirements.txt`, a `package.json`, or a `Cargo.toml`. Requiring every operator to author a `drover.yaml` for each repo they want to run raises the floor of effort for exactly the drive-by workloads Drover is meant to make cheap.
+There is other work for delivering a case: clone a repo, run `drover.yaml`'s `setup` commands, report `ready`. But most small repos do not carry a `drover.yaml` — they carry a `requirements.txt`, a `package.json`, or a `Cargo.toml`. Requiring every operator to author a `drover.yaml` for each repo they want to run raises the floor of effort for exactly the drive-by workloads Drover is meant to make cheap.
 
 A small, strict detector covers the 80% case without asking anyone to write a manifest.
 
