@@ -1,6 +1,6 @@
 # Goal
 
-Support git clone at startup, before `ready` signal.
+Update the Drover executor startup script to support git clone at startup, before `ready` signal.
 
 # Summary
 
@@ -159,7 +159,7 @@ async def run_git_clone(env: dict[str, str]) -> GitCloneResult | None:
     """
 ```
 
-the base `Agent.on_connect()` is modified to call this:
+The base `Agent.on_connect()` is modified to call this:
 
 ```python
 async def on_connect(self) -> None:
@@ -168,9 +168,9 @@ async def on_connect(self) -> None:
     self._git_clone_result = await run_git_clone(os.environ)
 ```
 
-subclasses that override `on_connect()` and want the git clone behavior should call `await super().on_connect()` first. the result is stored on `self._git_clone_result` so subclasses can inspect the resolved SHA or ref.
+Subclasses that override `on_connect()` and want the git clone behavior should call `await super().on_connect()` first. The result is stored on `self._git_clone_result` so subclasses can inspect the resolved SHA or ref.
 
-the ready message encoding is updated to include the git fields when `self._git_clone_result` is set.
+The ready message encoding is updated to include the git fields when `self._git_clone_result` is set.
 
 ---
 
@@ -181,31 +181,34 @@ the ready message encoding is updated to include the git fields when `self._git_
 
 ## context
 
-Drover micro-containers are ephemeral. today there is no built-in way to get a code checkout into a container before it signals `ready`. operators work around this by baking repos into images (slow iteration) or running clone commands after `ready` (means the container is "ready" before it's actually useful). we want git clone to be a first-class startup step.
+Drover micro-containers are ephemeral. Today there is no built-in way to get a code checkout into a container before it signals `ready`. Operators work around this by baking repos into images (slow iteration) or running clone commands after `ready` (means the container is "ready" before it's actually useful). We want git clone to be a first-class startup step.
 
-## decisions
+## Decisions
 
-**fixed clone destination (`/workspace`)**
-we considered making the path configurable via `DROVER_AUTO_GIT_DIR`. we rejected it for v1 because a fixed path makes shell commands written against Drover containers portable across repos — you don't need to know the repo name or parameterize it. if a real use case emerges (e.g. monorepo subdirectory workflows), a future RFC can add the variable.
+**Fixed clone destination (`/workspace`)**
+
+We considered making the path configurable via `DROVER_AUTO_GIT_DIR` but we rejected it for v1 because a fixed path makes shell commands written against Drover containers portable across repos — you don't need to know the repo name or parameterize it. If a real use case emerges (e.g. monorepo subdirectory workflows), a future RFC can add the variable.
 
 **`git_clone_failed` error code**
-the existing `error_code` column had no value for clone failures — they were indistinguishable from init timeouts. adding `git_clone_failed` lets callers make a useful decision: a clone failure is often worth retrying (wrong credentials, transient network), while a timeout usually isn't. we kept the enum narrow rather than adding a general error taxonomy; that's a separate concern.
 
-**no submodule support in v1**
-`--recurse-submodules` is one flag, but each submodule URL may need independent credentials, and our current auth model is per-clone, not per-URL. supporting submodules properly would require either a more complex credential scheme or accepting that submodule auth will silently fall back to anonymous. we chose to exclude it and noted `DROVER_AUTO_GIT_FLAGS` as a future escape hatch if operators need it badly enough to pass raw flags themselves.
+The existing `error_code` column had no value for clone failures — they were indistinguishable from init timeouts. Adding `git_clone_failed` lets callers make a useful decision: a clone failure is often worth retrying (wrong credentials, transient network), while a timeout usually isn't. We kept the enum narrow rather than adding a general error taxonomy; that's a separate concern.
+
+**No submodule support in v1**
+
+Although `--recurse-submodules` is one flag, each submodule URL may need independent credentials, and our current auth model is per-clone, not per-URL. Supporting submodules properly would require either a more complex credential scheme or accepting that submodule auth will silently fall back to anonymous. We chose to exclude it and noted `DROVER_AUTO_GIT_FLAGS` as a future escape hatch if operators need it badly enough to pass raw flags themselves.
 
 **Radicle deferred**
-Radicle uses a different CLI (`rad clone`), a different identity model (node-managed, not per-clone credentials), and likely requires a running node process in the container image. designing this well requires understanding what a Radicle-ready base image looks like. it is tracked in a separate draft RFC rather than stretching this one.
+Radicle uses a different CLI (`rad clone`), a different identity model (node-managed, not per-clone credentials), and likely requires a running node process in the container image. Sesigning this well requires understanding what a Radicle-ready base image looks like. It is tracked in a separate draft RFC rather than stretching this one.
 
-## consequences
+## Consequences
 
-- the `error_code` column gets a new enum value: `git_clone_failed`
-- the `containers` table gets two new columns: `git_ref TEXT`, `git_sha TEXT`
-- the `ready` wire message gains optional git fields
+- The `error_code` column gets a new enum value: `git_clone_failed`
+- The `containers` table gets two new columns: `git_ref TEXT`, `git_sha TEXT`
+- The `ready` wire message gains optional git fields
 - `Agent.on_connect()` gains a side effect (reads env, may run git); subclasses calling `super().on_connect()` inherit this behavior automatically
-- operators using this feature need to increase `DROVER_INIT_TIMEOUT_SECONDS` beyond the 20-second default
+- Operators using this feature need to increase `DROVER_INIT_TIMEOUT_SECONDS` beyond the 20-second default
 
-## related
+## Related
 
 - @docs/rfc/2026-04-22-better-startup-flow.md — drover.yaml setup commands that run after the clone
 - @docs/rfc/TODO-radicle-git-clone.md — Radicle clone support (deferred)
