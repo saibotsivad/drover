@@ -8,7 +8,7 @@ Provide a git URL as a specially named environment variable to have Drover do a 
 
 This is a functionality added to the executor library, it is **not** required functionally for a Drover mini-container.
 
-# Mon-Goals
+# Non-Goals
 
 - **Non-git code checkout** — This RFC is strictly for git over http or ssh
 - **git submodules** — Adds complexity and can happen later
@@ -105,9 +105,11 @@ The executor logs the exact git command (with token redacted) and its stderr out
 
 The global `DROVER_INIT_TIMEOUT_SECONDS` (default 20 seconds) must be long enough to cover the clone, and 20 seconds is tight for anything but tiny repos on fast links. Operators using `DROVER_AUTO_GIT_URL` should raise this to at least 60–120 seconds.
 
-## secrets and env var visibility
+## Secrets
 
-Environment variables passed in `POST /containers` are forwarded verbatim to Docker and never written to the `containers` table. Therefore both `DROVER_AUTO_GIT_TOKEN` and `DROVER_AUTO_GIT_SSH_KEY` never touch the database — they live only in Docker's memory for the container's lifetime. Operators should avoid logging full create request bodies when they contain secrets, and should prefer short-lived tokens where possible.
+Environment variables passed in `POST /containers` are forwarded verbatim to Docker and never written to the `containers` table. Therefore both `DROVER_AUTO_GIT_TOKEN` and `DROVER_AUTO_GIT_SSH_KEY` never touch the database — they live only in Docker's memory for the container's lifetime.
+
+Operators should avoid logging full create request bodies when they contain secrets, and should prefer short-lived tokens where possible.
 
 ---
 
@@ -135,9 +137,9 @@ On the orchestrator side: add `git_sha TEXT` and `git_ref TEXT` to the `containe
 
 ---
 
-# Executor implementation
+# Executor Implementation
 
-the feature lives in a new module `drover_executor/git_clone.py` rather than in `agent.py` directly. this keeps the agent class clean and makes the logic testable in isolation.
+The feature lives in a new module `drover_executor/git_clone.py` rather than in `agent.py` directly. This keeps the agent class clean and makes the logic testable in isolation.
 
 ```
 drover_executor/
