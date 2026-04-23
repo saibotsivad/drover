@@ -1,56 +1,60 @@
-# goal
+# Goal
 
-support git clone at startup, before `ready` signal
+Support git clone at startup, before `ready` signal.
 
-# short version
+# Summary
 
-if you provide a git url as an env var it'll do a git clone before ready
+Provide a git URL as a specially named environment variable to have Drover do a git clone before the mini-container sends its readiness signal.
 
-# non-goals
+This is a functionality added to the executor library, it is **not** required functionally for a Drover mini-container.
 
-- **Radicle** — Radicle uses a different CLI (`rad clone`) and a node-based identity model that needs its own design. tracked in a separate draft RFC.
-- **git submodules** — complicates per-submodule credential passing. a `DROVER_AUTO_GIT_FLAGS` escape hatch can be added later if there's demand.
-- **per-container init timeout override** — the global `DROVER_INIT_TIMEOUT_SECONDS` is the only knob for now. a per-container override in `POST /containers` is a reasonable future addition.
+# Mon-Goals
+
+- **Non-git code checkout** — This RFC is strictly for git over http or ssh
+- **git submodules** — Adds complexity and can happen later
+- **Per-container init timeout override** — The global `DROVER_INIT_TIMEOUT_SECONDS` is the only knob for now
 
 ---
 
-# environment variables
+# Environment Variables
 
 | Variable | Required | Default | Description |
 |---|---|---|---|
-| `DROVER_AUTO_GIT_URL` | yes (to enable) | _(unset)_ | URL of the repository to clone |
-| `DROVER_AUTO_GIT_REF` | no | repo default branch | Branch name, tag, or full commit SHA to check out |
+| `DROVER_AUTO_GIT_URL` | To enable feature | _(unset)_ | URL of the repository to clone |
+| `DROVER_AUTO_GIT_REF` | no | Repo default branch | Branch name, tag, or full commit SHA to check out |
 | `DROVER_AUTO_GIT_DEPTH` | no | `1` | Shallow clone depth; set to `0` to clone full history |
 | `DROVER_AUTO_GIT_TOKEN` | no | _(unset)_ | Bearer token for HTTPS authentication (GitHub, GitLab, Gitea, etc.) |
 | `DROVER_AUTO_GIT_SSH_KEY` | no | _(unset)_ | Base64-encoded PEM private key for SSH authentication |
 
-these are passed to the micro-container via the `env` dict in `POST /containers`, the same as any other container environment variable. the orchestrator does not inspect or act on them; they're forwarded to Docker and read by the executor at startup.
+These are passed to the micro-container via the `env` dict in `POST /containers`, the same as any other container environment variable. The orchestrator does not inspect or act on them; they're forwarded to Docker and read by the executor at startup.
 
 ---
 
-# clone destination
+# Clone Destination
 
-the repo is always cloned to `/workspace`. this is fixed and not configurable in v1 — a consistent path lets subsequent commands be written portably without knowing the repo name. `/workspace` is short, obvious, and avoids collisions with system paths. after the clone, the executor sets this as the default working directory for all subsequent commands it runs.
+The repo is always cloned to `/workspace`, this is fixed and not configurable. A consistent path lets subsequent commands be written portably without knowing the repo name. The directory name `/workspace` is short, obvious, and avoids collisions with system paths. After the clone, the executor sets this as the default working directory for all subsequent commands it runs.
 
 ---
 
-# authentication
+# Authentication
 
 ## HTTPS with token
 
-set `DROVER_AUTO_GIT_TOKEN`. the executor rewrites the URL to embed credentials using git's credential-helper protocol:
+Set `DROVER_AUTO_GIT_TOKEN`. The executor rewrites the URL to embed credentials using git's credential-helper protocol:
 
 ```sh
 git -c credential.helper='!f() { echo "username=x-token"; echo "password=$TOKEN"; }; f' clone <url> /workspace
 ```
 
-this works for GitHub (personal access tokens and fine-grained tokens), GitLab, Gitea, Forgejo, and Bitbucket. the token is never written to disk. the `-c` flag scopes the credential helper to this invocation only.
+This works for GitHub (personal access tokens and fine-grained tokens), GitLab, Gitea, Forgejo, and Bitbucket.
 
-the URL in `DROVER_AUTO_GIT_URL` should be a plain HTTPS URL (e.g. `https://github.com/org/repo`), not an already-embedded `https://token@host/...` form — that form leaks the token into log lines.
+The token is never written to disk, the `-c` flag scopes the credential helper to this invocation only.
+
+The URL in `DROVER_AUTO_GIT_URL` should be a plain HTTPS URL (e.g. `https://github.com/org/repo`), not an already-embedded `https://token@host/...` form as that form will leak the token into log lines.
 
 ## SSH
 
-set `DROVER_AUTO_GIT_SSH_KEY` to a base64-encoded PEM private key (the kind you'd normally store in `~/.ssh/id_ed25519`). the executor writes the decoded key to a temporary file under `/tmp`, sets `GIT_SSH_COMMAND` to use it with strict host checking disabled, clones, then shreds the file:
+Set `DROVER_AUTO_GIT_SSH_KEY` to a base64-encoded PEM private key (the kind you'd normally store in `~/.ssh/id_ed25519`). The executor writes the decoded key to a temporary file under `/tmp`, sets `GIT_SSH_COMMAND` to use it with strict host checking disabled, clones, then shreds the file:
 
 ```sh
 install -m 600 /dev/null /tmp/drover_id
@@ -59,83 +63,79 @@ GIT_SSH_COMMAND='ssh -i /tmp/drover_id -o StrictHostKeyChecking=no' git clone <u
 shred -u /tmp/drover_id
 ```
 
-`StrictHostKeyChecking=no` is intentional for ephemeral containers — there's no host-key database to trust against, and adding a known-hosts bootstrap step would be more friction than the threat model warrants.
+Setting `StrictHostKeyChecking=no` is intentional for ephemeral containers — there's no host-key database to trust against, and adding a known-hosts bootstrap step would be more friction than the threat model warrants.
 
-## unauthenticated (public repos)
+## Unauthenticated (public repos)
 
-if neither `DROVER_AUTO_GIT_TOKEN` nor `DROVER_AUTO_GIT_SSH_KEY` is set, the executor runs a plain `git clone`. this works for any public repository over HTTPS.
+If neither `DROVER_AUTO_GIT_TOKEN` nor `DROVER_AUTO_GIT_SSH_KEY` is set, the executor runs a plain `git clone`. This works for any public repository over HTTPS.
 
-## priority
+## Priority
 
-if both token and SSH key are provided, SSH key wins and a warning is logged.
+If both token and SSH key are provided, SSH key wins and a warning is logged.
 
 ---
 
-# ref checkout
+# Ref Checkout
 
-after cloning, if `DROVER_AUTO_GIT_REF` is set, the executor runs:
+After cloning, if `DROVER_AUTO_GIT_REF` is set, the executor runs:
 
 ```sh
 git -C /workspace checkout <ref>
 ```
 
-this handles branches, tags, and commit SHAs uniformly. if the ref does not exist, the checkout fails, `on_connect` raises, and `ready` is never sent.
+This handles branches, tags, and commit SHAs uniformly. If the ref does not exist, the checkout fails, `on_connect` raises, and `ready` is never sent.
 
-if `DROVER_AUTO_GIT_REF` is not set, the clone lands on whatever the remote's HEAD points to (almost always the default branch).
-
----
-
-# failure handling
-
-all clone steps run inside `on_connect()`. if any step fails — network error, auth failure, bad ref, non-zero exit from git — `on_connect()` raises an exception. the agent then skips sending `ready`, and the orchestrator's init timeout watchdog marks the container as `error` with `error_code: git_clone_failed`.
-
-`git_clone_failed` is a new value added to the `error_code` enum. it sits alongside the existing timeout path so callers can distinguish "clone failed" (possibly worth retrying with different credentials) from "container timed out" (network or image issue).
-
-the executor logs the exact git command (with token redacted) and its stderr output before raising, so operators can diagnose the failure from container logs.
+If `DROVER_AUTO_GIT_REF` is not set, the clone lands on whatever the remote's HEAD points to (almost always the default branch).
 
 ---
 
-# orchestrator considerations
+# Failure Handling
 
-## init timeout
+All clone steps run inside `on_connect()`. If any step fails — network error, auth failure, bad ref, non-zero exit from git — `on_connect()` raises an exception. The agent then skips sending `ready`, and the orchestrator's init timeout watchdog marks the container as `error` with `error_code: git_clone_failed`.
 
-the global `DROVER_INIT_TIMEOUT_SECONDS` (default 20 seconds) must be long enough to cover the clone. 20 seconds is tight for anything but tiny repos on fast links. operators using `DROVER_AUTO_GIT_URL` should raise this to at least 60–120 seconds.
+We will add `git_clone_failed` as a new value to the `error_code` enum. It sits alongside the existing timeout path so callers can distinguish "clone failed" (possibly worth retrying with different credentials) from "container timed out" (network or image issue).
+
+The executor logs the exact git command (with token redacted) and its stderr output before raising, so operators can diagnose the failure from container logs.
+
+---
+
+# Orchestrator Considerations
+
+## Init Timeout
+
+The global `DROVER_INIT_TIMEOUT_SECONDS` (default 20 seconds) must be long enough to cover the clone, and 20 seconds is tight for anything but tiny repos on fast links. Operators using `DROVER_AUTO_GIT_URL` should raise this to at least 60–120 seconds.
 
 ## secrets and env var visibility
 
-env vars passed in `POST /containers` are forwarded verbatim to Docker and never written to the `containers` table. `DROVER_AUTO_GIT_TOKEN` and `DROVER_AUTO_GIT_SSH_KEY` therefore never touch the database — they live only in Docker's memory for the container's lifetime. operators should avoid logging full create request bodies when they contain secrets, and should prefer short-lived tokens where possible.
+Environment variables passed in `POST /containers` are forwarded verbatim to Docker and never written to the `containers` table. Therefore both `DROVER_AUTO_GIT_TOKEN` and `DROVER_AUTO_GIT_SSH_KEY` never touch the database — they live only in Docker's memory for the container's lifetime. Operators should avoid logging full create request bodies when they contain secrets, and should prefer short-lived tokens where possible.
 
 ---
 
-# wire protocol changes
+# Wire Protocol Changes
 
-extend the `ready` message with git context when a clone happened:
+Extend the `ready` message with git context when a clone happened:
 
 ```json
 {
   "type": "ready",
   "workdir": "/workspace",
-  "git_cloned": true,
-  "git_url": "https://github.com/org/repo",
   "git_ref": "main",
   "git_sha": "a89a33e4f8b1c...",
   "duration_ms": 4210
 }
 ```
 
-fields:
-- `workdir` — always `/workspace` when `git_cloned` is true; included so callers don't need to hardcode it
-- `git_cloned` — `true` if a clone ran, absent if not
-- `git_url` — echoed back with any embedded token redacted (replaced with `***`)
-- `git_ref` — the resolved ref name (from `DROVER_AUTO_GIT_REF`, or the detected default branch if unset)
-- `git_sha` — the full commit SHA of HEAD after checkout, from `git rev-parse HEAD`
-- `duration_ms` — wall-clock milliseconds the clone and checkout took
+Fields:
+- `workdir` — Always `/workspace` and included so callers don't need to hardcode it
+- `git_ref` — The resolved ref name, either from `DROVER_AUTO_GIT_REF` or the detected default branch if unset
+- `git_sha` — The full commit SHA of HEAD after checkout, from `git rev-parse HEAD`
+- `duration_ms` — Wall-clock milliseconds for the clone and checkout to complete
 
-on the orchestrator side: add `git_sha TEXT` and `git_ref TEXT` to the `containers` table, populated from the ready message. surface both on `GET /containers/{id}`.
+On the orchestrator side: add `git_sha TEXT` and `git_ref TEXT` to the `containers` table, populated from the ready message. Surface both on `GET /containers/{id}`.
 
 ---
 
-# executor implementation
+# Executor implementation
 
 the feature lives in a new module `drover_executor/git_clone.py` rather than in `agent.py` directly. this keeps the agent class clean and makes the logic testable in isolation.
 
