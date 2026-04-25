@@ -203,14 +203,14 @@ Operators should avoid logging full create request bodies when they contain secr
 
 # Wire Protocol Changes
 
-Two new guest → orchestrator message types:
+Two new message types from the micro-container to the orchestrator:
 
 **`initializing`** — emitted once per plugin on successful completion:
 
 ```json
 {
   "type": "initializing",
-  "plugin": "auto-git",
+  "plugin": "drover-auto-git",
   "data": {
     "workdir": "/workspace",
     "git_ref": "main",
@@ -227,7 +227,7 @@ The `data` field is a JSON-serialisable object chosen by the plugin, or `null`. 
 ```json
 {
   "type": "init_failed",
-  "plugin": "auto-git",
+  "plugin": "drover-auto-git",
   "error": {
     "code": "clone_failed",
     "message": "fatal: repository not found"
@@ -235,7 +235,7 @@ The `data` field is a JSON-serialisable object chosen by the plugin, or `null`. 
 }
 ```
 
-The `ready` message stays minimal:
+The `ready` message from the micro-container stays minimal:
 
 ```json
 {
@@ -272,7 +272,7 @@ drover-executor-git/
     plugin.py                        # implementation
 ```
 
-`GitCloneInitializer` has `id = "auto-git"` and its `run()` implements the clone + checkout + rev-parse sequence described above.
+`GitCloneInitializer` has `id = "drover-auto-git"` and its `run()` implements the clone + checkout + rev-parse sequence described above.
 
 Users opt in by composing it into their agent:
 
@@ -292,15 +292,13 @@ Subclasses that need custom behaviour on top of the initializer chain call `awai
 
 # ADR
 
-**Date:** 2026-04-21
-**Status:** proposed
-**Last revised:** 2026-04-24
+This is an architectural design decision that should be recorded.
 
 ## Context
 
 Drover micro-containers are ephemeral. Today there is no built-in way to get a code checkout into a container before it signals `ready`. Operators work around this by baking repos into images (slow iteration) or running clone commands after `ready` (means the container is "ready" before it's actually useful). We want git clone to be a first-class startup step.
 
-At the same time, git is not the only startup concern on the horizon — drover.yaml project setup, Radicle clone, tarball fetch, S3 pull, and others are likely to follow. Baking git directly into the core `Agent` locks us into a pattern where every future startup feature grows the core and its wire protocol. A plugin model lets the core stay small while startup features evolve as additive packages.
+At the same time, git is not the only startup concern on the horizon — other project setup is likely to follow. Baking git directly into the core `Agent` locks us into a pattern where every future startup feature grows the core and its wire protocol. A plugin model lets the core stay small while startup features evolve as additive packages.
 
 ## Decisions
 
@@ -328,9 +326,9 @@ A normalised `container_init_events` table would be more queryable and scale to 
 
 Keeping the plugin in its own package guarantees that operators who don't want git don't pay for it (no import, no code path). It also sets the precedent for future plugins — each is a package, each is opt-in, each can evolve independently.
 
-**Plugin id grammar: `^[a-z][a-z0-9-]*$`, `drover-` prefix reserved**
+**Plugin id grammar: `^[a-z][a-z0-9-]*$`, `drover-` prefix used by our native plugins**
 
-A tight grammar keeps ids unambiguous in log lines and DB keys. Reserving `drover-` for first-party plugins keeps the namespace clean without requiring a registry. Core validates ids at agent construction time to catch typos early.
+A tight grammar keeps ids unambiguous in log lines and DB keys. Using `drover-` for first-party plugins keeps the namespace clean without requiring a registry. Core validates ids at agent construction time to catch typos early.
 
 **Fixed clone destination (`/workspace`)**
 
