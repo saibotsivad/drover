@@ -4,17 +4,19 @@ Support git clone at startup, before the `ready` signal — shipped as an **opti
 
 # Summary
 
-Introduce a plugin model on the `Agent` class: zero or more initializers run during `on_connect()`, each owns a unique id, and each emits a standardized `initializing` message over the socket before the final `ready` message is sent. Ship a first-party `auto-git` plugin, in a separate package, that clones a repo when `DROVER_AUTO_GIT_URL` is set.
+Introduce a plugin model on the `Agent` class: zero or more initializers run during `on_connect()`, each owns a unique id, and each emits a standardized `initializing` message to the executor, which sends it over the socket before the final `ready` message is sent.
 
-The core executor stays git-agnostic — consumers who don't want git don't pay for it, and other startup concerns (drover.yaml setup, Radicle, tarball checkout, etc.) are additive packages rather than changes to the core.
+Ship an example `auto-git` plugin, in a separate package, that clones a repo when `DROVER_AUTO_GIT_URL` is set.
+
+The core executor stays plugin-agnostic: consumers who don't want a plugin don't pay for it. Other plugin-specific startup concerns are additive packages rather than changes to the core.
 
 # Non-Goals
 
 - **Non-git code checkout** — This RFC is strictly for git over http or ssh
 - **git submodules** — Adds complexity and can happen later
 - **Per-container init timeout override** — The global `DROVER_INIT_TIMEOUT_SECONDS` is the only knob for now
-- **Progress/streaming within a single plugin** — v1 is one terminal `initializing` message per plugin; incremental progress is a future extension
-- **Plugin auto-discovery via Python entry points** — v1 is explicit composition; entry-point discovery can come later
+- **Progress tracking/streaming within a plugin** — each plugin returns a single payload for an `initializing` message, and no loading progress is tracked or inferred
+- **Plugin auto-discovery via Python entry points** — plugin are explicit composition only
 
 ---
 
