@@ -46,10 +46,10 @@ agent = Agent(initializers=[GitCloneInitializer(), DroverYamlInitializer()])
 
 ## Plugin id grammar
 
-Plugin ids must match `^[a-z][a-z0-9-]*$`, 1–64 characters. The `drover-` prefix is reserved for first-party plugins. Ids must be unique within an agent's initializer list — if you need to run the same plugin twice (e.g. two git clones), provide two instances with distinct ids.
+Plugin ids must match `^[a-z][a-z0-9-]*$`, 1–64 characters. The `drover-` prefix is used for first-party plugins. Ids must be unique within an agent's initializer list — if you need to run the same plugin twice (e.g. two git clones), provide two instances with distinct ids.
 
 First-party ids:
-- `auto-git` — the git clone plugin described in this RFC
+- `drover-auto-git` — the git clone plugin described in this RFC
 
 ## Execution flow
 
@@ -65,7 +65,9 @@ Subclasses that override `on_connect()` and want the initializer chain should ca
 
 ---
 
-# Environment Variables (auto-git plugin)
+# Auto-git Plugin
+
+## Environment Variables
 
 | Variable | Required | Default | Description |
 |---|---|---|---|
@@ -79,17 +81,13 @@ These are passed to the micro-container via the `env` dict in `POST /containers`
 
 The `auto-git` plugin no-ops (returns `None` without sending a message) when `DROVER_AUTO_GIT_URL` is unset, so operators can include the plugin in a base image and toggle it per-container via env vars.
 
----
-
-# Clone Destination
+## Clone Destination
 
 The repo is always cloned to `/workspace`, this is fixed and not configurable. A consistent path lets subsequent commands be written portably without knowing the repo name. The directory name `/workspace` is short, obvious, and avoids collisions with system paths. After the clone, the plugin sets this as the default working directory for all subsequent commands run by the agent.
 
----
+## Authentication
 
-# Authentication
-
-## HTTPS with token
+### HTTPS with token
 
 Set `DROVER_AUTO_GIT_TOKEN`. The plugin rewrites the URL to embed credentials using git's credential-helper protocol:
 
@@ -103,7 +101,7 @@ The token is never written to disk, the `-c` flag scopes the credential helper t
 
 The URL in `DROVER_AUTO_GIT_URL` should be a plain HTTPS URL (e.g. `https://github.com/org/repo`), not an already-embedded `https://token@host/...` form as that form will leak the token into log lines.
 
-## SSH
+### SSH
 
 Set `DROVER_AUTO_GIT_SSH_KEY` to a base64-encoded PEM private key (the kind you'd normally store in `~/.ssh/id_ed25519`). The plugin writes the decoded key to a temporary file under `/tmp`, sets `GIT_SSH_COMMAND` to use it with strict host checking disabled, clones, then shreds the file:
 
@@ -116,17 +114,15 @@ shred -u /tmp/drover_id
 
 Setting `StrictHostKeyChecking=no` is intentional for ephemeral containers — there's no host-key database to trust against, and adding a known-hosts bootstrap step would be more friction than the threat model warrants.
 
-## Unauthenticated (public repos)
+### Unauthenticated (public repos)
 
 If neither `DROVER_AUTO_GIT_TOKEN` nor `DROVER_AUTO_GIT_SSH_KEY` is set, the plugin runs a plain `git clone`. This works for any public repository over HTTPS.
 
-## Priority
+### Priority
 
 If both token and SSH key are provided, SSH key wins and a warning is logged.
 
----
-
-# Ref Checkout
+## Ref Checkout
 
 After cloning, if `DROVER_AUTO_GIT_REF` is set, the plugin runs:
 
@@ -138,9 +134,7 @@ This handles branches, tags, and commit SHAs uniformly. If the ref does not exis
 
 If `DROVER_AUTO_GIT_REF` is not set, the clone lands on whatever the remote's HEAD points to (almost always the default branch).
 
----
-
-# Failure Handling
+## Failure Handling
 
 Initializer failures are reported explicitly via a new `init_failed` message rather than by silently letting the init timeout fire:
 
@@ -155,11 +149,11 @@ Initializer failures are reported explicitly via a new `init_failed` message rat
 }
 ```
 
-On receipt, the orchestrator transitions the container to `error` with `error_code: init_plugin_failed` and records the failing plugin id in a new column `failed_plugin TEXT`. The container is torn down the same way as other init failures.
+On receipt, the orchestrator transitions the container to `error` with `error_code: 'init_plugin_failed'` and records the failing plugin id in a new column `failed_plugin TEXT`. The container is torn down the same way as other init failures.
 
-The `init_timeout` watchdog remains as a fallback for cases where the agent can't get a message out at all (network partition, process crash, image missing the agent binary).
+The `init_timeout` watchdog remains as a fallback for cases where the agent can't get a message out at all (network partition, process crash, image missing the agent binary, etc).
 
-Each plugin picks its own `error.code` value. For `auto-git`, codes include `clone_failed`, `checkout_failed`, `auth_missing`; the full list will be documented alongside the plugin.
+Each plugin picks its own `error.code` value. For `drover-auto-git`, codes include `clone_failed`, `checkout_failed`, `auth_missing`; the full list will be documented alongside the plugin.
 
 The plugin logs the exact git command (with token redacted) and its stderr output before raising, so operators can diagnose the failure from container logs.
 
@@ -169,11 +163,11 @@ The plugin logs the exact git command (with token redacted) and its stderr outpu
 
 ## Init timeout
 
-The global `DROVER_INIT_TIMEOUT_SECONDS` (default 20 seconds) must be long enough to cover all initializer work. Twenty seconds is tight for anything but tiny repos on fast links. Operators using `auto-git` should raise this to at least 60–120 seconds.
+The global `DROVER_INIT_TIMEOUT_SECONDS` (default 20 seconds) must be long enough to cover all initializer work. The Drover default of twenty seconds is tight for anything but tiny repos on fast links. Operators using `auto-git` should raise this to avoid timeouts.
 
 ## Init metadata storage
 
-Instead of adding per-plugin columns to `containers`, add a single JSON column:
+Instead of adding per-plugin columns to `containers`, we add a single JSON column and text column:
 
 ```
 init_metadata JSONB  -- map of plugin_id -> data dict
@@ -182,11 +176,11 @@ failed_plugin TEXT   -- set when error_code = init_plugin_failed
 
 The orchestrator populates `init_metadata` by collecting the `data` fields from each `initializing` message it receives on the socket during init. `GET /containers/{id}` surfaces the column verbatim.
 
-For `auto-git` specifically, the stored shape is:
+For `drover-auto-git` specifically, the stored shape is:
 
 ```json
 {
-  "auto-git": {
+  "drover-auto-git": {
     "workdir": "/workspace",
     "git_ref": "main",
     "git_sha": "a89a33e4f8b1c...",
