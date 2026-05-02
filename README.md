@@ -31,7 +31,8 @@ To run this system, the host requires:
 
 1. **Docker in rootless mode** running as the operator user
 2. **The orchestrator container** started with the mounts described below
-3. (Optional) **A privileged container image** built and available on the host (required only if privileged micro-containers will be used)
+3. **At least one micro-container image** built and tagged with the `drover/` prefix so the orchestrator has something to launch
+4. (Optional) **A privileged container image** built and available on the host (required only if privileged micro-containers will be used)
 
 The orchestrator is configured via environment variables at startup:
 
