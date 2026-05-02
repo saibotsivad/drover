@@ -1,6 +1,6 @@
 # goal
 
-a simple, optional management UI for Drover, shipped as its own Docker image
+a simple, optional management UI for Drover, shipped as its own Docker image.
 
 # motivation
 
@@ -8,81 +8,88 @@ we want some kind of UI eventually anyway — for monitoring containers, browsin
 
 this is explicitly **not** an enterprise web console. it's a homelab dev tool, in keeping with the rest of Drover.
 
-an earlier note in @TODO.md ("Different container auth") sketched a related idea where the orchestrator would have no auth at all and the UI container would be the auth layer over a shared Docker network. this RFC is a different shape — see "alternatives considered" at the bottom.
-
 # proposal
 
-a new top-level folder (e.g. `ui/`) containing a Dockerfile that builds an image with:
+a new top-level folder `/webapp` containing a Dockerfile that builds an image with:
 
-1. a static PWA — vanilla, no build step if we can manage it — that talks to a relative `/api/*` path
-2. a tiny reverse proxy in front of it (Caddy is the leading candidate) that:
-   - serves the PWA's static files
+1. a static PWA built on htmx, talking to a relative `/api/*` path
+2. a Node.js server in front of it that:
+   - serves the PWA's static files (including htmx itself, served from the image — no CDN)
    - forwards `/api/*` to the orchestrator over plain HTTP
    - handles WebSocket upgrades for streaming endpoints once they land
    - injects the bearer token on outbound requests
+   - exposes its own `/health` distinct from the orchestrator's
 
 the operator points the UI container at an orchestrator URL (env var) and supplies a bearer token (env var). the PWA itself never sees the token.
 
-# what's decided
+# decisions
 
-## same-origin reverse proxy, not direct fetch from PWA to orchestrator
+## same-origin reverse proxy
 
-the original sketch had the PWA make CORS-enabled fetch calls directly to the orchestrator. switching to a reverse proxy on the UI container kills two birds:
+the UI container serves both the PWA and a proxy to the orchestrator. the browser sees one origin: the UI container's published port.
 
-- **no CORS work on the orchestrator.** browser sees one origin (the UI container's published port). orchestrator stays a same-origin service to its proxy.
+benefits:
+
+- **no CORS work on the orchestrator.** the orchestrator stays a same-origin service to its proxy.
 - **WebSockets just work.** browser → UI proxy → orchestrator over a plain HTTP upgrade. no auth-header-in-WS problem, no token-in-query-string workaround.
+- **invisible auth in the PWA.** PWA hits `/api/*`, the proxy adds the bearer token. no UX for entering tokens, no localStorage handling.
 
-the cost is that the UI container is no longer "just a static file server" — it now also runs a proxy. Caddy makes this ~10 lines of config.
-
-## the UI container holds the bearer token, not the PWA
+## the UI container holds the bearer token
 
 the operator passes `DROVER_API_KEY` (or similar) to the UI container as an env var. the proxy injects it into every forwarded request. the PWA has no auth UX at all.
 
-consequence: **the trust boundary is the UI container's published port.** anyone who can reach it has full Drover access. for a LAN-only homelab this is fine; for any wider exposure, operators put the UI behind their own auth (basic auth, an oauth proxy, an IP allowlist, a VPN, whatever they already use for everything else on the box).
+benefits:
 
-we considered keeping the token in the PWA's localStorage (so the proxy is dumb) but it adds UX without adding security in this topology — the proxy could read either way.
+- **simple operator setup.** one env var, no per-user token management.
+- **no token in the browser.** nothing in localStorage, nothing in the page source.
+
+consequence: **the trust boundary is the UI container's published port.** anyone who can reach it has full Drover access. for a LAN-only homelab this is fine; for any wider exposure, operators front the UI with whatever auth they already use elsewhere (basic auth, an oauth proxy, an IP allowlist, a VPN, etc.).
 
 ## orchestrator URL is configurable, no shared-network requirement
 
-an earlier draft of this idea required the UI and orchestrator to be on the same Docker network and resolve `orchestrator:8000` by Docker DNS. that works but it locks you to a single host.
+the UI container takes `DROVER_ORCHESTRATOR_URL=http://orchestrator:8000` (or similar) and resolves it however the operator's environment resolves it — Docker DNS on a shared network, an IP, a hostname over a tailnet, whatever.
 
-instead, the UI container takes an env var like `DROVER_ORCHESTRATOR_URL=http://orchestrator:8000` and resolves it however the operator's environment resolves it — Docker DNS on a shared network, an IP, a hostname over a tailnet, whatever. same-host shared-network is the easy default; remote is just a different URL.
+benefits:
 
-a `docker-compose.yml` in the repo will demonstrate the same-host setup.
+- **same-host setup is trivial.** join both containers to a Docker network, point the UI at `orchestrator:8000`. a `docker-compose.yml` in the repo will demonstrate this.
+- **remote orchestrators work too.** UI can run on a different host pointing at a Drover host elsewhere on the LAN/tailnet — just a different URL.
+- **no coupling between containers.** operators who don't want a shared network don't need one.
 
 ## orchestrator auth stays as it is
 
 we keep `DROVER_API_KEY` on the orchestrator (optional, as today). running the UI doesn't change anything about how the orchestrator authenticates.
 
-this is defense in depth — if you ever publish the orchestrator port directly for CI / scripts / curl, it's still gated. and it means dropping the UI doesn't suddenly leave an unauthed orchestrator running.
+benefits:
 
-# open questions
+- **defense in depth.** if the orchestrator port is ever published directly for CI / scripts / curl, it's still gated.
+- **independent components.** removing the UI doesn't suddenly leave an unauthed orchestrator running.
 
-these are the things i'm not sure about and want the team to weigh in on.
+## proxy implementation: Node.js
 
-## 1. proxy choice
+the proxy is a small Node.js server, not a config-only proxy like Caddy or nginx.
 
-Caddy, nginx, traefik, or a tiny custom server (Node, Python, Go)?
+benefits:
 
-- **Caddy:** single static binary, trivial config, native HTTPS if anyone wants it, native WS upgrade. probably the right answer.
-- **nginx:** ubiquitous, well-understood, more verbose config.
-- **custom (e.g. small Node server):** lets us colocate proxy logic and any UI-side helpers in one process. more code to maintain.
+- **room to grow.** there are plans for additional server-side functionality over time; a real runtime is more flexible than a config-only proxy.
+- **single language across server and front end.** if the PWA ever grows build tooling, it's the same toolchain.
 
-leaning Caddy. is anyone strongly opposed?
+## PWA stack: htmx, self-hosted
 
-## 2. PWA stack
+the PWA is built on htmx for reactivity. htmx's JS files are downloaded into the image at build time and served by the Node.js server alongside the rest of the static assets.
 
-how much framework do we want? options span from:
+benefits:
 
-- pure vanilla HTML/CSS/JS, no build step, no dependencies
-- a tiny library (htmx? Alpine? Preact via CDN?)
-- a full framework (SvelteKit, Vue, React)
+- **light footprint.** htmx is small and we avoid a heavy build step.
+- **enough reactivity to be pleasant** without committing to a full framework.
+- **no CDN dependency.** the image works on isolated networks; nothing the PWA needs comes from outside the container.
 
-a build step means a node toolchain in the image build, which is not free. but a 5,000-line vanilla SPA is also not free to maintain. what's the team's appetite?
+## UI container exposes its own `/health`
 
-## 3. how much UI scope for v1
+distinct from `/api/health` (which proxies to the orchestrator). lets monitoring distinguish "UI container is up" from "orchestrator is reachable".
 
-minimum-viable list to discuss:
+# initial UI scope
+
+minimum-viable, first cut:
 
 - list containers, with status
 - view a container's metadata and recent logs
@@ -90,23 +97,15 @@ minimum-viable list to discuss:
 - list `drover/*` images
 - launch a container from an image (form-driven `POST /containers`)
 
-stretch (probably not v1):
+explicitly out of scope for v1:
 
 - live log/stdout streaming (depends on the WebSocket work in @docs/planning/websocket-streaming-plan.md)
 - kicking off builds (depends on the builder layer in @THOUGHTS.md)
-- multi-orchestrator support (single UI managing several Drover hosts)
+- multi-orchestrator support (single UI managing several Drover hosts) — deferred
 
-## 4. multi-orchestrator: ever?
+# open questions
 
-the env-var-URL design supports one orchestrator per UI instance. if an operator runs multiple Drover hosts, they run multiple UI containers.
-
-an alternative is letting the UI manage a list of orchestrators — but that pushes us back toward token-in-localStorage and a more complex UX. probably defer.
-
-## 5. health & readiness
-
-does the UI container expose its own `/health` (independent of the orchestrator), or does it just proxy `/api/health` and let the operator's monitoring use that? leaning toward its own `/health` so failures are distinguishable.
-
-## 6. config endpoint for the PWA
+## config endpoint for the PWA
 
 the PWA may want to know things like "is auth enabled", "what's the orchestrator's privileged image", etc. options:
 
@@ -116,35 +115,15 @@ the PWA may want to know things like "is auth enabled", "what's the orchestrator
 
 leaning option 1 for v1.
 
-## 7. logging
+## proxy logging verbosity
 
-does the UI container log every proxied request (noisy), only errors (loses visibility), or follow whatever the proxy does by default? probably "default" with a knob.
+does the UI container log every proxied request (noisy), only errors (loses visibility), or follow whatever the Node.js server does by default? probably "default" with a knob.
 
-## 8. naming and image tag
+## image name
 
-the orchestrator publishes as `ghcr.io/saibotsivad/drover` (per `publish.yml`). this would be `ghcr.io/saibotsivad/drover-ui`? confirm the convention.
-
-# alternatives considered
-
-## shared-network, no orchestrator auth
-
-the @TODO.md sketch: orchestrator has no auth at all and is unreachable except over a Docker network the UI shares with it. trust boundary is "who can join this Docker network."
-
-rejected because:
-- forces same-host operation
-- removes a useful option (operator publishes orchestrator port directly for scripts/CI)
-- the env-var-URL approach gets us the same isolation when operators want it (just don't publish the orchestrator port) without the lock-in
-
-## PWA holds bearer token
-
-keep token in localStorage, send from the browser, UI container is a dumb proxy. rejected because the proxy has access to the request stream anyway, so it adds UX overhead without adding security.
-
-## skip the UI image, ship it as a static site
-
-just publish the PWA to GitHub Pages or similar and tell operators to enable CORS. rejected because CORS work on the orchestrator is real, WebSockets get awkward, and operators would still need to handle the token themselves.
+the orchestrator publishes as `ghcr.io/saibotsivad/drover` (per `publish.yml`). do we publish this as `ghcr.io/saibotsivad/drover-webapp` (matches the folder), `drover-ui` (matches what users would call it), or something else?
 
 # related
 
-- @TODO.md — "Different container auth" — earlier sketch
 - @docs/planning/websocket-streaming-plan.md — streaming work that the UI will eventually consume
 - @THOUGHTS.md — the builder layer; a future UI feature would expose builds
