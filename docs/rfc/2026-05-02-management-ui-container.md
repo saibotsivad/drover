@@ -12,15 +12,17 @@ This is explicitly **not** an enterprise web console. It's a homelab dev tool, i
 
 A new top-level folder `/webapp` containing a Dockerfile that builds an image with:
 
-1. A static PWA built on htmx, talking to a relative `/api/*` path.
+1. A static PWA built on htmx, talking to a relative `/api/orchestrator/*` path.
 2. A Node.js server in front of it that:
    - Serves the PWA's static files (including htmx itself, served from the image — no CDN).
-   - Forwards `/api/*` to the orchestrator over plain HTTP.
+   - Forwards `/api/orchestrator/*` to the orchestrator over plain HTTP, stripping the prefix.
    - Handles WebSocket upgrades for streaming endpoints once they land.
    - Injects the bearer token on outbound requests.
    - Exposes its own `/health` distinct from the orchestrator's.
 
 The operator points the UI container at an orchestrator URL (env var) and supplies a bearer token (env var). The PWA itself never sees the token.
+
+The image publishes to `ghcr.io/saibotsivad/drover-webapp`, alongside the orchestrator's `ghcr.io/saibotsivad/drover`.
 
 # Decisions
 
@@ -32,7 +34,16 @@ Benefits:
 
 - **No CORS work on the orchestrator.** The orchestrator stays a same-origin service to its proxy.
 - **WebSockets just work.** Browser → UI proxy → orchestrator over a plain HTTP upgrade. No auth-header-in-WS problem, no token-in-query-string workaround.
-- **Invisible auth in the PWA.** The PWA hits `/api/*`, the proxy adds the bearer token. No UX for entering tokens, no localStorage handling.
+- **Invisible auth in the PWA.** The PWA hits `/api/orchestrator/*`, the proxy adds the bearer token. No UX for entering tokens, no localStorage handling.
+
+## API paths are namespaced under `/api/<service>/*`
+
+The proxy forwards `/api/orchestrator/*` (with the prefix stripped) to the orchestrator. Future server-side services (e.g. a builder layer) would land under their own `/api/<service>/*` namespace and be routed by the same proxy.
+
+Benefits:
+
+- **Room to grow.** New services don't collide with the orchestrator's path space.
+- **Clear routing.** It's obvious from any URL whether a request crosses the proxy and to which backend.
 
 ## The UI container holds the bearer token
 
@@ -85,7 +96,21 @@ Benefits:
 
 ## UI container exposes its own `/health`
 
-Distinct from `/api/health` (which proxies to the orchestrator). Lets monitoring distinguish "UI container is up" from "orchestrator is reachable".
+Distinct from the orchestrator's `/health` (reachable at `/api/orchestrator/health` once proxied). Lets monitoring distinguish "UI container is up" from "orchestrator is reachable".
+
+## Request logging policy
+
+The proxy logs every request at `INFO` level: method, path, status, and duration.
+
+It explicitly does **not** log:
+
+- Request or response bodies. `POST /containers` request bodies can contain `env` dicts with secrets (e.g. `DROVER_AUTO_GIT_TOKEN`), which must never land in container logs.
+- The `Authorization` header injected by the proxy, or any other header that could carry credentials.
+
+Benefits:
+
+- **Useful visibility by default.** Operators can see traffic flowing without flipping a flag.
+- **No accidental secret disclosure.** Secrets passed through the API never appear in logs.
 
 # Initial UI Scope
 
@@ -101,27 +126,8 @@ Explicitly out of scope for v1:
 
 - Live log/stdout streaming (depends on the WebSocket work in @docs/planning/websocket-streaming-plan.md).
 - Kicking off builds (depends on the builder layer in @THOUGHTS.md).
-- Multi-orchestrator support (single UI managing several Drover hosts) — deferred.
-
-# Open Questions
-
-## Config endpoint for the PWA
-
-The PWA may want to know things like "is auth enabled", "what's the orchestrator's privileged image", etc. Options:
-
-- The PWA hits `/api/health` (already exposed) for the bits it needs.
-- The UI container exposes a `/config` endpoint that returns UI-specific config.
-- The PWA is fully static and config-free.
-
-Leaning option 1 for v1.
-
-## Proxy logging verbosity
-
-Does the UI container log every proxied request (noisy), only errors (loses visibility), or follow whatever the Node.js server does by default? Probably "default" with a knob.
-
-## Image name
-
-The orchestrator publishes as `ghcr.io/saibotsivad/drover` (per `publish.yml`). Do we publish this as `ghcr.io/saibotsivad/drover-webapp` (matches the folder), `drover-ui` (matches what users would call it), or something else?
+- Multi-orchestrator support (single UI managing several Drover hosts).
+- A PWA-facing config endpoint on the UI container. If a real need surfaces later, we'll add it then.
 
 # Related
 
