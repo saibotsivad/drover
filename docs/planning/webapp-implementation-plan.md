@@ -10,9 +10,9 @@ A single Node.js container with three responsibilities:
 
 1. **Static files** — serves the htmx-based PWA from disk (htmx itself is vendored at build time, no CDN).
 2. **BFF (HTML fragments)** — server-rendered routes that fetch from the orchestrator and return HTML for htmx to swap into the page.
-3. **Reverse proxy** — `/api/orchestrator/*` is forwarded to the orchestrator with the bearer token injected, supporting both HTTP and WebSocket upgrades.
+3. **Reverse proxy** — `/api/orchestrator/*` is forwarded to the orchestrator with the bearer token injected.
 
-The BFF routes call the orchestrator directly (server-side `fetch` to `DROVER_ORCHESTRATOR_URL`), not via the proxy. The proxy exists for future client-side use — most importantly WebSocket streaming once orchestrator support lands — and for operators who want to curl the orchestrator through the webapp.
+The BFF routes call the orchestrator directly (server-side `fetch` to `DROVER_ORCHESTRATOR_URL`), not via the proxy. The proxy exists for any client-side JS that wants raw orchestrator JSON, for operators who want to curl the orchestrator through the webapp, and as the natural place to add WebSocket forwarding later if/when the orchestrator gains streaming endpoints.
 
 ---
 
@@ -22,7 +22,7 @@ The BFF routes call the orchestrator directly (server-side `fetch` to `DROVER_OR
 |---|---|
 | Node 22 LTS | Pinned in `engines` |
 | Express 5 | Boring HTTP framework |
-| `http-proxy-middleware` | Mature, supports WS upgrade |
+| `http-proxy-middleware` | Mature, well-supported |
 | EJS or tagged template literals | Engineer's call; both keep deps small |
 | `node:test` | Built-in test runner; no dev deps |
 | Vendored `htmx.min.js` | Pinned version, downloaded at image build time |
@@ -96,11 +96,10 @@ If `DROVER_ORCHESTRATOR_URL` is unset the server logs an error and exits. Other 
 
 ### Phase 2: Reverse Proxy
 
-**Goal:** `/api/orchestrator/*` reaches the orchestrator with the bearer token attached; WebSocket upgrades pass through.
+**Goal:** `/api/orchestrator/*` reaches the orchestrator with the bearer token attached.
 
 - [ ] Mount `http-proxy-middleware` at `/api/orchestrator` with `pathRewrite: { '^/api/orchestrator': '' }` and `target: DROVER_ORCHESTRATOR_URL`
 - [ ] Inject `Authorization: Bearer ${DROVER_API_KEY}` via `onProxyReq` only when `DROVER_API_KEY` is set
-- [ ] Enable `ws: true`; verify upgrade headers pass through and `Authorization` is injected on the upgrade request as well
 - [ ] Route proxied traffic through the redaction-aware logger
 - [ ] Tests: prefix stripping, header injection (header present when key set, absent when not), redaction holds for proxied paths
 
@@ -146,7 +145,7 @@ If `DROVER_ORCHESTRATOR_URL` is unset the server logs an error and exits. Other 
 
 Captured here so the engineer doesn't drift; full rationale lives in the RFC.
 
-- Live log/stdout streaming (waits on the orchestrator WebSocket work in `docs/planning/websocket-streaming-plan.md`).
+- Live log/stdout streaming. The orchestrator doesn't expose streaming endpoints today (see `docs/planning/websocket-streaming-plan.md`); when it does, the webapp can grow WS forwarding in the proxy and a streaming view in the PWA.
 - Build orchestration UI.
 - Multi-orchestrator support.
 - A PWA-facing config endpoint.
