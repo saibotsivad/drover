@@ -122,7 +122,7 @@ If `DROVER_ORCHESTRATOR_URL` is unset the server logs an error and exits. Other 
 - [ ] **Container detail** — `GET /views/containers/:id`: metadata + recent logs (logs fetched from orchestrator's existing endpoint)
 - [ ] **Image list** — `GET /views/images`: lists `drover/*` images
 - [ ] **Launch form** — `GET /views/launch`: form for image, label, env, timeout
-- [ ] **Launch action** — `POST /actions/containers`: forwards to orchestrator, returns the new container row fragment for swap
+- [ ] **Launch action** — `POST /actions/containers`: forwards to orchestrator, then redirects to `/views/containers/:id` for the new container (via `HX-Redirect` so htmx navigates the browser)
 - [ ] **Stop action** — `POST /actions/containers/:id/stop`: returns updated row
 - [ ] **Destroy action** — `DELETE /actions/containers/:id`: returns empty fragment so the row is removed
 - [ ] Error-state fragments (orchestrator unreachable, 401, 404) rendered consistently
