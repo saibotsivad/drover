@@ -12,7 +12,7 @@ A single Node.js container with three responsibilities:
 2. **BFF (HTML fragments)** — server-rendered routes that fetch from the orchestrator and return HTML for htmx to swap into the page.
 3. **Reverse proxy** — `/api/orchestrator/*` is forwarded to the orchestrator with the bearer token injected.
 
-The BFF routes call the orchestrator directly (server-side `fetch` to `DROVER_ORCHESTRATOR_URL`), not via the proxy. The proxy exists for any client-side JS that wants raw orchestrator JSON, for operators who want to curl the orchestrator through the webapp, and as the natural place to add WebSocket forwarding later if/when the orchestrator gains streaming endpoints.
+The BFF routes call the orchestrator directly (server-side `fetch` to `DROVER_ORCHESTRATOR_URL`), not via the proxy. The proxy exists for any client-side JS that wants raw orchestrator JSON and for operators who want to curl the orchestrator through the webapp.
 
 ---
 
@@ -145,7 +145,7 @@ If `DROVER_ORCHESTRATOR_URL` is unset the server logs an error and exits. Other 
 
 Captured here so the engineer doesn't drift; full rationale lives in the RFC.
 
-- Live log/stdout streaming. The orchestrator doesn't expose streaming endpoints today (see `docs/planning/websocket-streaming-plan.md`); when it does, the webapp can grow WS forwarding in the proxy and a streaming view in the PWA.
+- Live log/stdout streaming.
 - Build orchestration UI.
 - Multi-orchestrator support.
 - A PWA-facing config endpoint.
