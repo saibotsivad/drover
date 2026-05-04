@@ -29,6 +29,26 @@ jobs:
         timeout-minutes: 5
         run: pytest executor/tests/ -v -s -p no:asyncio -p no:anyio
 
+  webapp-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: webapp/package-lock.json
+
+      - name: Install dependencies
+        working-directory: webapp
+        run: npm ci
+
+      - name: Run webapp tests
+        timeout-minutes: 5
+        working-directory: webapp
+        run: npm test
+
   docker-build:
     runs-on: ubuntu-latest
     steps:
