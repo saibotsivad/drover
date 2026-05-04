@@ -10,7 +10,8 @@ class Sink extends Writable {
 
 function startApp() {
 	const logger = createLogger({ level: 'error', stream: new Sink(), errorStream: new Sink() });
-	const app = createApp({ logger });
+	const config = { orchestratorUrl: 'http://127.0.0.1:1', apiKey: null, port: 0, logLevel: 'error' };
+	const app = createApp({ config, logger });
 	return new Promise((resolve) => {
 		const server = app.listen(0, '127.0.0.1', () => {
 			const { port } = server.address();
