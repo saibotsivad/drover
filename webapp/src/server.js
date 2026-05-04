@@ -17,7 +17,7 @@ function main() {
 	}
 
 	const logger = createLogger({ level: config.logLevel });
-	const app = createApp({ logger });
+	const app = createApp({ config, logger });
 
 	const server = app.listen(config.port, () => {
 		logger.info('listening', {

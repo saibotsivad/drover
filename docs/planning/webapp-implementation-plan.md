@@ -86,22 +86,22 @@ If `DROVER_ORCHESTRATOR_URL` is unset the server logs an error and exits. Other 
 
 **Goal:** Express app with `/health`, static asset serving, env loading, and a redaction-aware logger.
 
-- [ ] Create `/webapp` with `package.json` (Node engine pinned, npm scripts for `start`, `test`, `dev`)
-- [ ] Add Express 5 and `http-proxy-middleware` as runtime deps; no other runtime deps unless justified
-- [ ] `src/server.js`: bootstraps the app, validates env, mounts middleware/routes, listens on `PORT`
-- [ ] `src/logger.js`: exports `info/warn/error` and a request-logging middleware. Logs method, path, status, duration. **Never logs request/response bodies or `Authorization` headers.**
-- [ ] `routes/health.js`: `GET /health` returns `{ healthy: true }` (UI-side health, distinct from orchestrator's)
-- [ ] Static middleware serves `/public` at the root
-- [ ] Tests: env validation, logger redaction (assert that bodies and `Authorization` never appear in log output)
+- [x] Create `/webapp` with `package.json` (Node engine pinned, npm scripts for `start`, `test`, `dev`)
+- [x] Add Express 5 and `http-proxy-middleware` as runtime deps; no other runtime deps unless justified
+- [x] `src/server.js`: bootstraps the app, validates env, mounts middleware/routes, listens on `PORT`
+- [x] `src/logger.js`: exports `info/warn/error` and a request-logging middleware. Logs method, path, status, duration. **Never logs request/response bodies or `Authorization` headers.**
+- [x] `routes/health.js`: `GET /health` returns `{ healthy: true }` (UI-side health, distinct from orchestrator's)
+- [x] Static middleware serves `/public` at the root
+- [x] Tests: env validation, logger redaction (assert that bodies and `Authorization` never appear in log output)
 
 ### Phase 2: Reverse Proxy
 
 **Goal:** `/api/orchestrator/*` reaches the orchestrator with the bearer token attached.
 
-- [ ] Mount `http-proxy-middleware` at `/api/orchestrator` with `pathRewrite: { '^/api/orchestrator': '' }` and `target: DROVER_ORCHESTRATOR_URL`
-- [ ] Inject `Authorization: Bearer ${DROVER_API_KEY}` via `onProxyReq` only when `DROVER_API_KEY` is set
-- [ ] Route proxied traffic through the redaction-aware logger
-- [ ] Tests: prefix stripping, header injection (header present when key set, absent when not), redaction holds for proxied paths
+- [x] Mount `http-proxy-middleware` at `/api/orchestrator` with `pathRewrite: { '^/api/orchestrator': '' }` and `target: DROVER_ORCHESTRATOR_URL`
+- [x] Inject `Authorization: Bearer ${DROVER_API_KEY}` via `onProxyReq` only when `DROVER_API_KEY` is set
+- [x] Route proxied traffic through the redaction-aware logger
+- [x] Tests: prefix stripping, header injection (header present when key set, absent when not), redaction holds for proxied paths
 
 ### Phase 3: htmx Shell
 
