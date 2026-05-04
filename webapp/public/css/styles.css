@@ -1,11 +1,68 @@
 :root {
 	color-scheme: light dark;
 	font-family: system-ui, sans-serif;
+	--border: rgba(127, 127, 127, 0.3);
+	--accent: #2563eb;
+}
+
+* {
+	box-sizing: border-box;
 }
 
 body {
 	margin: 0;
-	padding: 2rem;
-	max-width: 60rem;
+	padding: 0;
+	max-width: 64rem;
 	margin-inline: auto;
+}
+
+header {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 1.5rem;
+	padding: 1rem 2rem;
+	border-bottom: 1px solid var(--border);
+}
+
+header h1 {
+	margin: 0;
+	font-size: 1.25rem;
+}
+
+header h1 a {
+	color: inherit;
+	text-decoration: none;
+}
+
+header nav {
+	display: flex;
+	gap: 1rem;
+}
+
+header nav a {
+	color: inherit;
+	text-decoration: none;
+	padding: 0.25rem 0.5rem;
+	border-radius: 0.25rem;
+}
+
+header nav a:hover {
+	background: var(--border);
+}
+
+header nav a.active {
+	background: var(--accent);
+	color: white;
+}
+
+main {
+	padding: 2rem;
+}
+
+section.stub {
+	padding: 2rem;
+	border: 1px dashed var(--border);
+	border-radius: 0.5rem;
+	color: rgba(127, 127, 127, 0.9);
 }

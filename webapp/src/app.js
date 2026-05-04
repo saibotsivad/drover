@@ -3,6 +3,9 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ORCHESTRATOR_PREFIX, createOrchestratorProxy } from './proxy.js';
 import { createHealthRouter } from './routes/health.js';
+import { createViewsRouter } from './routes/views.js';
+import { layout } from './views/layout.js';
+import { html } from './views/render.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.resolve(__dirname, '..', 'public');
@@ -21,7 +24,19 @@ export function createApp({ config, logger }) {
 			logger,
 		}),
 	);
-	app.use(express.static(PUBLIC_DIR, { index: 'index.html', fallthrough: true }));
+
+	app.get('/', (_req, res) => {
+		res.type('html').send(layout({
+			title: 'Home',
+			body: html`<section>
+				<p>Drover management UI.</p>
+				<p>Use the navigation above to browse containers and images, or to launch a new container.</p>
+			</section>`,
+		}).toString());
+	});
+
+	app.use('/views', createViewsRouter());
+	app.use(express.static(PUBLIC_DIR, { index: false, fallthrough: true }));
 
 	return app;
 }

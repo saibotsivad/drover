@@ -107,12 +107,12 @@ If `DROVER_ORCHESTRATOR_URL` is unset the server logs an error and exits. Other 
 
 **Goal:** A navigable PWA shell with htmx vendored, a base layout, and stubbed BFF routes.
 
-- [ ] Add a build step (npm script) that downloads a pinned `htmx.min.js` into `public/vendor/`. Hash-pinned if the source supports it.
-- [ ] Pick rendering approach (EJS or tagged template literals); document choice in `webapp/README.md`
-- [ ] `views/layout.html`: header, nav (Containers, Images), content slot, includes `htmx.min.js` from `/vendor/`
-- [ ] Hand-rolled CSS — minimal, no framework, no build pipeline
-- [ ] `routes/views.js` mounted at `/views/*` with stub responses ("coming soon" fragments)
-- [ ] `src/orchestrator.js`: thin `fetch` wrapper (`getJson`, `postJson`, `del`) using env URL + token; surfaces non-2xx as typed errors
+- [x] Add a build step (npm script) that downloads a pinned `htmx.min.js` into `public/vendor/`. Hash-pinned if the source supports it.
+- [x] Pick rendering approach (EJS or tagged template literals); document choice in `webapp/README.md`
+- [x] `views/layout.html`: header, nav (Containers, Images), content slot, includes `htmx.min.js` from `/vendor/`
+- [x] Hand-rolled CSS — minimal, no framework, no build pipeline
+- [x] `routes/views.js` mounted at `/views/*` with stub responses ("coming soon" fragments)
+- [x] `src/orchestrator.js`: thin `fetch` wrapper (`getJson`, `postJson`, `del`) using env URL + token; surfaces non-2xx as typed errors
 
 ### Phase 4: PWA Features
 
