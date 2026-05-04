@@ -160,3 +160,7 @@ Captured here so the engineer doesn't drift; full rationale lives in the RFC.
 Static front-end files (htmx, and any future equivalents) are pinned by adding the upstream package as an exact-version `devDependency` and copying the file we need out of `node_modules/` into `public/vendor/` at build time. npm's existing tarball integrity check in `package-lock.json` gives us a deterministic, hash-verified pin without us maintaining a separate lockfile or download script.
 
 This is the preferred approach for any further vendored assets.
+
+### Container detail page omits logs in phase 4
+
+The phase 4 plan called for the container detail page to show recent logs alongside metadata, but the orchestrator does not have a logs endpoint yet. Defining "logs" (Docker stdout vs. executor messages vs. command output) is a bigger conversation than this phase, so the detail page ships without a logs section. A future phase or follow-up can add the orchestrator endpoint and wire the UI to it.

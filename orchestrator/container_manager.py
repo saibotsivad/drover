@@ -477,6 +477,20 @@ class ContainerManager:
                     container_id,
                 )
 
+    # -- list ---------------------------------------------------------------
+
+    async def list_containers(self) -> list[ContainerResponse]:
+        """Return all containers, newest first.
+
+        Reads straight from the DB without per-row Docker reconciliation;
+        ``get_container`` syncs an individual row, and the reaper handles
+        background drift.
+        """
+        rows = await self._db.fetchall(
+            "SELECT * FROM containers ORDER BY created_at DESC"
+        )
+        return [_row_to_response(row) for row in rows]
+
     # -- get ----------------------------------------------------------------
 
     async def get_container(self, container_id: str) -> ContainerResponse:

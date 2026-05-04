@@ -18,6 +18,11 @@ def _manager(request: Request) -> ContainerManager:
     return request.app.state.container_manager
 
 
+@router.get("")
+async def list_containers(request: Request) -> list[ContainerResponse]:
+    return await _manager(request).list_containers()
+
+
 @router.post("", status_code=201)
 async def create_container(
     req: CreateContainerRequest, request: Request
