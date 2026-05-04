@@ -150,3 +150,13 @@ Captured here so the engineer doesn't drift; full rationale lives in the RFC.
 - Multi-orchestrator support.
 - A PWA-facing config endpoint.
 - TLS termination — operators front the webapp with their own reverse proxy if they want HTTPS.
+
+---
+
+## Decisions
+
+### Vendor static assets via npm devDependencies
+
+Static front-end files (htmx, and any future equivalents) are pinned by adding the upstream package as an exact-version `devDependency` and copying the file we need out of `node_modules/` into `public/vendor/` at build time. npm's existing tarball integrity check in `package-lock.json` gives us a deterministic, hash-verified pin without us maintaining a separate lockfile or download script.
+
+This is the preferred approach for any further vendored assets.

@@ -23,7 +23,7 @@ If `DROVER_ORCHESTRATOR_URL` is unset the server logs a structured error and exi
 
 ```sh
 npm install
-npm run vendor          # downloads + sha256-verifies htmx into public/vendor/
+npm run vendor          # copies htmx.min.js into public/vendor/
 DROVER_ORCHESTRATOR_URL=http://localhost:8000 npm start
 ```
 
@@ -31,9 +31,7 @@ DROVER_ORCHESTRATOR_URL=http://localhost:8000 npm start
 
 ## Vendoring htmx
 
-htmx is pinned as an exact-version `devDependency` (`htmx.org` in `package.json`). `npm ci` records its tarball integrity hash in `package-lock.json`, so the supply-chain check is npm's, not ours. `scripts/vendor-htmx.mjs` just copies `node_modules/htmx.org/dist/htmx.min.js` into `public/vendor/`.
-
-To bump htmx, run `npm install --save-dev --save-exact htmx.org@<version>` and `npm run vendor`.
+htmx is pulled in as a `devDependency` and copied into `public/vendor/htmx.min.js` by `scripts/vendor-htmx.mjs` (run via `npm run vendor`). To bump the version, change `htmx.org` in `package.json` and re-run `npm install` and `npm run vendor`.
 
 ## Routes
 
