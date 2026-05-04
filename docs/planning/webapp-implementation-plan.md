@@ -118,15 +118,15 @@ If `DROVER_ORCHESTRATOR_URL` is unset the server logs an error and exits. Other 
 
 **Goal:** The minimum-viable feature set from the RFC, all server-rendered HTML fragments consumed by htmx.
 
-- [ ] **Container list** — `GET /views/containers`: table of containers with status, periodic refresh via `hx-trigger="every 5s"`
-- [ ] **Container detail** — `GET /views/containers/:id`: metadata + recent logs (logs fetched from orchestrator's existing endpoint)
-- [ ] **Image list** — `GET /views/images`: lists `drover/*` images
-- [ ] **Launch form** — `GET /views/launch`: form for image, label, env, timeout
-- [ ] **Launch action** — `POST /actions/containers`: forwards to orchestrator, then redirects to `/views/containers/:id` for the new container (via `HX-Redirect` so htmx navigates the browser)
-- [ ] **Stop action** — `POST /actions/containers/:id/stop`: returns updated row
-- [ ] **Destroy action** — `DELETE /actions/containers/:id`: returns empty fragment so the row is removed
-- [ ] Error-state fragments (orchestrator unreachable, 401, 404) rendered consistently
-- [ ] Tests: each route exercised against a mocked `orchestrator.js`; happy path and one error path each
+- [x] **Container list** — `GET /views/containers`: table of containers with status, periodic refresh via `hx-trigger="every 5s"`
+- [x] **Container detail** — `GET /views/containers/:id`: metadata + recent logs (logs fetched from orchestrator's existing endpoint)
+- [x] **Image list** — `GET /views/images`: lists `drover/*` images
+- [x] **Launch form** — `GET /views/launch`: form for image, label, env, timeout
+- [x] **Launch action** — `POST /actions/containers`: forwards to orchestrator, then redirects to `/views/containers/:id` for the new container (via `HX-Redirect` so htmx navigates the browser)
+- [x] **Stop action** — `POST /actions/containers/:id/stop`: returns updated row
+- [x] **Destroy action** — `DELETE /actions/containers/:id`: returns empty fragment so the row is removed
+- [x] Error-state fragments (orchestrator unreachable, 401, 404) rendered consistently
+- [x] Tests: each route exercised against a mocked `orchestrator.js`; happy path and one error path each
 
 ### Phase 5: Packaging & Publishing
 
