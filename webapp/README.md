@@ -31,9 +31,9 @@ DROVER_ORCHESTRATOR_URL=http://localhost:8000 npm start
 
 ## Vendoring htmx
 
-`scripts/vendor-htmx.mjs` reads [`vendor.lock.json`](vendor.lock.json), downloads the pinned htmx release from the URL recorded there, verifies the SHA-256, and writes `public/vendor/htmx.min.js`. Hash mismatches fail the build.
+htmx is pinned as an exact-version `devDependency` (`htmx.org` in `package.json`). `npm ci` records its tarball integrity hash in `package-lock.json`, so the supply-chain check is npm's, not ours. `scripts/vendor-htmx.mjs` just copies `node_modules/htmx.org/dist/htmx.min.js` into `public/vendor/`.
 
-To bump htmx, update both `version` and `sha256` in `vendor.lock.json` and run `npm run vendor`.
+To bump htmx, run `npm install --save-dev --save-exact htmx.org@<version>` and `npm run vendor`.
 
 ## Routes
 

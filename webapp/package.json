@@ -17,5 +17,8 @@
   "dependencies": {
     "express": "^5.0.0",
     "http-proxy-middleware": "^3.0.0"
+  },
+  "devDependencies": {
+    "htmx.org": "2.0.4"
   }
 }
