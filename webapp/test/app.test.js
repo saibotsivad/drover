@@ -36,13 +36,16 @@ test('GET /health returns { healthy: true }', async () => {
 	}
 });
 
-test('GET / serves static index.html', async () => {
+test('GET / serves the rendered home page', async () => {
 	const { url, close } = await startApp();
 	try {
 		const res = await fetch(`${url}/`);
 		assert.equal(res.status, 200);
+		assert.match(res.headers.get('content-type') || '', /text\/html/);
 		const text = await res.text();
-		assert.match(text, /<title>Drover<\/title>/);
+		assert.match(text, /<title>Home — Drover<\/title>/);
+		assert.match(text, /<script src="\/vendor\/htmx\.min\.js"/);
+		assert.match(text, /<nav>/);
 	} finally {
 		await close();
 	}

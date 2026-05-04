@@ -44,6 +44,10 @@ jobs:
         working-directory: webapp
         run: npm ci
 
+      - name: Vendor htmx
+        working-directory: webapp
+        run: npm run vendor
+
       - name: Run webapp tests
         timeout-minutes: 5
         working-directory: webapp

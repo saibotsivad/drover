@@ -107,26 +107,26 @@ If `DROVER_ORCHESTRATOR_URL` is unset the server logs an error and exits. Other 
 
 **Goal:** A navigable PWA shell with htmx vendored, a base layout, and stubbed BFF routes.
 
-- [ ] Add a build step (npm script) that downloads a pinned `htmx.min.js` into `public/vendor/`. Hash-pinned if the source supports it.
-- [ ] Pick rendering approach (EJS or tagged template literals); document choice in `webapp/README.md`
-- [ ] `views/layout.html`: header, nav (Containers, Images), content slot, includes `htmx.min.js` from `/vendor/`
-- [ ] Hand-rolled CSS — minimal, no framework, no build pipeline
-- [ ] `routes/views.js` mounted at `/views/*` with stub responses ("coming soon" fragments)
-- [ ] `src/orchestrator.js`: thin `fetch` wrapper (`getJson`, `postJson`, `del`) using env URL + token; surfaces non-2xx as typed errors
+- [x] Add a build step (npm script) that downloads a pinned `htmx.min.js` into `public/vendor/`. Hash-pinned if the source supports it.
+- [x] Pick rendering approach (EJS or tagged template literals); document choice in `webapp/README.md`
+- [x] `views/layout.html`: header, nav (Containers, Images), content slot, includes `htmx.min.js` from `/vendor/`
+- [x] Hand-rolled CSS — minimal, no framework, no build pipeline
+- [x] `routes/views.js` mounted at `/views/*` with stub responses ("coming soon" fragments)
+- [x] `src/orchestrator.js`: thin `fetch` wrapper (`getJson`, `postJson`, `del`) using env URL + token; surfaces non-2xx as typed errors
 
 ### Phase 4: PWA Features
 
 **Goal:** The minimum-viable feature set from the RFC, all server-rendered HTML fragments consumed by htmx.
 
-- [ ] **Container list** — `GET /views/containers`: table of containers with status, periodic refresh via `hx-trigger="every 5s"`
-- [ ] **Container detail** — `GET /views/containers/:id`: metadata + recent logs (logs fetched from orchestrator's existing endpoint)
-- [ ] **Image list** — `GET /views/images`: lists `drover/*` images
-- [ ] **Launch form** — `GET /views/launch`: form for image, label, env, timeout
-- [ ] **Launch action** — `POST /actions/containers`: forwards to orchestrator, then redirects to `/views/containers/:id` for the new container (via `HX-Redirect` so htmx navigates the browser)
-- [ ] **Stop action** — `POST /actions/containers/:id/stop`: returns updated row
-- [ ] **Destroy action** — `DELETE /actions/containers/:id`: returns empty fragment so the row is removed
-- [ ] Error-state fragments (orchestrator unreachable, 401, 404) rendered consistently
-- [ ] Tests: each route exercised against a mocked `orchestrator.js`; happy path and one error path each
+- [x] **Container list** — `GET /views/containers`: table of containers with status, periodic refresh via `hx-trigger="every 5s"`
+- [x] **Container detail** — `GET /views/containers/:id`: metadata + recent logs (logs fetched from orchestrator's existing endpoint)
+- [x] **Image list** — `GET /views/images`: lists `drover/*` images
+- [x] **Launch form** — `GET /views/launch`: form for image, label, env, timeout
+- [x] **Launch action** — `POST /actions/containers`: forwards to orchestrator, then redirects to `/views/containers/:id` for the new container (via `HX-Redirect` so htmx navigates the browser)
+- [x] **Stop action** — `POST /actions/containers/:id/stop`: returns updated row
+- [x] **Destroy action** — `DELETE /actions/containers/:id`: returns empty fragment so the row is removed
+- [x] Error-state fragments (orchestrator unreachable, 401, 404) rendered consistently
+- [x] Tests: each route exercised against a mocked `orchestrator.js`; happy path and one error path each
 
 ### Phase 5: Packaging & Publishing
 
@@ -150,3 +150,17 @@ Captured here so the engineer doesn't drift; full rationale lives in the RFC.
 - Multi-orchestrator support.
 - A PWA-facing config endpoint.
 - TLS termination — operators front the webapp with their own reverse proxy if they want HTTPS.
+
+---
+
+## Decisions
+
+### Vendor static assets via npm devDependencies
+
+Static front-end files (htmx, and any future equivalents) are pinned by adding the upstream package as an exact-version `devDependency` and copying the file we need out of `node_modules/` into `public/vendor/` at build time. npm's existing tarball integrity check in `package-lock.json` gives us a deterministic, hash-verified pin without us maintaining a separate lockfile or download script.
+
+This is the preferred approach for any further vendored assets.
+
+### Container detail page omits logs in phase 4
+
+The phase 4 plan called for the container detail page to show recent logs alongside metadata, but the orchestrator does not have a logs endpoint yet. Defining "logs" (Docker stdout vs. executor messages vs. command output) is a bigger conversation than this phase, so the detail page ships without a logs section. A future phase or follow-up can add the orchestrator endpoint and wire the UI to it.

@@ -185,6 +185,36 @@ async def test_ready_transitions_to_running_via_callback(
     assert resp.id not in manager._init_watchdogs
 
 
+# -- list -------------------------------------------------------------------
+
+
+async def test_list_containers_empty(manager):
+    assert await manager.list_containers() == []
+
+
+async def test_list_containers_returns_all_newest_first(manager, db):
+    first = await _create_running(manager, db, image="img-a", label="alpha")
+    second = await _create_running(manager, db, image="img-b", label="beta")
+    third = await _create_running(manager, db, image="img-c", label="gamma")
+
+    listed = await manager.list_containers()
+    assert [c.id for c in listed] == [third.id, second.id, first.id]
+    assert [c.label for c in listed] == ["gamma", "beta", "alpha"]
+    assert all(c.status == ContainerStatus.running for c in listed)
+
+
+async def test_list_containers_includes_destroyed(manager, db):
+    """Destroyed rows stay in history; the UI can decide what to show."""
+    alive = await _create_running(manager, db, image="img-alive")
+    doomed = await _create_running(manager, db, image="img-doomed")
+    await manager.destroy_container(doomed.id)
+
+    listed = await manager.list_containers()
+    statuses = {c.id: c.status for c in listed}
+    assert statuses[alive.id] == ContainerStatus.running
+    assert statuses[doomed.id] == ContainerStatus.destroyed
+
+
 # -- get --------------------------------------------------------------------
 
 
