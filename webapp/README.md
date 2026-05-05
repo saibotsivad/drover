@@ -6,7 +6,7 @@ Optional management UI for [Drover](../README.md). Runs as its own container, ta
 
 - Node 22 LTS, Express 5, `http-proxy-middleware`.
 - htmx, vendored at build time — no CDN at runtime.
-- Tagged template literals for HTML rendering. No template engine, no runtime template parsing. The `html` tag in [`src/views/render.js`](src/views/render.js) auto-escapes interpolated values; trusted strings can be passed through `safe()` or composed via nested `html` calls. Picked over EJS because it ships zero extra runtime dependencies and keeps rendering as plain JS.
+- Tagged template literals for HTML rendering. The `html` tag in [`src/views/render.js`](src/views/render.js) auto-escapes interpolated values; trusted strings can be passed through `safe()` or composed via nested `html` calls.
 
 ## Environment Variables
 
@@ -29,6 +29,35 @@ DROVER_ORCHESTRATOR_URL=http://localhost:8000 npm start
 
 `npm run dev` reloads on file changes via `node --watch`.
 
+## Running with Docker
+
+Pull the published image:
+
+```sh
+docker run --rm -p 8080:8080 \
+  -e DROVER_ORCHESTRATOR_URL=http://orchestrator:8000 \
+  -e DROVER_API_KEY=your-token \
+  ghcr.io/saibotsivad/drover-webapp:latest
+```
+
+Or build locally from this directory:
+
+```sh
+docker build -t drover-webapp:local .
+docker run --rm -p 8080:8080 \
+  -e DROVER_ORCHESTRATOR_URL=http://orchestrator:8000 \
+  drover-webapp:local
+```
+
+For a full stack with the orchestrator, see [`docker-compose.yml`](../docker-compose.yml) at the repository root:
+
+```sh
+docker compose up
+# webapp on http://localhost:8080
+```
+
+The compose file puts both services on a private user-defined network and only publishes the webapp's port — the orchestrator is reachable from the host only by going through the webapp.
+
 ## Vendoring htmx
 
 htmx is pulled in as a `devDependency` and copied into `public/vendor/htmx.min.js` by `scripts/vendor-htmx.mjs` (run via `npm run vendor`). To bump the version, change `htmx.org` in `package.json` and re-run `npm install` and `npm run vendor`.
@@ -40,10 +69,12 @@ htmx is pulled in as a `devDependency` and copied into `public/vendor/htmx.min.j
 
   ```sh
   curl http://localhost:8080/api/orchestrator/health
+  curl http://localhost:8080/api/orchestrator/containers
   ```
 
 - `GET /` — rendered home page.
-- `GET /views/containers`, `GET /views/containers/:id`, `GET /views/images`, `GET /views/launch` — server-rendered HTML pages. Phase 3 ships stub bodies; phase 4 wires them to the orchestrator.
+- `GET /views/containers`, `GET /views/containers/:id`, `GET /views/images`, `GET /views/launch` — server-rendered HTML pages.
+- `POST /actions/containers`, `POST /actions/containers/:id/stop`, `DELETE /actions/containers/:id` — form/htmx-driven actions that forward to the orchestrator and return HTML fragments.
 
 ## Tests
 

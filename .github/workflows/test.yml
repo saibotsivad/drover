@@ -91,3 +91,67 @@ jobs:
           echo "Smoke test passed"
           docker logs drover-smoke
           docker stop drover-smoke
+
+  docker-build-webapp:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./webapp
+          push: false
+          load: true
+          tags: drover-webapp:test
+
+      - name: Smoke test
+        run: |
+          # Mock orchestrator: returns {"healthy": true} on every GET. Lets
+          # us exercise both /health (webapp-side) and /api/orchestrator/health
+          # (proxied through to the mock) from the webapp container.
+          cat > /tmp/mock-orchestrator.py <<'EOF'
+          from http.server import HTTPServer, BaseHTTPRequestHandler
+          class Handler(BaseHTTPRequestHandler):
+              def do_GET(self):
+                  self.send_response(200)
+                  self.send_header('Content-Type', 'application/json')
+                  self.end_headers()
+                  self.wfile.write(b'{"healthy": true}')
+              def log_message(self, *args):
+                  pass
+          HTTPServer(('0.0.0.0', 9000), Handler).serve_forever()
+          EOF
+          python3 /tmp/mock-orchestrator.py &
+          MOCK_PID=$!
+
+          docker run -d --name webapp-smoke \
+            --network host \
+            -e DROVER_ORCHESTRATOR_URL=http://127.0.0.1:9000 \
+            drover-webapp:test
+
+          # Wait for server to be ready (up to 10s)
+          for i in $(seq 1 10); do
+            if curl -sf http://localhost:8080/health > /dev/null 2>&1; then
+              break
+            fi
+            sleep 1
+          done
+
+          # Verify webapp-side /health
+          curl -sf http://localhost:8080/health \
+            | python3 -c "import sys, json; d = json.load(sys.stdin); assert d['healthy'] is True, d"
+
+          # Verify proxy reaches the mock orchestrator
+          curl -sf http://localhost:8080/api/orchestrator/health \
+            | python3 -c "import sys, json; d = json.load(sys.stdin); assert d['healthy'] is True, d"
+
+          # Verify htmx is vendored into the image
+          curl -sf http://localhost:8080/vendor/htmx.min.js | head -c 32 | grep -q "var htmx"
+
+          echo "Smoke test passed"
+          docker logs webapp-smoke
+          docker stop webapp-smoke
+          kill $MOCK_PID

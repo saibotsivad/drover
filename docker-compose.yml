@@ -1,0 +1,43 @@
+# Sample compose stack for running Drover with the optional management UI.
+#
+# Both services share a private user-defined network. Only the webapp's port
+# is published — the orchestrator is reachable from the host only by going
+# through the webapp (either its rendered pages or its /api/orchestrator/*
+# proxy). Set DROVER_API_KEY (in both services) before exposing the webapp
+# beyond a trusted LAN.
+
+services:
+  orchestrator:
+    image: ghcr.io/saibotsivad/drover:latest
+    # Or build from source:
+    # build: ./orchestrator
+    networks: [drover]
+    volumes:
+      - drover-data:/var/lib/orchestrator
+      - drover-sockets:/var/run/microcontainers
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      DB_PATH: /var/lib/orchestrator/db.sqlite
+      SOCKET_DIR: /var/run/microcontainers
+      LOG_LEVEL: INFO
+      # DROVER_API_KEY: change-me
+
+  webapp:
+    image: ghcr.io/saibotsivad/drover-webapp:latest
+    # Or build from source:
+    # build: ./webapp
+    networks: [drover]
+    depends_on: [orchestrator]
+    ports:
+      - "8080:8080"
+    environment:
+      DROVER_ORCHESTRATOR_URL: http://orchestrator:8000
+      LOG_LEVEL: info
+      # DROVER_API_KEY: change-me
+
+networks:
+  drover:
+
+volumes:
+  drover-data:
+  drover-sockets:

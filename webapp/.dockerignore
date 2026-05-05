@@ -1,0 +1,12 @@
+node_modules/
+test/
+public/vendor/
+.git/
+.gitignore
+.dockerignore
+Dockerfile
+*.md
+*.log
+.vscode/
+.idea/
+.DS_Store
