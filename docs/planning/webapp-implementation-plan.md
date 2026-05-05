@@ -132,12 +132,12 @@ If `DROVER_ORCHESTRATOR_URL` is unset the server logs an error and exits. Other 
 
 **Goal:** The image builds, runs, and gets published to GHCR.
 
-- [ ] `webapp/Dockerfile`: `node:22-slim` base, non-root user, `npm ci --omit=dev`, `CMD ["node", "src/server.js"]`
-- [ ] `webapp/.dockerignore`: excludes `test/`, `node_modules/`, etc.
-- [ ] `docker-compose.yml` at repo root: orchestrator + webapp on a shared user-defined network, with the only exposed port being the webapp's
-- [ ] `.github/workflows/publish-webapp.yml`: mirrors `publish.yml` patterns, publishes to `ghcr.io/saibotsivad/drover-webapp` on tag push
-- [ ] CI smoke test: build the image, run it pointing at a mock orchestrator, hit `/health`
-- [ ] `webapp/README.md`: env vars, sample `docker run`, sample compose snippet, curl example through the proxy, link back to the RFC
+- [x] `webapp/Dockerfile`: `node:22-slim` base, non-root user, `npm ci --omit=dev`, `CMD ["node", "src/server.js"]`
+- [x] `webapp/.dockerignore`: excludes `test/`, `node_modules/`, etc.
+- [x] `docker-compose.yml` at repo root: orchestrator + webapp on a shared user-defined network, with the only exposed port being the webapp's
+- [x] `.github/workflows/publish-webapp.yml`: mirrors `publish.yml` patterns, publishes to `ghcr.io/saibotsivad/drover-webapp` on tag push
+- [x] CI smoke test: build the image, run it pointing at a mock orchestrator, hit `/health`
+- [x] `webapp/README.md`: env vars, sample `docker run`, sample compose snippet, curl example through the proxy, link back to the RFC
 
 ---
 
