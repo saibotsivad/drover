@@ -6,7 +6,7 @@ The items below are follow-up work and open design decisions identified during p
 
 ## Command output streaming
 
-The current exec API uses polling (`GET /containers/{id}/exec/{cmd_id}`). Real-time delivery via SSE or WebSocket would reduce latency and load for long-running commands. The choice between SSE (simpler, HTTP-based, one-directional) and WebSocket (bidirectional, more complex) depends on whether callers ever need to send input to a running command.
+The current exec API uses polling (`GET /containers/{id}/exec/{cmd_id}`). Real-time delivery via SSE or WebSocket would reduce latency and load for long-running commands. There's an RFC open that details some stuff about that with WebSockets.
 
 ## Container log retention
 
