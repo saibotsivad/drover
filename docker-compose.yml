@@ -4,8 +4,7 @@
 # is published — the orchestrator is reachable from the host only by going
 # through the webapp (either its rendered pages or its /api/orchestrator/*
 # proxy). Set DROVER_API_KEY (in both services) before exposing the webapp
-# beyond a trusted LAN. See docs/rfc/2026-05-02-management-ui-container.md
-# for the trust-boundary discussion.
+# beyond a trusted LAN.
 
 services:
   orchestrator:
