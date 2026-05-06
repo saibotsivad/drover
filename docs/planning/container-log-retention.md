@@ -8,11 +8,13 @@
 
 After this work is implemented, an operator can:
 
-1. Inspect the full stdout/stderr history of any non-destroyed micro-container — including ones that were stopped hours or days earlier — through Drover's API and on disk, **provided they have opted in by setting `DROVER_LOG_DIR`**.
-2. Stream a live tail of a running container's stdout/stderr over the WebSocket endpoint planned in `websocket-streaming-plan.md`, regardless of whether disk retention is enabled.
+1. Inspect the full stdout/stderr history of any non-destroyed micro-container — including ones that were stopped hours or days earlier — by reading the on-disk capture directory directly. The sample `docker-compose.yml` ships with this enabled.
+2. Stream a live tail of a `initializing` or `running` container's stdout/stderr over the WebSocket endpoint planned in `websocket-streaming-plan.md`, regardless of whether disk retention is enabled.
 3. Drop a Promtail / Vector / Fluent Bit / Loki agent on the log directory and have it ingest Drover micro-container logs without writing any Drover-specific code.
 4. Lose the captured logs if and only if the container is destroyed (`DELETE /containers/{id}`). Stopping a container preserves its logs indefinitely; destroying it removes them along with the rest of the container's state.
-5. Opt out of Drover-managed retention entirely by leaving `DROVER_LOG_DIR` unset, in which case Drover does no disk writing and historical log queries fall through to whatever Docker's configured log driver provides.
+5. Opt out of Drover-managed retention entirely by unsetting `DROVER_LOG_DIR`, in which case Drover does no disk writing and historical log queries fall through to whatever Docker's configured log driver provides.
+
+REST historical-query access to retained logs (e.g. `GET /containers/{id}/logs?since=...&until=...`) is intentionally **out of scope for this plan**; it is deferred to a follow-up pagination plan that will add a consistent `since`/`until`/`limit`/`offset` contract across every list endpoint at once. See the Follow-Up Work section.
 
 The orchestrator's own logs and the per-command output (`command_messages` in SQLite) are out of scope — both already work and have their own retention semantics.
 
@@ -68,8 +70,8 @@ There is exactly one Docker follow stream per container, regardless of how many 
 
 Two operating modes follow from this:
 
-- **Drover-managed retention (`DROVER_LOG_DIR` set):** historical logs survive container stop and are removed only on destroy. REST `GET /logs?since=...` reads from disk. This is the recommended mode for a homelab without an existing log pipeline.
-- **Capture-only (`DROVER_LOG_DIR` unset):** Drover writes nothing to disk and adds no retention guarantees of its own. Live WebSocket tailing still works because the follow stream is still opened. Historical queries fall through to Docker's logs API, so retention is whatever Docker's configured log driver provides. This is the recommended mode for operators who already ship Docker container logs to Loki/Elastic/journald and want a single source of truth.
+- **Drover-managed retention (`DROVER_LOG_DIR` set, sample compose default):** historical logs survive container stop and are removed only on destroy. Operators reach historical logs by reading the directory directly (or via a log shipper pointed at it). This is the recommended mode for a homelab without an existing log pipeline.
+- **Capture-only (`DROVER_LOG_DIR` unset):** Drover writes nothing to disk and adds no retention guarantees of its own. Live WebSocket tailing still works because the follow stream is still opened. Historical queries fall through to Docker's logs API via the existing (unchanged) `GET /containers/{id}/logs` endpoint, so retention is whatever Docker's configured log driver provides. This is the recommended mode for operators who already ship Docker container logs to Loki/Elastic/journald and want a single source of truth.
 
 ### On-disk format
 
@@ -86,7 +88,7 @@ We deliberately do **not** invent a Drover-specific schema. The operator is welc
 ### Directory layout
 
 ```
-{DROVER_LOG_DIR}/                         # default: /var/lib/orchestrator/logs
+{DROVER_LOG_DIR}/                         # sample compose: /var/lib/orchestrator/logs
 ├── cnt_abc123/
 │   ├── 0.log
 │   ├── 1.log
@@ -119,28 +121,28 @@ The "track the last timestamp per container" requirement is handled by the disk 
 
 ### API surface
 
-Two endpoints, both following the existing patterns:
+This plan changes only one external surface: the WebSocket logs endpoint planned in `websocket-streaming-plan.md` now reads from the shared `LogCaptureManager` rather than opening its own Docker stream. The existing REST endpoint is unchanged in v1.
 
-**Existing endpoint, semantics broadened (only when `DROVER_LOG_DIR` is set):**
+**Existing endpoint — unchanged:**
 
 ```
-GET /containers/{id}/logs?since=<rfc3339>&until=<rfc3339>&tail=<n>
+GET /containers/{id}/logs
 ```
 
-Today this proxies to Docker's logs endpoint. After this change, the behavior depends on the mode:
+Continues to proxy Docker's logs API exactly as it does today. When `DROVER_LOG_DIR` is set, captured logs are written to disk in parallel but are not exposed through this endpoint in v1. Operators who want historical-log API access wait for the follow-up pagination plan, which will broaden this endpoint with a consistent `since`/`until`/`limit`/`offset` contract shared across all list endpoints. See Follow-Up Work.
 
-- **With a log dir:** reads from the on-disk capture for any time range — including ranges entirely after the container stopped — and only falls back to Docker for live tailing of a currently running container when no `since`/`until` are given.
-- **Capture-only:** unchanged from today. The endpoint proxies to Docker's logs API, with retention bounded by Docker's configured log driver.
+In the meantime, operators have two ways to access retained logs of stopped containers:
 
-Either way, the response is JSON: `{"messages": [{"stream": "stdout|stderr", "data": "...", "time": "..."}, ...]}`, paginated.
+1. Read the on-disk capture directly (mounted volume).
+2. Run a standard log shipper (Promtail, Vector, etc.) against the capture directory.
 
-**New WebSocket (handled in the WebSocket streaming plan, Phase 2):**
+**WebSocket (handled in the WebSocket streaming plan, Phase 2):**
 
 ```
 GET /ws/containers/{id}/logs?tail=<n>&follow=true
 ```
 
-Phase 2 of `websocket-streaming-plan.md` already specifies this. With a log dir, `tail=<n>` is served from disk (so it works for stopped containers). In capture-only mode, `tail=<n>` is forwarded to Docker as the `?tail=N` query parameter at follow-stream-open time, matching today's effective behavior.
+Phase 2 of `websocket-streaming-plan.md` specifies this. The capture pipeline in this plan replaces that endpoint's plan to open its own Docker stream — the WebSocket fan-out is now a consumer of the shared `LogCaptureManager`. `tail=<n>` is forwarded to Docker as the `?tail=N` query parameter at follow-stream-open time in both modes; tail-from-disk is also a feature deferred to the pagination plan.
 
 ### Configuration
 
@@ -148,11 +150,11 @@ Three new env vars, all optional:
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `DROVER_LOG_DIR` | _(unset)_ | Root directory for captured micro-container logs. **When unset, Drover runs in capture-only mode**: the follow stream is opened (so live WebSocket tailing works) but nothing is written to disk and no retention is provided. When set, Drover-managed retention is enabled. |
+| `DROVER_LOG_DIR` | _(unset; the sample compose stack sets it)_ | Root directory for captured micro-container logs. **When unset, Drover runs in capture-only mode**: the follow stream is opened (so live WebSocket tailing works) but nothing is written to disk and no retention is provided. When set, Drover-managed retention is enabled. |
 | `DROVER_LOG_MAX_FILE_BYTES` | `10485760` (10 MiB) | Rotate to a new file when this size is exceeded on the next write. Ignored when `DROVER_LOG_DIR` is unset. |
 | `DROVER_LOG_MAX_FILES_PER_CONTAINER` | `0` (unlimited) | If non-zero, oldest log files are deleted to keep the count at or below this limit. Ignored when `DROVER_LOG_DIR` is unset. |
 
-Mount: when an operator opts into Drover-managed retention, the `docker-compose.yml` example shows the corresponding volume mount so logs survive orchestrator restarts. The default compose stack leaves `DROVER_LOG_DIR` unset and the mount commented out, matching the "no surprise persistence" default.
+Mount: the sample `docker-compose.yml` ships with `DROVER_LOG_DIR=/var/lib/orchestrator/logs`, which lives inside the existing `drover-data` volume so logs survive orchestrator restarts without a second volume to manage. The compose file carries an inline comment noting that this roughly doubles per-container disk usage (Docker's own log driver also keeps a copy by default) and points the operator at `docs/observability.md` for guidance on disabling one or the other if disk is tight.
 
 ### External-tool compatibility
 
@@ -230,21 +232,13 @@ These are the choices baked into the plan that should drive lower-level decision
 
 6. **The orchestrator does not own the operator's log driver choice.** Drover never sets `HostConfig.LogConfig` on container creation. Operators retain full control of where Docker itself sends container output.
 
----
+7. **Rotation is size-only; no time-based rotation.** Adding daily/hourly rotation requires a scheduler (or per-write clock check) that we don't otherwise need, and it complicates the lifecycle for short-lived containers that may live for less than the rotation interval. Size-based rotation handles the actual problem (bounded file sizes for shippers) without a scheduler.
 
-## Open Questions
+8. **Disk-full behavior: log one orchestrator-level error, then stop disk writing globally.** When a write fails with `ENOSPC` (or any persistent OS-level error), the disk writer logs a single structured error to the orchestrator's stdout, marks itself disabled for the lifetime of the orchestrator process, and stops attempting writes for any container. The Docker follow streams and the WebSocket fan-out are unaffected — operators can still live-tail a problem container while the disk is full, which is exactly the moment they need to. Auto-resume on space recovery is intentionally not attempted; recovery is "free up space, restart the orchestrator." This avoids log spam in the edge-case where the disk is right at the boundary, and it keeps the writer's state machine trivial.
 
-1. **Should rotation also be time-based (e.g. roll daily)?** Time-based rotation is friendlier for log shippers that index by date. Size-based is friendlier for chatty short-lived containers. **Tentative answer:** size-only in v1. Add time-based as an additive option later if asked.
+9. **The sample compose stack ships with retention enabled.** Most homelab operators expect persistence by default; operators with their own logging pipeline will recognize the env var and unset it. The compose file carries an inline comment about the disk-usage tradeoff and points at `docs/observability.md`.
 
-2. **What happens if disk fills up?** Options: (a) drop new log writes silently, container keeps running; (b) stop accepting new logs and emit an orchestrator-level error log; (c) destroy the affected container. **Tentative answer:** (b) — log a single error per container per minute, drop subsequent writes for that container until disk recovers. The operator's monitoring should already alert on disk pressure.
-
-3. **Per-container log isolation between API keys?** Today the API has no concept of ownership. If multi-tenant ever lands, log directory permissions need revisiting. **Tentative answer:** out of scope; revisit when auth gets richer than a single API key.
-
-4. **Encryption at rest?** Some homelab operators may be running Drover on shared storage. **Tentative answer:** out of scope; storage-layer encryption is the right place for this, not the application.
-
-5. **`GET /containers/{id}/logs` pagination contract.** The WebSocket plan calls out the existing endpoint but does not specify a pagination cursor for large historical reads. We should pick one (offset + limit, or `since`/`until` time bounds, or opaque cursor) and apply consistently. **Tentative answer:** `since` + `until` time bounds plus a `limit` ceiling, with the response returning the timestamp of the next record after the cap. Tracks the data layout (timestamps are first-class in the on-disk format) and matches Docker's own log query model.
-
-6. **Should the default compose stack ship with `DROVER_LOG_DIR` set or unset?** Set means out-of-the-box retention works for newcomers but persistence appears with no explicit opt-in. Unset means a clean default that respects existing logging stacks. **Tentative answer:** ship with the volume *defined but commented out* and `DROVER_LOG_DIR` *defined but commented out* in `docker-compose.yml`, with a comment pointing at this plan's modes section. Forces a deliberate one-line uncomment to enable retention; respects "no surprise persistence."
+10. **Disk-backed historical-query REST API is out of scope for v1.** The new disk capture is invisible to REST in v1 and surfaces only via the WebSocket plan and direct disk access. A follow-up pagination plan will broaden `GET /logs` (and standardize pagination across every list endpoint) before either plan is considered released. See Follow-Up Work.
 
 ---
 
@@ -261,22 +255,25 @@ Responsibilities:
 - For a given Drover container ID and Docker container ID, open and own the follow stream against Docker's logs API.
 - Parse the multiplexed Docker stream format (8-byte header `[stream_type][0][0][0][len:4]`, then `len` bytes of payload). Yield `(stream, data, time)` chunks.
 - Append each chunk as a JSON line to the current open log file. Rotate when size exceeds the configured threshold; prune when the file count cap is exceeded.
-- Update the in-memory `last_ts` and persist it to `.cursor` (atomic write: temp-file + rename, no fsync per write, fsync per rotation).
+- On a persistent write error (e.g. `ENOSPC`), log one structured error to orchestrator stdout, set an internal `_disk_disabled = True` flag, and stop attempting writes for the rest of this orchestrator process's lifetime. The follow stream and any non-disk consumers continue to operate.
+- Update the in-memory `last_ts` and persist it to `.cursor` (atomic write: temp-file + rename, no fsync per write, fsync per rotation). Skipped when `_disk_disabled` is set.
 - Fan out parsed chunks to subscribers — this is where the WebSocket connection manager (from the WebSocket streaming plan) plugs in. The exact interface (queue, callback, observable) is shared with that plan; pick whichever shape that plan settles on.
-- Provide a `read_range(container_id, since, until, limit)` method that the REST `GET /logs` endpoint calls.
 - Provide `start(container_id, docker_id, since=None)`, `stop(container_id)`, and `discard(container_id)` methods called by `ContainerManager` on lifecycle transitions.
+
+A historical-query method (`read_range(container_id, since, until, limit, offset)`) is **not** part of v1 — it is the responsibility of the follow-up pagination plan. The on-disk format is designed to make it trivial to add later (timestamps are first-class, files are append-only, files are ordered by name).
 
 ### Changes to existing modules
 
 - **`orchestrator/config.py`:** add the three new env vars. `DROVER_LOG_DIR` is `Optional[str]`; the other two are read but unused when `DROVER_LOG_DIR` is `None`.
 - **`orchestrator/docker_client.py`:** add `stream_container_logs(container_id, *, since: float | None, follow: bool, tail: int | None = None) -> AsyncIterator[bytes]` that opens the follow stream and yields raw bytes. The multiplex parsing belongs in `log_capture.py`, not here.
 - **`orchestrator/container_manager.py`:** call into `LogCaptureManager` from the lifecycle methods listed in the table above. The critical placement is inside `_init_container`: call `LogCaptureManager.start(container_id, docker_id)` immediately after `await self._docker.start_container(docker_id)` succeeds, *not* in `on_container_ready`. This is what gives us init-window log capture. On resume, pass the cursor; on stop, signal the writer to flush; on destroy and on `_fail_init`, signal the writer to close. The lifecycle calls happen unconditionally; the manager itself decides whether a disk writer is attached based on configuration.
-- **`orchestrator/routers/containers.py`:** broaden `GET /containers/{id}/logs` to read from `LogCaptureManager.read_range(...)` for time-bounded queries when retention is enabled, falling back to the live Docker stream when retention is disabled or when no bounds are supplied for a running container.
+- **`orchestrator/routers/containers.py`:** **no changes in v1.** The existing `GET /containers/{id}/logs` continues to proxy Docker. The pagination follow-up plan owns the broadening.
 - **`orchestrator/app.py`:** instantiate `LogCaptureManager` in `lifespan` (with or without disk writer based on config), call its shutdown method on app exit (closes all active capture streams; flushes files when applicable).
-- **`docker-compose.yml`:** add a commented-out `drover-logs` volume and a commented-out `DROVER_LOG_DIR` env var with a one-line comment explaining the opt-in.
-- **`README.md`:** document the new env vars, both modes (capture-only vs Drover-managed retention), the on-disk format, and the Promtail example.
-- **`docs/planning/websocket-streaming-plan.md`:** update Phase 2 and Open Question 3 to reference this plan; the `/ws/.../logs` endpoint reads from the shared `LogCaptureManager`, and `tail=<n>` is served from disk when retention is enabled and from Docker's `?tail=N` parameter otherwise. **Also update the connect-time check in that plan**: today it specifies "container not running → close with 1008." That check needs to allow `initializing` so a debugger can attach to a stuck startup; it should reject only `error`, `destroying`, and `destroyed`. Stopped containers are also legitimate targets for historical streaming when retention is enabled.
-- **`TODO.md`:** remove the "Container log retention" section once this is implemented; add a follow-up note for the open questions if any remain unanswered at landing.
+- **`docker-compose.yml`:** set `DROVER_LOG_DIR=/var/lib/orchestrator/logs` (sharing the existing `drover-data` volume) with an inline comment explaining the disk-usage tradeoff and pointing at `docs/observability.md`.
+- **`README.md`:** document the new env vars and link to `docs/observability.md` for the full retention story (modes, on-disk format, log-shipper examples). The README itself stays a quickstart; deep dives live in observability.md.
+- **`docs/observability.md` (new):** the operator-facing reference for everything log-related. See the Documentation Impact section for an outline.
+- **`docs/planning/websocket-streaming-plan.md`:** update Phase 2 and Open Question 3 to reference this plan; the `/ws/.../logs` endpoint reads from the shared `LogCaptureManager` rather than opening its own Docker stream. **Also update the connect-time check in that plan**: today it specifies "container not running → close with 1008." That check needs to allow `initializing` so a debugger can attach to a stuck startup; it should reject only `error`, `destroying`, and `destroyed`.
+- **`TODO.md`:** remove the "Container log retention" section once this is implemented; add an entry pointing at the follow-up pagination plan as the prerequisite for cutting a release that includes either log retention or WebSocket streaming.
 
 ### Tests
 
@@ -284,18 +281,18 @@ Responsibilities:
 - Unit test rotation: write past threshold, assert new file opens at next write.
 - Unit test cap: with `MAX_FILES_PER_CONTAINER=3`, rotate enough to trigger pruning, assert oldest is deleted.
 - Unit test cursor: write some chunks, simulate restart, assert resume uses the recorded `since`.
-- Integration test against the orchestrator stack (similar to existing `tests/`): create container, run a chatty workload, stop, resume, query historical logs, destroy, verify directory is gone.
+- Unit test disk-full: arrange a writer to receive `ENOSPC` on its next write, assert one error log is emitted, assert subsequent writes are no-ops, assert the follow stream and any non-disk consumers continue to receive chunks.
+- Integration test against the orchestrator stack (similar to existing `tests/`): create container, run a chatty workload, stop, resume, read the captured files off disk, destroy, verify directory is gone.
 - Integration test for init-window capture: launch a micro-container whose entrypoint emits stdout *before* the guest agent connects (e.g. an image that sleeps 2s, prints a message, then execs the agent), then assert the message is present in the captured logs even though the container reached `running` only after the print. Run a parallel test where the entrypoint never starts the agent and the container fails with `init_timeout`, then assert the entrypoint's pre-failure stdout was captured.
 
 ### Sequencing
 
-1. Land `LogCaptureManager` (capture, rotation, on-disk format, no API surface yet) and unit tests.
+1. Land `LogCaptureManager` (capture, rotation, on-disk format, disk-full handling, no API surface yet) and unit tests.
 2. Wire into `ContainerManager` lifecycle. Now logs land on disk and are deleted on destroy. WebSocket and REST endpoints are unchanged.
 3. Plug into the WebSocket fan-out as part of the WebSocket plan Phase 2.
-4. Broaden the REST `GET /logs` endpoint to serve from disk.
-5. Documentation pass (README, docker-compose, ADR for the on-disk-format decision).
+4. Documentation pass: `docs/observability.md`, `README.md` link, `docker-compose.yml` env-var addition, ADR for the on-disk-format decision.
 
-Steps 1–2 are independently shippable and useful. Steps 3–4 depend on the WebSocket plan landing or moving in parallel.
+Steps 1–2 are independently shippable and useful (operators get on-disk retention they can read directly). Step 3 depends on the WebSocket plan landing or moving in parallel. The follow-up pagination plan is prerequisite to a release that *advertises* log retention as a feature, since users will reasonably expect API access to retained logs.
 
 ---
 
@@ -303,12 +300,13 @@ Steps 1–2 are independently shippable and useful. Steps 3–4 depend on the We
 
 | Risk | Mitigation |
 |---|---|
-| Disk usage grows unboundedly for long-running noisy containers. | Rotation by size with optional file-count cap. Operator monitoring of `DROVER_LOG_DIR` is the safety net. Document expected disk usage in the README. |
+| Disk usage grows unboundedly for long-running noisy containers. | Rotation by size with optional file-count cap. Operator monitoring of `DROVER_LOG_DIR` is the safety net. Document expected disk usage in `docs/observability.md`. |
+| Disk fills up. | Single orchestrator-level error log on first failed write, then disk writes are disabled for the rest of the orchestrator process lifetime. The follow stream and WebSocket fan-out continue to operate so the operator can still live-tail the problem container. Recovery is "free up space, restart orchestrator." |
 | Orchestrator restart causes gap or duplication in captured logs. | `.cursor` file with `since=` resume. Documented behavior under crash recovery: prefer dupes to gaps. |
-| Docker daemon's own log driver buffer is smaller than our capture rate, so logs are lost before we read them. | We open a follow stream the moment the container reaches `running`; Docker streams in real time as long as the connection is held. The capture task is high-priority and not gated on anything else. If the asyncio event loop is blocked, both Drover and the WebSocket fan-out are equally affected — this is an orchestrator-health concern, not a logging concern. |
-| Filesystem semantics on the host (e.g. SMB-mounted log dir) cause partial writes. | Append-only writes with newline terminator; partial writes look like a truncated last line, which all log shippers handle. Document a recommendation to keep `DROVER_LOG_DIR` on local storage. |
-| Operator's existing log shipper picks up our files *and* Docker's `json-file` files for the same container, producing duplicates downstream. | Document this clearly. The shipper's own dedupe (or path filtering) is the right place to handle it. The two paths exist for different reasons — Docker's path is the operator's stack; our path is Drover's retention. |
-| Permissions: orchestrator runs as UID 1000; if the log volume is owned differently the capture fails on first write. | The orchestrator already creates `/var/lib/orchestrator` with the right ownership; the same Dockerfile step covers `/var/lib/orchestrator/logs`. Document the ownership requirement for operator-supplied volumes. |
+| Docker daemon's own log driver buffer is smaller than our capture rate, so logs are lost before we read them. | We open a follow stream the moment Docker `start_container` returns; Docker streams in real time as long as the connection is held. The capture task is high-priority and not gated on anything else. If the asyncio event loop is blocked, both Drover and the WebSocket fan-out are equally affected — this is an orchestrator-health concern, not a logging concern. |
+| Filesystem semantics on the host (e.g. SMB-mounted log dir) cause partial writes. | Append-only writes with newline terminator; partial writes look like a truncated last line, which all log shippers handle. Recommend in `docs/observability.md` that `DROVER_LOG_DIR` lives on local storage. |
+| Operator's existing log shipper picks up our files *and* Docker's `json-file` files for the same container, producing duplicates downstream. | Documented in `docs/observability.md` with a "pick one" guide. The shipper's own dedupe (or path filtering) is the right place to handle it; the two paths exist for different reasons — Docker's path is the operator's stack, our path is Drover's retention. |
+| Permissions: orchestrator runs as UID 1000; if the log volume is owned differently the capture fails on first write. | The orchestrator already creates `/var/lib/orchestrator` with the right ownership; logs live inside that directory in the sample stack so the same Dockerfile step covers them. Document the ownership requirement for operator-supplied volumes mounted at non-default paths. |
 
 Rollback: this work is additive and isolatable. If something goes wrong in production, the operator can simply unset `DROVER_LOG_DIR` to drop into capture-only mode, where Drover writes nothing to disk and behavior matches today's, modulo the live WebSocket tailing path. Reverting the code is also low-risk because no existing data structures change.
 
@@ -318,10 +316,57 @@ Rollback: this work is additive and isolatable. If something goes wrong in produ
 
 Files that need updates when this lands:
 
-- `README.md` — new env vars table, new mounts row in the orchestrator container section, brief subsection on the on-disk format and a Promtail example.
-- `docker-compose.yml` — add `drover-logs` volume and mount it on the orchestrator service.
-- `TODO.md` — remove the "Container log retention" section.
-- `docs/planning/websocket-streaming-plan.md` — update Phase 2 to describe the tee, and update Open Question 3 to point to this plan.
-- `docs/decisions/` — new ADR capturing the on-disk-format decision (Docker `json-file` line format) since that is the kind of decision a future engineer might reasonably want to revisit and needs to know the reasoning for.
+- **`docs/observability.md` (new):** the operator-facing reference for everything log-related. Outline:
+    1. *The three streams Drover emits.* Orchestrator structured logs, micro-container stdout/stderr (the captured stream), per-command stdout/stderr. Where each lives, how to access each.
+    2. *Modes.* Drover-managed retention vs capture-only, when to pick each.
+    3. *On-disk format and directory layout.* Exact line format, file naming, rotation behavior.
+    4. *Shipping logs to external systems.* Promtail/Loki snippet, Vector snippet, Fluent Bit pointer. A note that Drover does not configure Docker log drivers — whatever the operator sets at the daemon level applies.
+    5. *Disk usage and the "two copies" tradeoff.* When `DROVER_LOG_DIR` is set, Drover and Docker's log driver each keep a copy. Guidance on which to disable if disk is tight.
+    6. *Disk-full behavior.* What happens, how to recover.
+    7. *Lifecycle and retention guarantees.* Logs persist until the container is destroyed; what destroying does; what stopping does; what `error` does.
+- **`README.md`:** new env-var rows in the configuration table; one-paragraph summary of the retention model with a link to `docs/observability.md` for the deep dive. The README stays a quickstart.
+- **`docker-compose.yml`:** add `DROVER_LOG_DIR=/var/lib/orchestrator/logs` to the orchestrator service env vars with an inline comment about disk usage and a pointer to `docs/observability.md`.
+- **`TODO.md`:** remove the "Container log retention" section; add an entry referencing the follow-up pagination plan as a release prerequisite.
+- **`docs/planning/websocket-streaming-plan.md`:** update Phase 2 to describe the consumption from `LogCaptureManager` rather than opening its own Docker stream, update Open Question 3 to point to this plan, and update the connect-time status check to allow `initializing`.
+- **`docs/planning/<pagination-plan>.md` (new, separate effort):** see Follow-Up Work.
+- **`docs/decisions/`:** new ADR capturing the on-disk-format decision (Docker `json-file` line format) since that is the kind of decision a future engineer might reasonably want to revisit and needs to know the reasoning for.
 
 Possibly worth a separate ADR on retention semantics ("logs live until the container is destroyed") if it turns out to be load-bearing for later product decisions; not strictly required for the v1 implementation.
+
+---
+
+## Follow-Up Work
+
+Two pieces of work are deliberately deferred out of this plan and into a separate effort, but are prerequisites to a release that includes log retention or WebSocket streaming as advertised features.
+
+### Pagination plan (separate document)
+
+This plan, the WebSocket streaming plan, and any future "list things" endpoint share an unsolved problem: there is no consistent pagination contract. Adding pagination to `GET /containers/{id}/logs` in isolation would set a precedent that the rest of the API would then have to either follow or contradict. Better to design the contract once and apply it everywhere.
+
+**Intent for the pagination plan:**
+
+A consistent four-parameter contract across every list-style REST endpoint (containers, images, command messages, retained logs, anything we add later):
+
+| Parameter | Type | Default | Notes |
+|---|---|---|---|
+| `since` | RFC3339 timestamp | start of available data | Inclusive lower bound. Applies to time-keyed resources (logs, command messages); for non-time-keyed lists, treated as a no-op or rejected per endpoint. |
+| `until` | RFC3339 timestamp | now (or end of available data) | Inclusive upper bound. Optional. |
+| `limit` | int | endpoint-specific sensible default (e.g. 100 for command messages, 1000 for logs) | Hard cap per endpoint, also documented. |
+| `offset` | int | 0 | For when time bounds and limit aren't sufficient (cursoring within a single timestamp's worth of records). |
+
+Response includes a `next_offset` (or similar) hint if more data is available beyond the limit, plus the effective `since`/`until`/`limit` echoed back so the client can chain calls.
+
+**Endpoints the pagination plan should retrofit, at minimum:**
+
+- `GET /containers` (currently returns everything in one shot)
+- `GET /containers/{id}/exec/{command_id}` messages array
+- `GET /containers/{id}/logs` — broadened to read from disk when `DROVER_LOG_DIR` is set, falling back to Docker for live tails of running containers
+- `GET /images` (currently unbounded)
+
+**Release coupling:**
+
+We will not cut a release that publicly advertises log retention or WebSocket streaming until both this plan and the pagination plan are landed. Operators expecting "I can see my container's old logs" should not need to teach themselves the on-disk format to do it. Until both ship, the new capabilities live on `main` but are documented as preview.
+
+### Documentation handoff
+
+Once the pagination plan exists and is approved, this plan's "Open Questions" stay closed but the API surface section here gets a one-line update pointing at the broadened endpoint. No re-litigation of decisions made here.
