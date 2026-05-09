@@ -96,6 +96,13 @@ jobs:
       - name: Sign image with cosign
         run: cosign sign --yes ${{ env.REGISTRY }}/${{ github.repository }}@${{ steps.build.outputs.digest }}
 
+      - name: Debug metadata
+        run: |
+          echo "Tags:"
+          echo "${{ steps.meta.outputs.tags }}"
+          echo "Labels:"
+          echo "${{ steps.meta.outputs.labels }}"
+
   publish-builder:
     needs: detect-changes
     if: |
@@ -150,6 +157,13 @@ jobs:
       - name: Sign image with cosign
         run: cosign sign --yes ${{ env.REGISTRY }}/${{ github.repository }}-builder@${{ steps.build.outputs.digest }}
 
+      - name: Debug metadata
+        run: |
+          echo "Tags:"
+          echo "${{ steps.meta.outputs.tags }}"
+          echo "Labels:"
+          echo "${{ steps.meta.outputs.labels }}"
+
   publish-webapp:
     needs: detect-changes
     if: |
@@ -203,3 +217,10 @@ jobs:
 
       - name: Sign image with cosign
         run: cosign sign --yes ${{ env.REGISTRY }}/${{ github.repository }}-webapp@${{ steps.build.outputs.digest }}
+
+      - name: Debug metadata
+        run: |
+          echo "Tags:"
+          echo "${{ steps.meta.outputs.tags }}"
+          echo "Labels:"
+          echo "${{ steps.meta.outputs.labels }}"
