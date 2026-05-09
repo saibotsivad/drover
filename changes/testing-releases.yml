@@ -1,8 +1,0 @@
-- project: orchestrator
-  bump: patch
-  description: |
-    Adding automated releases via change files.
-- project: webapp
-  bump: patch
-  description: |
-    Adding automated releases via change files.
