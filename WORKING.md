@@ -1,6 +1,8 @@
 # Working Checklist — Changeset Automation
 
-Tracking sheet for implementing the plan in `docs/planning/changeset-automation.md`.
+Tracking sheet for the changeset-automation work. The original planning
+doc (`docs/planning/changeset-automation.md`) was retired once
+implementation landed; the permanent reference is now `docs/versioning.md`.
 Tick items as they land. If work is interrupted, this file is the source of truth
 for "what's left" — prefer updating it over relying on commit history.
 
@@ -36,7 +38,9 @@ Conventions:
 - [x] Create `changes/` directory at repo root with a `.gitkeep` so it exists
       when empty.
 - [x] Add `changes/README.md` explaining the change-file format with a minimal
-      example. Link to `docs/planning/changeset-automation.md` for details.
+      example. Link to the versioning doc for details (originally pointed at
+      the planning doc; later updated to `docs/versioning.md` after the
+      planning doc was retired).
 - [x] Create initial `CHANGELOG.yml` in each versioned project directory,
       seeded with `published: "0.0.0"` and an empty `changes: []` list. Files
       to create: `builder/CHANGELOG.yml`, `executor/CHANGELOG.yml`,
@@ -152,8 +156,9 @@ have no listener — that's intentional.
 - [x] Add a "Releasing" section to `README.md` covering: how to write a change
       file, where it goes, what happens when the PR merges, and what the
       release PR looks like.
-- [x] Cross-link from `docs/planning/changeset-automation.md` once
-      implementation lands (mark the doc as implemented).
+- [x] Cross-link from the planning doc once implementation lands (later
+      superseded: the planning doc was retired in favour of
+      `docs/versioning.md`, which is now the permanent reference).
 - [x] Update `TODO.md` / `PLAN.md` if either references release tooling.
       `TODO.md` has a "Verify GHCR publish workflow (manual)" note — left
       as-is, since the manual end-to-end verification is still pending and

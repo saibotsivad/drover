@@ -311,28 +311,18 @@ The `test.yml` GitHub Actions workflow runs both test suites on every PR, along 
 ## Releasing
 
 Versions are driven by human-authored change files dropped into `changes/`
-as part of any PR that should bump a project's version. The full design
-lives in [`docs/planning/changeset-automation.md`](docs/planning/changeset-automation.md);
-the short version:
+as part of any PR that should bump a project's version. See
+[`docs/versioning.md`](docs/versioning.md) for the full lifecycle and the
+[`changes/README.md`](changes/README.md) quick reference for the file format.
 
-1. Add a YAML file under `changes/` describing which projects the PR
-   affects and how (`major` / `minor` / `patch` plus a description). See
-   [`changes/README.md`](changes/README.md) for the file format.
-2. When the PR merges to `main`, the `update-release-pr` workflow
-   consumes any change files, updates the affected `<project>/CHANGELOG.yml`
-   files, and force-pushes the result to the `versioning` branch. A single
-   "Release: pending changes" PR tracks all pending bumps; subsequent PRs
-   keep extending that same release PR.
-3. Merging the release PR triggers the `publish-release` workflow, which
-   pushes a `<project>-v<version>` git tag for each project whose
-   `CHANGELOG.yml` changed in that merge.
-4. Each prefixed tag is picked up by the existing publish workflow
-   (`publish.yml` for `orchestrator`/`builder`, `publish-webapp.yml` for
-   `webapp`) and produces unprefixed Docker tags on GHCR. `executor` is
-   versioned but not published as an image; its tags exist as a release
-   record only.
-
-PRs without a change file are a no-op for releases.
+The short version: add a YAML file under `changes/` describing which
+projects the PR affects and how (`major` / `minor` / `patch` plus a
+description). When the PR merges to `main`, an `update-release-pr` workflow
+rolls all pending bumps into a single "Release: pending changes" PR on the
+`versioning` branch. Merging that PR pushes per-project git tags
+(`<project>-v<version>`), which the existing publish workflows turn into
+unprefixed Docker tags on GHCR. `executor` is versioned but not published;
+its tags are a release record only.
 
 ## Open Issues
 
