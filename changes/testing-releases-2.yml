@@ -1,0 +1,4 @@
+- project: executor
+  bump: patch
+  description: |
+    More testing if automated releases via change files.
