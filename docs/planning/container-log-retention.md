@@ -210,7 +210,7 @@ These are the choices baked into the plan that should drive lower-level decision
 
 2. **One Docker follow stream per running container.** The orchestrator opens a single follow stream and feeds it directly into the disk writer.
 
-3. **Retention is binary: kept until destroy, then gone.** When Drover-managed retention is enabled, no TTL, no time-based pruning by default. This matches user mental model: "the container exists → its logs exist." Time-based retention can be added later if requested without changing data layout. When retention is disabled (capture-only mode), Drover provides no retention guarantee at all and operators are expected to use Docker's log driver for that.
+3. **Retention is binary: kept until destroy, then gone.** When Drover-managed retention is enabled, no TTL, no time-based pruning by default. This matches user mental model: "the container exists → its logs exist." Time-based retention can be added later if requested without changing data layout. When `DROVER_LOG_DIR` is unset, Drover writes nothing and operators are expected to use Docker's log driver for retention.
 
 4. **Rotation is by file size.** Default is 10 MiB per file. We do not implement compression; if disk pressure is a concern, the operator's log shipper can ship and drop, or they can mount the directory on compressed storage.
 
@@ -300,7 +300,7 @@ Files that need updates when this lands:
 
 - **`docs/observability.md` (new):** the operator-facing reference for everything log-related. Outline:
     1. *The three streams Drover emits.* Orchestrator structured logs, micro-container stdout/stderr (the captured stream), per-command stdout/stderr. Where each lives, how to access each.
-    2. *Modes.* Drover-managed retention vs capture-only, when to pick each.
+    2. *Modes.* Drover-managed retention enabled vs unset, when to pick each.
     3. *On-disk format and directory layout.* Exact line format, file naming, rotation behavior.
     4. *Shipping logs to external systems.* Promtail/Loki snippet, Vector snippet, Fluent Bit pointer. A note that Drover does not configure Docker log drivers — whatever the operator sets at the daemon level applies.
     5. *Disk usage and the "two copies" tradeoff.* When `DROVER_LOG_DIR` is set, Drover and Docker's log driver each keep a copy. Guidance on which to disable if disk is tight.
