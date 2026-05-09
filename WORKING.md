@@ -35,17 +35,14 @@ Conventions:
 
 - [ ] Create `changes/` directory at repo root with a `.gitkeep` so it exists
       when empty.
-- [ ] Add `changes/README.md` (or short header in `.gitkeep`) explaining the
-      change-file format with a minimal example. Link to
-      `docs/planning/changeset-automation.md` for details.
+- [ ] Add `changes/README.md` explaining the change-file format with a minimal
+      example. Link to `docs/planning/changeset-automation.md` for details.
 - [ ] Create initial `CHANGELOG.yml` in each versioned project directory,
       seeded with `published: "0.0.0"` and an empty `changes: []` list. Files
       to create: `builder/CHANGELOG.yml`, `executor/CHANGELOG.yml`,
       `orchestrator/CHANGELOG.yml`, `webapp/CHANGELOG.yml`.
-- [ ] Add `PyYAML` to whichever requirements file the workflow runner will
-      install from (likely a new `requirements-release.txt` to avoid bloating
-      `requirements-test.txt`). Note the path here:
-      - File: _TBD_
+- [ ] Add `PyYAML` to a new `requirements-release.txt` (kept separate from
+      `requirements-test.txt` to avoid bloat).
 
 ---
 
@@ -85,7 +82,8 @@ should be testable in isolation before moving on.
       no-ops on unrelated pushes.
 - [ ] Permissions: `contents: write`, `pull-requests: write`.
 - [ ] Steps:
-  - [ ] Checkout `main` with full history (`fetch-depth: 0`).
+  - [ ] Checkout `main` (default shallow checkout — full history isn't needed
+        while the project is still in flux).
   - [ ] Set up Python and install release requirements (PyYAML).
   - [ ] Configure `git` user (e.g. `github-actions[bot]`).
   - [ ] Run `scripts/update_release_pr.py`. If it reports "no change files",
@@ -129,18 +127,16 @@ created for it. `executor-v*` tags will be pushed by Workflow 2 and simply
 have no listener — that's intentional.
 
 - [ ] `.github/workflows/publish.yml`
-  - [ ] Trigger split: this workflow currently builds two images
-        (`orchestrator` + `builder`) from a matrix on a single tag push. After
-        the change, each project has its own tag namespace, so split into two
-        jobs (or two workflow files) — one trigger per project. Decide and
-        record:
-        - Approach: _TBD (split into two workflow files vs. one workflow with
-          two jobs each gated on tag prefix)_
-  - [ ] Update `tags:` filter to `orchestrator-v*` / `builder-v*`.
-  - [ ] Replace the `type=semver` lines in `docker/metadata-action` with
-        `type=match,pattern=<project>-v(.*),group=1` plus the major/minor
-        derivations (or use `type=semver` with a `value:` override — pick one
-        and document inline).
+  - Approach: keep a **single file** for both container projects
+    (`orchestrator`, `builder`); split the existing matrix into two jobs, each
+    gated on its tag prefix via `if: startsWith(github.ref_name, '<prefix>-v')`.
+  - [ ] Update `tags:` trigger list to include both `orchestrator-v*` and
+        `builder-v*`.
+  - [ ] Replace the matrix with two jobs (`publish-orchestrator`,
+        `publish-builder`); each runs only when its prefixed tag is pushed.
+  - [ ] In each job's `docker/metadata-action`, replace the `type=semver`
+        lines with `type=match,pattern=<project>-v(.*),group=1` plus
+        major/minor derivations using the same pattern with `value` overrides.
 - [ ] `.github/workflows/publish-webapp.yml`
   - [ ] Update `tags:` filter to `webapp-v*`.
   - [ ] Same `type=match` change for metadata extraction.
