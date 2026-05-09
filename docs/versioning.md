@@ -1,12 +1,8 @@
 # Versioning
 
 Drover ships several independently-versioned projects out of one repository.
-Versioning is driven entirely by human-authored YAML files — no `npm`, no
-Changesets CLI, no third-party release tool — and runs on a small set of
-GitHub Actions workflows plus one Python script. The high-level rationale
-for the tag scheme lives in
-[`docs/decisions/2026-05-09-versioning-tag-scheme.md`](decisions/2026-05-09-versioning-tag-scheme.md);
-this document is the operational reference.
+Versioning is driven entirely by human-authored YAML files in the [`/changes`](../changes) folder, and runs on a small set of
+GitHub Actions workflows and a Python script.
 
 ## Versioned projects
 
@@ -17,8 +13,7 @@ this document is the operational reference.
 | `webapp` | `webapp/` | GHCR Docker image (`ghcr.io/<owner>/drover-webapp`) |
 | `executor` | `executor/` | Not published — git tags only |
 
-Each project owns a `CHANGELOG.yml` at its top level. That file is the
-authoritative version record.
+Each project owns a `CHANGELOG.yml` at its top level. That file is the authoritative version record for that project.
 
 ## Lifecycle
 
@@ -41,7 +36,7 @@ flowchart TD
    change file, applies the bumps to each affected `CHANGELOG.yml`, deletes
    the consumed change files, and force-pushes the result as a single commit
    to the `versioning` branch. It then creates or updates a "Release:
-   pending changes" PR whose body summarises every pending bump grouped by
+   pending changes" PR whose body summarises every pending bump, grouped by
    project.
 3. **Merge the release PR.** The `push-tag` workflow diffs the merge commit
    against its parent, finds every `*/CHANGELOG.yml` that changed, reads
@@ -49,9 +44,7 @@ flowchart TD
    `<project>-v<version>` (e.g. `orchestrator-v0.2.0`).
 4. **Publish.** Each prefixed tag is the trigger for `publish.yml`. The
    captured Docker tags are unprefixed (`0.2.0`, `0.2`, `0`, plus
-   `sha-<short>`) — only the git tags carry the project prefix. The
-   rationale for the dual-namespace scheme is in
-   [`docs/decisions/2026-05-09-versioning-tag-scheme.md`](decisions/2026-05-09-versioning-tag-scheme.md).
+   `sha-<short>`) — only the git tags carry the project prefix.
 
 A PR that doesn't include a change file is a no-op for releases.
 
@@ -86,7 +79,7 @@ Each file is a YAML list. One file may cover multiple projects:
   `0.0.0`. There is no current support for `-rc.1` or similar suffixes.
 - **Highest bump wins per project.** If multiple change files affect the same
   project — possibly from different in-flight PRs that all merge before the
-  release PR is — the script picks the highest bump (`major` > `minor` >
+  release PR is merged — the script picks the highest bump (`major` > `minor` >
   `patch`) and rolls every entry into one new version under that bump. All
   individual descriptions are preserved in the changelog.
 - **Within a single release**, each project moves at most one version
