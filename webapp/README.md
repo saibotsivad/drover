@@ -1,6 +1,6 @@
 # Drover Webapp
 
-Optional management UI for [Drover](../README.md). Runs as its own container, talks to an orchestrator over HTTP, and serves an htmx-based PWA. See [`docs/rfc/2026-05-02-management-ui-container.md`](../docs/rfc/2026-05-02-management-ui-container.md) for the design rationale and [`docs/planning/webapp-implementation-plan.md`](../docs/planning/webapp-implementation-plan.md) for the phased build plan.
+Optional management UI for [Drover](../README.md). Runs as its own container, talks to an [orchestrator](../orchestrator) over HTTP, and serves an htmx-based PWA. See [`docs/rfc/2026-05-02-management-ui-container.md`](../docs/rfc/2026-05-02-management-ui-container.md) for the design rationale and [`docs/planning/webapp-implementation-plan.md`](../docs/planning/webapp-implementation-plan.md) for the phased build plan.
 
 ## Stack
 
