@@ -33,15 +33,15 @@ Conventions:
 
 ## Phase 1 — Repo scaffolding
 
-- [ ] Create `changes/` directory at repo root with a `.gitkeep` so it exists
+- [x] Create `changes/` directory at repo root with a `.gitkeep` so it exists
       when empty.
-- [ ] Add `changes/README.md` explaining the change-file format with a minimal
+- [x] Add `changes/README.md` explaining the change-file format with a minimal
       example. Link to `docs/planning/changeset-automation.md` for details.
-- [ ] Create initial `CHANGELOG.yml` in each versioned project directory,
+- [x] Create initial `CHANGELOG.yml` in each versioned project directory,
       seeded with `published: "0.0.0"` and an empty `changes: []` list. Files
       to create: `builder/CHANGELOG.yml`, `executor/CHANGELOG.yml`,
       `orchestrator/CHANGELOG.yml`, `webapp/CHANGELOG.yml`.
-- [ ] Add `PyYAML` to a new `requirements-release.txt` (kept separate from
+- [x] Add `PyYAML` to a new `requirements-release.txt` (kept separate from
       `requirements-test.txt` to avoid bloat).
 
 ---
