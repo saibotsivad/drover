@@ -2,3 +2,7 @@
   bump: patch
   description: |
     More testing if automated releases via change files.
+- project: orchestrator
+  bump: minor
+  description: |
+    This is a test to see if semver is bumped correctly. 
