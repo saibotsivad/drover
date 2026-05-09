@@ -1,8 +1,0 @@
-- project: orchestrator
-  bump: patch
-  description: |
-    Continued testing of releases.
-- project: webapp
-  bump: patch
-  description: |
-    Continued testing of releases.
