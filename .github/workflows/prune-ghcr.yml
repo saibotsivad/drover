@@ -1,0 +1,85 @@
+name: Prune old SHA-only GHCR images
+
+on:
+  schedule:
+    - cron: "0 6 * * 1"   # Mondays at 06:00 UTC
+  workflow_dispatch:
+    inputs:
+      max-age-days:
+        description: "Delete SHA-only versions older than this many days."
+        required: false
+        default: "30"
+      dry-run:
+        description: "If true, list what would be deleted but don't delete."
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  packages: write
+
+jobs:
+  prune:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        package:
+          - drover
+          - drover-builder
+          - drover-webapp
+    steps:
+      - name: Prune SHA-only versions
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OWNER: ${{ github.repository_owner }}
+          PACKAGE: ${{ matrix.package }}
+          MAX_AGE_DAYS: ${{ inputs.max-age-days || '30' }}
+          DRY_RUN: ${{ inputs.dry-run || 'false' }}
+        run: |
+          set -euo pipefail
+
+          cutoff=$(date -u -d "${MAX_AGE_DAYS} days ago" +%Y-%m-%dT%H:%M:%SZ)
+          echo "Package: ${PACKAGE}"
+          echo "Cutoff:  ${cutoff} (older than ${MAX_AGE_DAYS} days)"
+          echo "Dry run: ${DRY_RUN}"
+
+          # GHCR has separate endpoints for org-owned vs user-owned packages.
+          # Try the org endpoint first; fall back to the user endpoint.
+          if gh api "/orgs/${OWNER}/packages/container/${PACKAGE}" >/dev/null 2>&1; then
+            base="/orgs/${OWNER}/packages/container/${PACKAGE}/versions"
+          else
+            base="/users/${OWNER}/packages/container/${PACKAGE}/versions"
+          fi
+          echo "Endpoint: ${base}"
+
+          # Select versions where:
+          #   - tag list is non-empty (skip untagged manifests; left alone here)
+          #   - every tag starts with "sha-" (so release-tagged versions are
+          #     protected, since they always have at least one non-sha tag)
+          #   - the version was created before the cutoff
+          ids=$(gh api --paginate "${base}" --jq "
+            .[]
+            | select(.metadata.container.tags | length > 0)
+            | select(.metadata.container.tags | all(startswith(\"sha-\")))
+            | select(.created_at < \"${cutoff}\")
+            | .id
+          ")
+
+          if [ -z "${ids}" ]; then
+            echo "Nothing to prune."
+            exit 0
+          fi
+
+          echo "Versions matched:"
+          echo "${ids}"
+
+          if [ "${DRY_RUN}" = "true" ]; then
+            echo "Dry run — not deleting."
+            exit 0
+          fi
+
+          echo "${ids}" | while read -r id; do
+            echo "Deleting version ${id}"
+            gh api -X DELETE "${base}/${id}"
+          done
