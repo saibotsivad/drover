@@ -1,0 +1,4 @@
+- project: orchestrator
+  bump: patch
+  description: |
+    Adding automated releases via change files.
