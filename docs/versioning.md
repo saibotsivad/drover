@@ -22,25 +22,16 @@ authoritative version record.
 
 ## Lifecycle
 
-```
-PR with change file ──► merge to main ──► update-release-pr workflow
-                                                  │
-                                                  ▼
-                                 versioning branch + "Release: pending changes" PR
-                                                  │
-                                          merge release PR
-                                                  │
-                                                  ▼
-                                          push-tag workflow
-                                                  │
-                                                  ▼
-                                  <project>-v<version> git tags pushed
-                                                  │
-                                                  ▼
-                                       publish.yml builds & signs
-                                                  │
-                                                  ▼
-                                  GHCR images tagged 1.2.0 / 1.2 / 1
+```mermaid
+flowchart TD
+    pr["PR with change file"] --> mergeMain["Merge to main"]
+    mergeMain --> uw(["update-release-pr workflow"])
+    uw --> vbr["versioning branch + 'Release: pending changes' PR"]
+    vbr --> mergeRelease["Merge release PR"]
+    mergeRelease --> pt(["push-tag workflow"])
+    pt --> tags["&lt;project&gt;-v&lt;version&gt; git tags pushed"]
+    tags --> pw(["publish.yml builds and signs"])
+    pw --> ghcr["GHCR images tagged 1.2.0 / 1.2 / 1"]
 ```
 
 1. **Contributor PR.** Whoever is making the change drops a YAML file under
