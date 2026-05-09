@@ -68,8 +68,9 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          if gh pr view versioning --json number >/dev/null 2>&1; then
-            gh pr edit versioning --body-file /tmp/pr-body.md
+          open_pr=$(gh pr list --head versioning --state open --json number --jq '.[0].number')
+          if [ -n "$open_pr" ]; then
+            gh pr edit "$open_pr" --body-file /tmp/pr-body.md
           else
             gh pr create \
               --base main \
