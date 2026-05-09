@@ -182,6 +182,22 @@ have no listener — that's intentional.
 - [ ] Once green, delete the sample CHANGELOG entries / revert version bumps
       on the test project (or keep them as the genuine first release —
       decide before running the test).
+- [ ] While verifying, also confirm the SHA-tag flow added during review:
+      a merge to `main` touching one of the publishable project paths
+      should produce a `sha-<short>` Docker tag in GHCR with no version
+      tags attached, and `executor`-only changes should produce no image
+      at all.
+
+---
+
+## Follow-ups landed during team review
+
+- SHA-only Docker builds on every merge to `main` (publish workflows now
+  trigger on `branches: [main]` in addition to release tags; a new
+  `detect-changes` job filters per-project paths). Documented in
+  `docs/versioning.md` under "Pre-release SHA images". GHCR retention is
+  not configured here — GHCR has no native retention UI, so cleanup is a
+  future scheduled workflow using `actions/delete-package-versions`.
 
 ---
 
