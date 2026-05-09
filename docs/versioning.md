@@ -148,14 +148,61 @@ image name (`drover` vs `drover-builder` vs `drover-webapp`).
 — there's no listener for `executor-v*` and that's intentional. Its tags
 exist purely as a release record.
 
+## Pre-release SHA images
+
+Release-tagged images are not the only thing in GHCR. Every merge to `main`
+that touches a publishable project's directory produces an image tagged
+*only* with the short commit SHA (e.g. `sha-1a2b3c4`). These exist for
+staging deploys, bisecting, and validating "what's currently on main"
+without inventing version numbers.
+
+What gets tagged on each kind of trigger:
+
+| Trigger | Docker tags produced |
+|---|---|
+| `<project>-v<X.Y.Z>` git tag (release) | `X.Y.Z`, `X.Y`, `X`, `sha-<short>` |
+| Push to `main` touching `<project>/` | `sha-<short>` only |
+
+The version-extracting `type=match` patterns in the publish workflows are
+anchored to the project-prefixed tag format, so on a branch push they all
+silently produce nothing — only `type=sha` fires. That means a SHA-only
+build cannot accidentally claim the floating `X.Y` or `X` Docker tags;
+consumers pinned to those shorthands can never be pulled forward to an
+unreleased commit.
+
+Cosign signing runs identically for both kinds of build, so any image in
+GHCR — release or SHA-only — is verifiable with the same policy.
+
+`executor` produces no SHA images either; it has no publish workflow at
+all.
+
+To pull a specific commit:
+
+```
+docker pull ghcr.io/<owner>/drover:sha-1a2b3c4
+```
+
+### Storage and cleanup
+
+Every project merge produces another manifest in GHCR. Layer reuse keeps
+the actual byte cost low, but the manifest count grows monotonically.
+GHCR has no native UI for image retention, so when this becomes a problem
+the cleanup is a separate scheduled workflow that calls
+`actions/delete-package-versions` to prune SHA-only images older than N
+days (or older than the last K versions). Release-tagged images should
+be excluded from any cleanup so the version history stays intact.
+
+That cleanup workflow doesn't exist yet — add it when the SHA tag count
+gets unwieldy, not pre-emptively.
+
 ## Workflows
 
 | Workflow | Trigger | Job |
 |---|---|---|
 | `update-release-pr.yml` | `push` to `main` (paths-filtered to `changes/**`, the script, and the workflow itself) | Run the script, force-push `versioning`, create or update the release PR. |
 | `publish-release.yml` | `pull_request` `closed` where the head ref is `versioning` and `merged == true` | Diff the merge commit, push `<project>-v<version>` tags. |
-| `publish.yml` | `push` to `orchestrator-v*` or `builder-v*` tags | Build, sign with cosign, push to GHCR. Two prefix-gated jobs in one file. |
-| `publish-webapp.yml` | `push` to `webapp-v*` tags | Same shape as `publish.yml`, single job. |
+| `publish.yml` | `push` to `orchestrator-v*` / `builder-v*` tags **or** `push` to `main` touching `orchestrator/**` / `builder/**` | One detect job + two prefix-gated build jobs. Release tag → full version + SHA tags. Main push → SHA tag only. |
+| `publish-webapp.yml` | `push` to `webapp-v*` tags **or** `push` to `main` touching `webapp/**` | Same shape as `publish.yml`, single project. |
 
 The script lives at `scripts/update_release_pr.py` and only mutates files on
 disk plus emits the release-PR body to stdout — git operations are entirely
@@ -173,8 +220,11 @@ in the workflow YAML.
    prefix-gated job to `publish.yml` (or a new dedicated workflow file)
    matching the existing `publish-orchestrator` / `publish-builder`
    templates: trigger on `<project>-v*`, three `type=match` patterns for the
-   metadata extraction, cosign sign step. If no (like `executor`), do
-   nothing else — the tags will fire harmlessly with no listener.
+   metadata extraction, cosign sign step. Also extend the `detect-changes`
+   job to output a flag for the new project so SHA-only builds fire on
+   relevant `main` pushes. If the project is **not** published (like
+   `executor`), do nothing else — the tags will fire harmlessly with no
+   listener.
 
 Until step 2 lands on `main`, change files referencing the new project will
 fail validation in the script — that's intentional, it catches typos.
