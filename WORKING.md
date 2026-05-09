@@ -77,42 +77,42 @@ should be testable in isolation before moving on.
 
 ## Phase 3 — Workflow 1: `update-release-pr.yml`
 
-- [ ] Create `.github/workflows/update-release-pr.yml`.
-- [ ] Trigger on `push` to `main`; add `paths: ['changes/**']` guard so it
+- [x] Create `.github/workflows/update-release-pr.yml`.
+- [x] Trigger on `push` to `main`; add `paths: ['changes/**']` guard so it
       no-ops on unrelated pushes.
-- [ ] Permissions: `contents: write`, `pull-requests: write`.
-- [ ] Steps:
-  - [ ] Checkout `main` (default shallow checkout — full history isn't needed
+- [x] Permissions: `contents: write`, `pull-requests: write`.
+- [x] Steps:
+  - [x] Checkout `main` (default shallow checkout — full history isn't needed
         while the project is still in flux).
-  - [ ] Set up Python and install release requirements (PyYAML).
-  - [ ] Configure `git` user (e.g. `github-actions[bot]`).
-  - [ ] Run `scripts/update_release_pr.py`. If it reports "no change files",
-        exit the job successfully without further steps.
-  - [ ] Create branch `versioning` from current `main` state, commit the
+  - [x] Set up Python and install release requirements (PyYAML).
+  - [x] Configure `git` user (e.g. `github-actions[bot]`).
+  - [x] Run `scripts/update_release_pr.py`. If it reports "no change files"
+        (exit 2), exit the job successfully without further steps.
+  - [x] Create branch `versioning` from current `main` state, commit the
         edits as a single commit, force-push.
-  - [ ] Use `gh pr view versioning` to detect existing PR; if missing,
-        `gh pr create`; if present, `gh pr edit --body`. Title can be static
-        (e.g. "Release: pending changes").
-- [ ] Verify the workflow file with `actionlint` (or visual review) before
-      merging.
+  - [x] Use `gh pr view versioning` to detect existing PR; if missing,
+        `gh pr create`; if present, `gh pr edit --body`. Title is static
+        ("Release: pending changes").
+- [x] Verify the workflow file (visual review + YAML parse).
 
 ---
 
 ## Phase 4 — Workflow 2: `publish-release.yml`
 
-- [ ] Create `.github/workflows/publish-release.yml`.
-- [ ] Trigger: `pull_request` `closed`, gated by
+- [x] Create `.github/workflows/publish-release.yml`.
+- [x] Trigger: `pull_request` `closed`, gated by
       `head.ref == 'versioning' && merged == true`.
-- [ ] Permissions: `contents: write` (to push tags).
-- [ ] Steps:
-  - [ ] Checkout with `fetch-depth: 2` so `HEAD~1..HEAD` works.
-  - [ ] Compute changed `*/CHANGELOG.yml` paths via `git diff --name-only
+- [x] Permissions: `contents: write` (to push tags).
+- [x] Steps:
+  - [x] Checkout with `fetch-depth: 2` so `HEAD~1..HEAD` works.
+  - [x] Compute changed `*/CHANGELOG.yml` paths via `git diff --name-only
         HEAD~1 HEAD`.
-  - [ ] For each, parse the `published` field (use `yq` or a tiny Python
-        one-liner; pick one and stay consistent).
-  - [ ] Create `<project>-v<version>` annotated tag and push it.
-- [ ] Manual sanity check: simulate by running the diff + parse locally
-      against a contrived release commit.
+  - [x] For each, parse the `published` field (Python one-liner with
+        PyYAML — same dependency as Workflow 1).
+  - [x] Create `<project>-v<version>` annotated tag and push it.
+- [x] Parse one-liner verified against a real CHANGELOG.yml. Full
+      diff-against-prior-commit dry run deferred to Phase 7 (sandbox
+      blocked unsigned commits in a scratch repo).
 
 ---
 
@@ -126,33 +126,38 @@ Note: `executor` is versioned but not published, so no publish workflow is
 created for it. `executor-v*` tags will be pushed by Workflow 2 and simply
 have no listener — that's intentional.
 
-- [ ] `.github/workflows/publish.yml`
+- [x] `.github/workflows/publish.yml`
   - Approach: keep a **single file** for both container projects
     (`orchestrator`, `builder`); split the existing matrix into two jobs, each
     gated on its tag prefix via `if: startsWith(github.ref_name, '<prefix>-v')`.
-  - [ ] Update `tags:` trigger list to include both `orchestrator-v*` and
+  - [x] Update `tags:` trigger list to include both `orchestrator-v*` and
         `builder-v*`.
-  - [ ] Replace the matrix with two jobs (`publish-orchestrator`,
+  - [x] Replace the matrix with two jobs (`publish-orchestrator`,
         `publish-builder`); each runs only when its prefixed tag is pushed.
-  - [ ] In each job's `docker/metadata-action`, replace the `type=semver`
-        lines with `type=match,pattern=<project>-v(.*),group=1` plus
-        major/minor derivations using the same pattern with `value` overrides.
-- [ ] `.github/workflows/publish-webapp.yml`
-  - [ ] Update `tags:` filter to `webapp-v*`.
-  - [ ] Same `type=match` change for metadata extraction.
-- [ ] Confirm published Docker tags remain unprefixed (`1.2.0`, `1.2`, `1`).
+  - [x] In each job's `docker/metadata-action`, replace the `type=semver`
+        lines with three `type=match` patterns covering full / major.minor /
+        major. Using regex anchors (`\d+\.\d+\.\d+` etc.) keeps the captured
+        Docker tag unprefixed.
+- [x] `.github/workflows/publish-webapp.yml`
+  - [x] Update `tags:` filter to `webapp-v*`.
+  - [x] Same `type=match` change for metadata extraction.
+- [x] Confirm published Docker tags remain unprefixed (`1.2.0`, `1.2`, `1`).
+      The `type=match` patterns capture only the bare semver via group=1, so
+      Docker tags do not carry the project prefix — only the git tags do.
 
 ---
 
 ## Phase 6 — Contributor docs
 
-- [ ] Add a "Releasing / Changelogs" section to `README.md` (or a dedicated
-      `docs/releasing.md`) covering: how to write a change file, where it
-      goes, what happens when the PR merges, and what the release PR looks
-      like.
-- [ ] Cross-link from `docs/planning/changeset-automation.md` once
+- [x] Add a "Releasing" section to `README.md` covering: how to write a change
+      file, where it goes, what happens when the PR merges, and what the
+      release PR looks like.
+- [x] Cross-link from `docs/planning/changeset-automation.md` once
       implementation lands (mark the doc as implemented).
-- [ ] Update `TODO.md` / `PLAN.md` if either references release tooling.
+- [x] Update `TODO.md` / `PLAN.md` if either references release tooling.
+      `TODO.md` has a "Verify GHCR publish workflow (manual)" note — left
+      as-is, since the manual end-to-end verification is still pending and
+      now naturally subsumes the new tag scheme as part of Phase 7.
 
 ---
 

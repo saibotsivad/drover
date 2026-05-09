@@ -1,5 +1,9 @@
 # Changeset Automation
 
+> **Status: implemented.** See `README.md` ("Releasing") and `changes/README.md`
+> for the contributor-facing summary; `WORKING.md` at the repo root tracked the
+> implementation phases. This document is preserved as the design reference.
+
 > A custom release-PR workflow using human-authored change files to drive independent versioning and CHANGELOG generation across multiple containers, without relying on npm tooling.
 
 ---
