@@ -187,6 +187,9 @@ have no listener — that's intentional.
       should produce a `sha-<short>` Docker tag in GHCR with no version
       tags attached, and `executor`-only changes should produce no image
       at all.
+- [ ] Run `prune-ghcr.yml` once via `workflow_dispatch` with `dry-run: true`
+      to confirm the selection only matches SHA-only versions and never
+      release versions. Do this before the first scheduled run fires.
 
 ---
 
@@ -195,9 +198,14 @@ have no listener — that's intentional.
 - SHA-only Docker builds on every merge to `main` (publish workflows now
   trigger on `branches: [main]` in addition to release tags; a new
   `detect-changes` job filters per-project paths). Documented in
-  `docs/versioning.md` under "Pre-release SHA images". GHCR retention is
-  not configured here — GHCR has no native retention UI, so cleanup is a
-  future scheduled workflow using `actions/delete-package-versions`.
+  `docs/versioning.md` under "Pre-release SHA images".
+- `prune-ghcr.yml`: weekly scheduled workflow that deletes SHA-only GHCR
+  versions older than 30 days. Uses `gh api` + `jq` rather than
+  `actions/delete-package-versions` because the official action's
+  filters can't see container tags — it can only match on the digest
+  name. Release-tagged versions are protected by structure: the filter
+  requires *all* tags on a version to start with `sha-`, which release
+  versions never satisfy.
 
 ---
 

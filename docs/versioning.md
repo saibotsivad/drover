@@ -186,14 +186,22 @@ docker pull ghcr.io/<owner>/drover:sha-1a2b3c4
 
 Every project merge produces another manifest in GHCR. Layer reuse keeps
 the actual byte cost low, but the manifest count grows monotonically.
-GHCR has no native UI for image retention, so when this becomes a problem
-the cleanup is a separate scheduled workflow that calls
-`actions/delete-package-versions` to prune SHA-only images older than N
-days (or older than the last K versions). Release-tagged images should
-be excluded from any cleanup so the version history stays intact.
+GHCR has no native UI for image retention, so cleanup is itself a
+workflow: `prune-ghcr.yml` runs weekly and deletes SHA-only versions
+older than 30 days. Release-tagged versions are never touched, because
+the filter requires *every* tag on a version to start with `sha-` —
+release versions always carry at least one semver tag (`1.2.0`, `1.2`,
+`1`) alongside their SHA tag, so they fail that check.
 
-That cleanup workflow doesn't exist yet — add it when the SHA tag count
-gets unwieldy, not pre-emptively.
+The age cutoff and a dry-run mode are both available via
+`workflow_dispatch` if you want to manually run a tighter pruning or
+preview what would be deleted before flipping the cron to a shorter
+interval.
+
+The workflow uses `GITHUB_TOKEN` with `packages: write` permission. If
+deletion ever stops working — e.g. GitHub tightens defaults around
+package deletion — the fix is to mint a PAT with `delete:packages`,
+store it as a secret, and pass it as `GH_TOKEN` instead.
 
 ## Workflows
 
@@ -203,6 +211,7 @@ gets unwieldy, not pre-emptively.
 | `publish-release.yml` | `pull_request` `closed` where the head ref is `versioning` and `merged == true` | Diff the merge commit, push `<project>-v<version>` tags. |
 | `publish.yml` | `push` to `orchestrator-v*` / `builder-v*` tags **or** `push` to `main` touching `orchestrator/**` / `builder/**` | One detect job + two prefix-gated build jobs. Release tag → full version + SHA tags. Main push → SHA tag only. |
 | `publish-webapp.yml` | `push` to `webapp-v*` tags **or** `push` to `main` touching `webapp/**` | Same shape as `publish.yml`, single project. |
+| `prune-ghcr.yml` | Weekly cron (Mon 06:00 UTC) + `workflow_dispatch` | Delete SHA-only GHCR versions older than 30 days. Release versions are protected by their non-SHA tags. |
 
 The script lives at `scripts/update_release_pr.py` and only mutates files on
 disk plus emits the release-PR body to stdout — git operations are entirely
