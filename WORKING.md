@@ -13,17 +13,21 @@ Conventions:
 
 ## Phase 0 — Decisions to lock in
 
-- [ ] Confirm the set of versioned projects. Plan examples list `orchestrator`,
+- [x] Confirm the set of versioned projects. Plan examples list `orchestrator`,
       `builder`, `webapp`. Repo also contains `executor/` — decide whether it
       participates (own CHANGELOG + tag prefix) or is rolled into another
       project. Record the decision here:
-      - Decision: _TBD_
-- [ ] Confirm the release branch name. Plan says `release/next`; flag if a
+      - Decision: `builder`, `executor`, `orchestrator`, `webapp` all get
+        their own `CHANGELOG.yml` and tag prefix. `executor` is versioned but
+        is **not** published as a Docker image, so it has no publish workflow
+        in Phase 5 — its tags exist purely as a release record.
+- [x] Confirm the release branch name. Plan says `release/next`; flag if a
       different convention is preferred before workflows are written.
-      - Decision: _TBD_
-- [ ] Confirm tag format. Plan says `<project>-v<version>` (e.g.
+      - Decision: `versioning` (replaces `release/next` everywhere in this
+        checklist and in the implementation).
+- [x] Confirm tag format. Plan says `<project>-v<version>` (e.g.
       `orchestrator-v0.2.0`). Lock this before touching publish workflows.
-      - Decision: _TBD_
+      - Decision: confirmed — `<project>-v<version>`.
 
 ---
 
@@ -35,8 +39,9 @@ Conventions:
       change-file format with a minimal example. Link to
       `docs/planning/changeset-automation.md` for details.
 - [ ] Create initial `CHANGELOG.yml` in each versioned project directory,
-      seeded with `published: "0.0.0"` and an empty `changes: []` list. One
-      file per project decided in Phase 0.
+      seeded with `published: "0.0.0"` and an empty `changes: []` list. Files
+      to create: `builder/CHANGELOG.yml`, `executor/CHANGELOG.yml`,
+      `orchestrator/CHANGELOG.yml`, `webapp/CHANGELOG.yml`.
 - [ ] Add `PyYAML` to whichever requirements file the workflow runner will
       install from (likely a new `requirements-release.txt` to avoid bloating
       `requirements-test.txt`). Note the path here:
@@ -85,9 +90,9 @@ should be testable in isolation before moving on.
   - [ ] Configure `git` user (e.g. `github-actions[bot]`).
   - [ ] Run `scripts/update_release_pr.py`. If it reports "no change files",
         exit the job successfully without further steps.
-  - [ ] Create branch `release/next` from current `main` state, commit the
+  - [ ] Create branch `versioning` from current `main` state, commit the
         edits as a single commit, force-push.
-  - [ ] Use `gh pr view release/next` to detect existing PR; if missing,
+  - [ ] Use `gh pr view versioning` to detect existing PR; if missing,
         `gh pr create`; if present, `gh pr edit --body`. Title can be static
         (e.g. "Release: pending changes").
 - [ ] Verify the workflow file with `actionlint` (or visual review) before
@@ -99,7 +104,7 @@ should be testable in isolation before moving on.
 
 - [ ] Create `.github/workflows/publish-release.yml`.
 - [ ] Trigger: `pull_request` `closed`, gated by
-      `head.ref == 'release/next' && merged == true`.
+      `head.ref == 'versioning' && merged == true`.
 - [ ] Permissions: `contents: write` (to push tags).
 - [ ] Steps:
   - [ ] Checkout with `fetch-depth: 2` so `HEAD~1..HEAD` works.
@@ -118,6 +123,10 @@ should be testable in isolation before moving on.
 Both files currently trigger on `tags: "v*"`. They must be updated to listen
 for project-prefixed tags and to extract the bare semver via
 `docker/metadata-action`'s `type=match`.
+
+Note: `executor` is versioned but not published, so no publish workflow is
+created for it. `executor-v*` tags will be pushed by Workflow 2 and simply
+have no listener — that's intentional.
 
 - [ ] `.github/workflows/publish.yml`
   - [ ] Trigger split: this workflow currently builds two images
@@ -155,7 +164,7 @@ for project-prefixed tags and to extract the bare semver via
 
 - [ ] On a throwaway branch, drop a sample change file touching one project,
       open a PR, merge it, and confirm:
-  - [ ] `release/next` branch is created with the expected diff.
+  - [ ] `versioning` branch is created with the expected diff.
   - [ ] Release PR opens with the right body.
 - [ ] Add a second change file in a follow-up PR for a different project,
       merge it, and confirm the existing release PR is updated (single
