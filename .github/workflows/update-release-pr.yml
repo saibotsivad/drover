@@ -1,0 +1,83 @@
+name: Update release PR
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "changes/**"
+      - "scripts/update_release_pr.py"
+      - ".github/workflows/update-release-pr.yml"
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: update-release-pr
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install release requirements
+        run: pip install -r requirements-release.txt
+
+      - name: Configure git identity
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Process change files
+        id: process
+        run: |
+          set +e
+          python3 scripts/update_release_pr.py --pr-body-out /tmp/pr-body.md > /dev/null
+          status=$?
+          set -e
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          if [ "$status" -eq 0 ]; then
+            echo "has_changes=true"  >> "$GITHUB_OUTPUT"
+          elif [ "$status" -eq 2 ]; then
+            echo "has_changes=false" >> "$GITHUB_OUTPUT"
+          else
+            exit "$status"
+          fi
+
+      - name: Force-push versioning branch
+        if: steps.process.outputs.has_changes == 'true'
+        run: |
+          git checkout -B versioning
+          git add -A
+          git commit -m "Pending release: update CHANGELOG.yml files"
+          git push --force origin versioning
+
+      - name: Create or update release PR
+        if: steps.process.outputs.has_changes == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if gh pr view versioning --json number >/dev/null 2>&1; then
+            gh pr edit versioning --body-file /tmp/pr-body.md
+          else
+            gh pr create \
+              --base main \
+              --head versioning \
+              --title "Release: pending changes" \
+              --body-file /tmp/pr-body.md
+          fi
+
+      - name: No change files — skipping
+        if: steps.process.outputs.has_changes == 'false'
+        run: echo "No change files present; nothing to do."

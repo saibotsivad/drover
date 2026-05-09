@@ -308,6 +308,22 @@ pytest executor/tests/ -v -p no:asyncio -p no:anyio
 
 The `test.yml` GitHub Actions workflow runs both test suites on every PR, along with a Docker build and `/health` smoke test.
 
+## Releasing
+
+Versions are driven by human-authored change files dropped into `changes/`
+as part of any PR that should bump a project's version. See
+[`docs/versioning.md`](docs/versioning.md) for the full lifecycle and the
+[`changes/README.md`](changes/README.md) quick reference for the file format.
+
+The short version: add a YAML file under `changes/` describing which
+projects the PR affects and how (`major` / `minor` / `patch` plus a
+description). When the PR merges to `main`, an `update-release-pr` workflow
+rolls all pending bumps into a single "Release: pending changes" PR on the
+`versioning` branch. Merging that PR pushes per-project git tags
+(`<project>-v<version>`), which the existing publish workflows turn into
+unprefixed Docker tags on GHCR. `executor` is versioned but not published;
+its tags are a release record only.
+
 ## Open Issues
 
 See `TODO.md` for the full list of remaining work and open design decisions.

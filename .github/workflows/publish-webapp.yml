@@ -3,7 +3,7 @@ name: Publish webapp Docker image to GHCR
 on:
   push:
     tags:
-      - "v*"
+      - "webapp-v*"
 
 env:
   REGISTRY: ghcr.io
@@ -35,9 +35,9 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE }}
           tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=semver,pattern={{major}}
+            type=match,pattern=webapp-v(\d+\.\d+\.\d+),group=1
+            type=match,pattern=webapp-v(\d+\.\d+)\.\d+,group=1
+            type=match,pattern=webapp-v(\d+)\.\d+\.\d+,group=1
             type=sha
 
       - name: Set up Docker Buildx
