@@ -1,0 +1,107 @@
+name: PR changeset summary
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: pr-changeset-summary-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  comment:
+    if: github.event.pull_request.head.ref != 'versioning'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout PR head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install release requirements
+        run: pip install -r requirements-release.txt
+
+      - name: Build comment body
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          marker='<!-- changeset-summary-bot -->'
+          short_sha=$(echo "$HEAD_SHA" | cut -c1-7)
+          versioning_doc_url="https://github.com/${REPO}/blob/main/docs/versioning.md"
+
+          # Find change files added or modified in this PR (relative to base).
+          mapfile -t changed_files < <(
+            git diff --name-only --diff-filter=AM "origin/${BASE_REF}...HEAD" -- \
+              'changes/*.yaml' 'changes/*.yml'
+          )
+
+          {
+            printf '%s\n\n' "$marker"
+            if [ ${#changed_files[@]} -eq 0 ]; then
+              printf '### Changeset summary\n\n'
+              printf 'As of `%s`, this PR does not include a change file.\n\n' "$short_sha"
+              printf 'If this PR should bump a project version on release, drop a YAML file under `changes/` describing the change. See [`docs/versioning.md`](%s) for the format. Otherwise, no action needed.\n' "$versioning_doc_url"
+            elif python3 scripts/update_release_pr.py --dry-run --files "${changed_files[@]}" \
+                  > /tmp/summary.md 2> /tmp/error.log; then
+              printf '### Changeset summary\n\n'
+              printf 'As of `%s`, this PR proposes the following bumps (versions shown assume no other pending changesets land first):\n\n' "$short_sha"
+              cat /tmp/summary.md
+              printf '\n_Files:'
+              for f in "${changed_files[@]}"; do
+                printf ' `%s`' "$f"
+              done
+              printf '_\n'
+            else
+              printf '### Changeset summary\n\n'
+              printf ':warning: The change file(s) in this PR failed validation:\n\n'
+              printf '```\n'
+              cat /tmp/error.log
+              printf '```\n\n'
+              printf 'See [`docs/versioning.md`](%s) for the expected format.\n' "$versioning_doc_url"
+            fi
+          } > /tmp/comment.md
+
+          echo "--- comment body ---"
+          cat /tmp/comment.md
+
+      - name: Upsert sticky comment
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          marker='<!-- changeset-summary-bot -->'
+
+          existing=$(
+            gh api --paginate "repos/${REPO}/issues/${PR}/comments" \
+              --jq ".[] | select(.body | contains(\"${marker}\")) | .id" \
+              | head -n1
+          )
+
+          # Wrap the comment body in JSON via jq to handle escaping safely.
+          body_json=$(jq -Rs '{body: .}' < /tmp/comment.md)
+
+          if [ -n "$existing" ]; then
+            echo "Editing existing comment ${existing}"
+            echo "$body_json" | gh api -X PATCH \
+              "repos/${REPO}/issues/comments/${existing}" --input -
+          else
+            echo "Creating new comment"
+            echo "$body_json" | gh api -X POST \
+              "repos/${REPO}/issues/${PR}/comments" --input -
+          fi

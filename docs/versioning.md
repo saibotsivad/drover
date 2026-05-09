@@ -212,6 +212,7 @@ store it as a secret, and pass it as `GH_TOKEN` instead.
 | `publish.yml` | `push` to `orchestrator-v*` / `builder-v*` tags **or** `push` to `main` touching `orchestrator/**` / `builder/**` | One detect job + two prefix-gated build jobs. Release tag → full version + SHA tags. Main push → SHA tag only. |
 | `publish-webapp.yml` | `push` to `webapp-v*` tags **or** `push` to `main` touching `webapp/**` | Same shape as `publish.yml`, single project. |
 | `prune-ghcr.yml` | Weekly cron (Mon 06:00 UTC) + `workflow_dispatch` | Delete SHA-only GHCR versions older than 30 days. Release versions are protected by their non-SHA tags. |
+| `pr-changeset-summary.yml` | `pull_request` opened / synchronize / reopened / ready_for_review (skipped on the `versioning` branch) | Diff the PR against its base, render a summary of any change files it adds, upsert a sticky comment on the PR. If no change file is present, the comment points the contributor at this doc. |
 
 The script lives at `scripts/update_release_pr.py` and only mutates files on
 disk plus emits the release-PR body to stdout — git operations are entirely

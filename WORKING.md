@@ -190,6 +190,11 @@ have no listener — that's intentional.
 - [ ] Run `prune-ghcr.yml` once via `workflow_dispatch` with `dry-run: true`
       to confirm the selection only matches SHA-only versions and never
       release versions. Do this before the first scheduled run fires.
+- [ ] On a throwaway PR, confirm `pr-changeset-summary.yml` posts a sticky
+      comment in all three states: no change file (reminder), valid change
+      file (rendered summary), and intentionally-malformed change file
+      (validation error surfaced in the comment). Push another commit to
+      the PR and confirm the existing comment is *edited*, not duplicated.
 
 ---
 
@@ -206,6 +211,12 @@ have no listener — that's intentional.
   name. Release-tagged versions are protected by structure: the filter
   requires *all* tags on a version to start with `sha-`, which release
   versions never satisfy.
+- `pr-changeset-summary.yml`: posts (and re-edits) a sticky comment on
+  every non-`versioning` PR summarising the change files it adds,
+  reminding the contributor about versioning if there are none, or
+  surfacing validation errors if the change file is malformed. The
+  release script gained a `--files` flag for this purpose so the same
+  rendering code drives both the comment and the actual release PR.
 
 ---
 

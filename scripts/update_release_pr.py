@@ -97,21 +97,16 @@ def highest_bump(levels: Iterable[str]) -> str:
 # Change file loading
 # --------------------------------------------------------------------------- #
 
-def load_change_files(changes_dir: Path) -> list[tuple[Path, list[dict]]]:
-    """Return [(file_path, entries), ...] for every YAML file in changes_dir.
+def load_change_files(paths: Iterable[Path]) -> list[tuple[Path, list[dict]]]:
+    """Load and validate the given change files.
 
     Raises ChangeFileError if any file is malformed.
     """
-    if not changes_dir.is_dir():
-        return []
-
-    files = sorted(
-        path for path in changes_dir.iterdir()
-        if path.is_file() and path.suffix in (".yaml", ".yml")
-    )
-
     out: list[tuple[Path, list[dict]]] = []
-    for path in files:
+    for path in sorted(paths):
+        if not path.is_file():
+            raise ChangeFileError(f"{path}: file does not exist")
+
         try:
             raw = yaml.safe_load(path.read_text())
         except yaml.YAMLError as exc:
@@ -142,6 +137,16 @@ def load_change_files(changes_dir: Path) -> list[tuple[Path, list[dict]]]:
 
         out.append((path, raw))
     return out
+
+
+def discover_change_files(changes_dir: Path) -> list[Path]:
+    """Return every YAML file in changes_dir, or an empty list if missing."""
+    if not changes_dir.is_dir():
+        return []
+    return [
+        path for path in changes_dir.iterdir()
+        if path.is_file() and path.suffix in (".yaml", ".yml")
+    ]
 
 
 # --------------------------------------------------------------------------- #
@@ -262,13 +267,27 @@ def main(argv: list[str] | None = None) -> int:
         help="Override the date used for new changelog entries (YYYY-MM-DD). "
              "Defaults to today's UTC date.",
     )
+    parser.add_argument(
+        "--files",
+        nargs="+",
+        type=Path,
+        default=None,
+        help="Operate on exactly these change files instead of scanning "
+             "changes/. Implies --dry-run semantics for callers that want "
+             "rendering only — pair with --dry-run to suppress writes.",
+    )
     args = parser.parse_args(argv)
 
     repo_root: Path = args.repo_root.resolve()
     changes_dir = repo_root / "changes"
 
+    if args.files is not None:
+        paths = [p.resolve() for p in args.files]
+    else:
+        paths = discover_change_files(changes_dir)
+
     try:
-        files = load_change_files(changes_dir)
+        files = load_change_files(paths)
     except ChangeFileError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
