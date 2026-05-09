@@ -89,15 +89,17 @@ We deliberately do **not** invent a Drover-specific schema. The operator is welc
 ├── cnt_abc123/
 │   ├── 0.log
 │   ├── 1.log
-│   └── 2.log                             # current writer always highest-numbered
+│   ├── 2.log                             # current writer always highest-numbered
+│   └── .cursor                           # last-written timestamp for resume
 └── cnt_def456/
-    └── 0.log
+    ├── 0.log
+    └── .cursor
 ```
 
 - One directory per Drover container ID.
 - Numerical filenames so that `ls`, `cat *.log`, and log shippers can read in chronological order without parsing names.
 - Rotation by file size: when the current file exceeds `DROVER_LOG_MAX_FILE_BYTES` (default 10 MiB) on the next write, close it and open `{n+1}.log`.
-- Retention: indefinite by default.
+- Retention: indefinite until destroy.
 
 ### Lifecycle integration
 
@@ -143,13 +145,12 @@ Phase 2 of `websocket-streaming-plan.md` specifies this. The capture pipeline in
 
 ### Configuration
 
-Three new env vars, all optional:
+Two new env vars, all optional:
 
 | Variable | Default | Purpose |
 |---|---|---|
 | `DROVER_LOG_DIR` | _(unset; the sample compose stack sets it)_ | Root directory for captured micro-container logs. **When unset, Drover runs in capture-only mode**: the follow stream is opened (so live WebSocket tailing works) but nothing is written to disk and no retention is provided. When set, Drover-managed retention is enabled. |
 | `DROVER_LOG_MAX_FILE_BYTES` | `10485760` (10 MiB) | Rotate to a new file when this size is exceeded on the next write. Ignored when `DROVER_LOG_DIR` is unset. |
-| `DROVER_LOG_MAX_FILES_PER_CONTAINER` | `0` (unlimited) | If non-zero, oldest log files are deleted to keep the count at or below this limit. Ignored when `DROVER_LOG_DIR` is unset. |
 
 Mount: the sample `docker-compose.yml` ships with `DROVER_LOG_DIR=/var/lib/orchestrator/logs`, which lives inside the existing `drover-data` volume so logs survive orchestrator restarts without a second volume to manage. The compose file carries an inline comment noting that this roughly doubles per-container disk usage (Docker's own log driver also keeps a copy by default) and points the operator at `docs/observability.md` for guidance on disabling one or the other if disk is tight.
 
@@ -223,7 +224,7 @@ These are the choices baked into the plan that should drive lower-level decision
 
 3. **Retention is binary: kept until destroy, then gone.** When Drover-managed retention is enabled, no TTL, no time-based pruning by default. This matches user mental model: "the container exists → its logs exist." Time-based retention can be added later if requested without changing data layout. When retention is disabled (capture-only mode), Drover provides no retention guarantee at all and operators are expected to use Docker's log driver for that.
 
-4. **Rotation is by file size with a per-container file count cap, both opt-in.** Default is 10 MiB rotation, unlimited file count. Operators with bounded disk can set a cap. We do not implement compression; if disk pressure is a concern, the operator's log shipper can ship and drop, or they can mount the directory on compressed storage.
+4. **Rotation is by file size.** Default is 10 MiB per file. We do not implement compression; if disk pressure is a concern, the operator's log shipper can ship and drop, or they can mount the directory on compressed storage.
 
 5. **Resume semantics use Docker's `since=` parameter against a per-container `.cursor` file.** Avoids both gaps (after orchestrator restart) and duplicates (after orchestrator restart) within the precision Docker offers. If the cursor is corrupted or missing, we accept possible duplicates rather than possible gaps; logs are easier to dedupe than to recover.
 
@@ -251,7 +252,7 @@ Responsibilities:
 
 - For a given Drover container ID and Docker container ID, open and own the follow stream against Docker's logs API.
 - Parse the multiplexed Docker stream format (8-byte header `[stream_type][0][0][0][len:4]`, then `len` bytes of payload). Yield `(stream, data, time)` chunks.
-- Append each chunk as a JSON line to the current open log file. Rotate when size exceeds the configured threshold; prune when the file count cap is exceeded.
+- Append each chunk as a JSON line to the current open log file. Rotate when size exceeds the configured threshold.
 - On a persistent write error (e.g. `ENOSPC`), log one structured error to orchestrator stdout, set an internal `_disk_disabled = True` flag, and stop attempting writes for the rest of this orchestrator process's lifetime. The follow stream and any non-disk consumers continue to operate.
 - Update the in-memory `last_ts` and persist it to `.cursor` (atomic write: temp-file + rename, no fsync per write, fsync per rotation). Skipped when `_disk_disabled` is set.
 - Fan out parsed chunks to subscribers — this is where the WebSocket connection manager (from the WebSocket streaming plan) plugs in. The exact interface (queue, callback, observable) is shared with that plan; pick whichever shape that plan settles on.
@@ -261,7 +262,7 @@ A historical-query method (`read_range(container_id, since, until, limit, offset
 
 ### Changes to existing modules
 
-- **`orchestrator/config.py`:** add the three new env vars. `DROVER_LOG_DIR` is `Optional[str]`; the other two are read but unused when `DROVER_LOG_DIR` is `None`.
+- **`orchestrator/config.py`:** add the two new env vars. `DROVER_LOG_DIR` is `Optional[str]`; `DROVER_LOG_MAX_FILE_BYTES` is read but unused when `DROVER_LOG_DIR` is `None`.
 - **`orchestrator/docker_client.py`:** add `stream_container_logs(container_id, *, since: float | None, follow: bool, tail: int | None = None) -> AsyncIterator[bytes]` that opens the follow stream and yields raw bytes. The multiplex parsing belongs in `log_capture.py`, not here.
 - **`orchestrator/container_manager.py`:** call into `LogCaptureManager` from the lifecycle methods listed in the table above. The critical placement is inside `_init_container`: call `LogCaptureManager.start(container_id, docker_id)` immediately after `await self._docker.start_container(docker_id)` succeeds, *not* in `on_container_ready`. This is what gives us init-window log capture. On resume, pass the cursor; on stop, signal the writer to flush; on destroy and on `_fail_init`, signal the writer to close. The lifecycle calls happen unconditionally; the manager itself decides whether a disk writer is attached based on configuration.
 - **`orchestrator/routers/containers.py`:** **no changes in v1.** The existing `GET /containers/{id}/logs` continues to proxy Docker. The pagination follow-up plan owns the broadening.
@@ -276,7 +277,6 @@ A historical-query method (`read_range(container_id, since, until, limit, offset
 
 - Unit test the multiplex parser against synthetic Docker streams (interleaved stdout/stderr, partial frames spanning chunk boundaries, zero-length frames).
 - Unit test rotation: write past threshold, assert new file opens at next write.
-- Unit test cap: with `MAX_FILES_PER_CONTAINER=3`, rotate enough to trigger pruning, assert oldest is deleted.
 - Unit test cursor: write some chunks, simulate restart, assert resume uses the recorded `since`.
 - Unit test disk-full: arrange a writer to receive `ENOSPC` on its next write, assert one error log is emitted, assert subsequent writes are no-ops, assert the follow stream and any non-disk consumers continue to receive chunks.
 - Integration test against the orchestrator stack (similar to existing `tests/`): create container, run a chatty workload, stop, resume, read the captured files off disk, destroy, verify directory is gone.
@@ -297,7 +297,7 @@ Steps 1–2 are independently shippable and useful (operators get on-disk retent
 
 | Risk | Mitigation |
 |---|---|
-| Disk usage grows unboundedly for long-running noisy containers. | Rotation by size with optional file-count cap. Operator monitoring of `DROVER_LOG_DIR` is the safety net. Document expected disk usage in `docs/observability.md`. |
+| Disk usage grows unboundedly for long-running noisy containers. | Rotation by size keeps individual files bounded for shippers. Operator monitoring of `DROVER_LOG_DIR` is the safety net. Document expected disk usage in `docs/observability.md`. |
 | Disk fills up. | Single orchestrator-level error log on first failed write, then disk writes are disabled for the rest of the orchestrator process lifetime. The follow stream and WebSocket fan-out continue to operate so the operator can still live-tail the problem container. Recovery is "free up space, restart orchestrator." |
 | Orchestrator restart causes gap or duplication in captured logs. | `.cursor` file with `since=` resume. Documented behavior under crash recovery: prefer dupes to gaps. |
 | Docker daemon's own log driver buffer is smaller than our capture rate, so logs are lost before we read them. | We open a follow stream the moment Docker `start_container` returns; Docker streams in real time as long as the connection is held. The capture task is high-priority and not gated on anything else. If the asyncio event loop is blocked, both Drover and the WebSocket fan-out are equally affected — this is an orchestrator-health concern, not a logging concern. |
