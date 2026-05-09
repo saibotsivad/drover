@@ -2,8 +2,11 @@
 
 Drover ships several independently-versioned projects out of one repository.
 Versioning is driven entirely by human-authored YAML files — no `npm`, no
-Changesets CLI, no third-party release tool — and runs on two GitHub Actions
-workflows plus one Python script.
+Changesets CLI, no third-party release tool — and runs on a small set of
+GitHub Actions workflows plus one Python script. The high-level rationale
+for the tag scheme lives in
+[`docs/decisions/2026-05-09-versioning-tag-scheme.md`](decisions/2026-05-09-versioning-tag-scheme.md);
+this document is the operational reference.
 
 ## Versioned projects
 
@@ -28,13 +31,13 @@ PR with change file ──► merge to main ──► update-release-pr workflow
                                           merge release PR
                                                   │
                                                   ▼
-                                       publish-release workflow
+                                          push-tag workflow
                                                   │
                                                   ▼
                                   <project>-v<version> git tags pushed
                                                   │
                                                   ▼
-                              publish.yml / publish-webapp.yml build & sign
+                                       publish.yml builds & signs
                                                   │
                                                   ▼
                                   GHCR images tagged 1.2.0 / 1.2 / 1
@@ -49,13 +52,15 @@ PR with change file ──► merge to main ──► update-release-pr workflow
    to the `versioning` branch. It then creates or updates a "Release:
    pending changes" PR whose body summarises every pending bump grouped by
    project.
-3. **Merge the release PR.** The `publish-release` workflow diffs the merge
-   commit against its parent, finds every `*/CHANGELOG.yml` that changed,
-   reads each new `published` value, and pushes a git tag of the form
+3. **Merge the release PR.** The `push-tag` workflow diffs the merge commit
+   against its parent, finds every `*/CHANGELOG.yml` that changed, reads
+   each new `published` value, and pushes a git tag of the form
    `<project>-v<version>` (e.g. `orchestrator-v0.2.0`).
-4. **Publish.** Each prefixed tag is the trigger for the existing publish
-   workflow. The captured Docker tags are unprefixed (`0.2.0`, `0.2`, `0`,
-   plus `sha-<short>`) — only the git tags carry the project prefix.
+4. **Publish.** Each prefixed tag is the trigger for `publish.yml`. The
+   captured Docker tags are unprefixed (`0.2.0`, `0.2`, `0`, plus
+   `sha-<short>`) — only the git tags carry the project prefix. The
+   rationale for the dual-namespace scheme is in
+   [`docs/decisions/2026-05-09-versioning-tag-scheme.md`](decisions/2026-05-09-versioning-tag-scheme.md).
 
 A PR that doesn't include a change file is a no-op for releases.
 
@@ -208,9 +213,8 @@ store it as a secret, and pass it as `GH_TOKEN` instead.
 | Workflow | Trigger | Job |
 |---|---|---|
 | `update-release-pr.yml` | `push` to `main` (paths-filtered to `changes/**`, the script, and the workflow itself) | Run the script, force-push `versioning`, create or update the release PR. |
-| `publish-release.yml` | `pull_request` `closed` where the head ref is `versioning` and `merged == true` | Diff the merge commit, push `<project>-v<version>` tags. |
-| `publish.yml` | `push` to `orchestrator-v*` / `builder-v*` tags **or** `push` to `main` touching `orchestrator/**` / `builder/**` | One detect job + two prefix-gated build jobs. Release tag → full version + SHA tags. Main push → SHA tag only. |
-| `publish-webapp.yml` | `push` to `webapp-v*` tags **or** `push` to `main` touching `webapp/**` | Same shape as `publish.yml`, single project. |
+| `push-tag.yml` | `pull_request` `closed` where the head ref is `versioning` and `merged == true` | Diff the merge commit, push `<project>-v<version>` tags. |
+| `publish.yml` | `push` to any `<project>-v*` tag **or** `push` to `main` touching `<project>/**` | One `detect-changes` job feeds three prefix-gated build jobs (`publish-orchestrator`, `publish-builder`, `publish-webapp`). Release tag → full version + SHA tags. Main push → SHA tag only. |
 | `prune-ghcr.yml` | Weekly cron (Mon 06:00 UTC) + `workflow_dispatch` | Delete SHA-only GHCR versions older than 30 days. Release versions are protected by their non-SHA tags. |
 | `pr-changeset-summary.yml` | `pull_request` opened / synchronize / reopened / ready_for_review (skipped on the `versioning` branch) | Diff the PR against its base, render a summary of any change files it adds, upsert a sticky comment on the PR. If no change file is present, the comment points the contributor at this doc. |
 
@@ -250,7 +254,7 @@ fail validation in the script — that's intentional, it catches typos.
 - **Two PRs merge nearly simultaneously.** A concurrency group on
   `update-release-pr.yml` serializes the runs, so the second one always
   sees the first's results before computing the next state.
-- **A tag already exists when `publish-release` runs.** Skipped without
+- **A tag already exists when `push-tag` runs.** Skipped without
   error — the workflow is idempotent, so re-running on the same merge
   commit is safe.
 - **A change file references a project with no `CHANGELOG.yml`.** The
