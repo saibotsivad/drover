@@ -15,7 +15,3 @@ Docker container logs are fetched live from the Docker API and are lost once a c
 ## Container API data model refinement
 
 The Pydantic models in `models.py` cover the initial contract but will need adjustment to add pagination to container listings, richer error responses, and possibly additional metadata fields.
-
-## Verify GHCR publish workflow (manual)
-
-The `publish.yml` GitHub Actions workflow was written against the original stub Dockerfile. After the Dockerfile was replaced with the production multi-stage build, the workflow needs a manual end-to-end verification to confirm it still builds, tags, and pushes correctly. The `test.yml` workflow now builds the image and smoke-tests the `/health` endpoint on every PR, but `publish.yml` has not yet been validated end-to-end with a real tag push.
