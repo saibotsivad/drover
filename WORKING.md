@@ -51,26 +51,26 @@ Conventions:
 The single script invoked by Workflow 1. Build it incrementally; each bullet
 should be testable in isolation before moving on.
 
-- [ ] Module skeleton: argparse entry point, `main()`, and a `--dry-run` flag
+- [x] Module skeleton: argparse entry point, `main()`, and a `--dry-run` flag
       that prints planned actions without writing.
-- [ ] Loader: read every `*.yaml` / `*.yml` under `changes/`, parse, and
+- [x] Loader: read every `*.yaml` / `*.yml` under `changes/`, parse, and
       validate shape (top-level list; each entry has `project`, `bump`,
       `description`; `bump` ∈ {major, minor, patch}). Fail loudly with the
       offending file path on invalid input.
-- [ ] Grouping: bucket entries by project. Reject entries whose `project` does
+- [x] Grouping: bucket entries by project. Reject entries whose `project` does
       not correspond to an existing top-level directory containing a
       `CHANGELOG.yml`.
-- [ ] Version math: implement highest-bump-wins per project. Read current
+- [x] Version math: implement highest-bump-wins per project. Read current
       `published` from each affected `CHANGELOG.yml`; compute the next version.
       Helpers: `parse_semver`, `bump_semver(current, level)`.
-- [ ] Changelog writer: prepend a new entry to each affected `CHANGELOG.yml`
+- [x] Changelog writer: prepend a new entry to each affected `CHANGELOG.yml`
       with today's date (UTC) and update `published`. Preserve YAML block
       style and the `|` literal scalars on `description`.
-- [ ] PR-body builder: render the Markdown summary grouped by project in the
+- [x] PR-body builder: render the Markdown summary grouped by project in the
       exact format from the plan (heading per project with old → new and bump
       level; bullets per entry).
-- [ ] Cleanup: delete consumed files from `changes/`.
-- [ ] Local smoke test: hand-craft a couple of change files in a scratch dir,
+- [x] Cleanup: delete consumed files from `changes/`.
+- [x] Local smoke test: hand-craft a couple of change files in a scratch dir,
       run `--dry-run`, verify the planned bumps, PR body, and deletions.
 
 ---
