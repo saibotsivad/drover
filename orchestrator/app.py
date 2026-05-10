@@ -162,18 +162,51 @@ app.include_router(containers.router)
 @app.exception_handler(httpx.RequestError)
 async def _httpx_request_error(request: Request, exc: httpx.RequestError) -> JSONResponse:
     msg = str(exc)
-    logger.error("Docker daemon unreachable: %s", msg)
-    if "Permission denied" in msg:
+    config: Config = request.app.state.config
+    sock_path = config.docker_sock
+    logger.error("Docker daemon unreachable (%s): %s", sock_path, msg)
+
+    sock_hint = _docker_sock_hint(sock_path)
+    if sock_hint is not None:
+        detail = sock_hint
+    elif "Permission denied" in msg:
         detail = (
-            "Permission denied accessing the Docker socket. "
-            "Make sure /var/run/docker.sock is mounted into the orchestrator "
-            "container and that the orchestrator user can read/write it "
-            "(the entrypoint joins the socket's group automatically — check "
-            "that the socket is actually mounted)."
+            f"Permission denied accessing the Docker socket at {sock_path}. "
+            "The orchestrator user is not in the socket's group — the entrypoint "
+            "tries to join it automatically, so this usually means the socket "
+            "wasn't a socket when the container started."
         )
     else:
-        detail = f"Cannot reach the Docker daemon: {msg}"
+        detail = f"Cannot reach the Docker daemon at {sock_path}: {msg}"
     return JSONResponse(status_code=503, content={"detail": detail})
+
+
+def _docker_sock_hint(sock_path: str) -> str | None:
+    """Return a human-readable hint when *sock_path* isn't a usable socket."""
+    import os
+    import stat
+
+    try:
+        st = os.stat(sock_path)
+    except FileNotFoundError:
+        return (
+            f"The Docker socket at {sock_path} does not exist inside the "
+            "container. Check that the bind-mount is configured."
+        )
+    except OSError as exc:
+        return f"Cannot stat {sock_path}: {exc}"
+
+    if stat.S_ISSOCK(st.st_mode):
+        return None
+    if stat.S_ISDIR(st.st_mode):
+        return (
+            f"{sock_path} is a directory inside the container, not a socket. "
+            "Docker created it because the bind-mount source path does not "
+            "exist on the host. For rootless Docker the socket lives at "
+            "/run/user/$UID/docker.sock — set DOCKER_SOCK on the host (e.g. "
+            "DOCKER_SOCK=$XDG_RUNTIME_DIR/docker.sock) and recreate the stack."
+        )
+    return f"{sock_path} exists but is not a Unix socket (mode={oct(st.st_mode)})."
 
 
 @app.exception_handler(DockerError)

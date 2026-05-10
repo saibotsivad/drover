@@ -5,6 +5,16 @@
 # through the webapp (either its rendered pages or its /api/orchestrator/*
 # proxy). Set DROVER_API_KEY (in both services) before exposing the webapp
 # beyond a trusted LAN.
+#
+# Rootless Docker: the host socket lives at /run/user/$UID/docker.sock, not
+# /var/run/docker.sock. Either export DOCKER_SOCK before running compose:
+#
+#     export DOCKER_SOCK=$XDG_RUNTIME_DIR/docker.sock   # or /run/user/$(id -u)/docker.sock
+#     docker compose up
+#
+# or put it in a .env file next to this compose.yml. The orchestrator
+# entrypoint detects the socket's GID at runtime, so no further setup
+# is needed.
 
 services:
   orchestrator:
@@ -15,7 +25,7 @@ services:
     volumes:
       - drover-data:/var/lib/orchestrator
       - drover-sockets:/var/run/microcontainers
-      - /var/run/docker.sock:/var/run/docker.sock
+      - ${DOCKER_SOCK:-/var/run/docker.sock}:/var/run/docker.sock
     environment:
       DB_PATH: /var/lib/orchestrator/db.sqlite
       SOCKET_DIR: /var/run/microcontainers

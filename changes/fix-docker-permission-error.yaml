@@ -6,7 +6,10 @@
     user to the socket's group at runtime, then drops privileges via `gosu`.
     Also adds FastAPI exception handlers for `httpx.RequestError` and
     `DockerError` so socket / Docker failures surface as 503/502 responses
-    with a useful `detail` body instead of a bare 500.
+    with a useful `detail` body instead of a bare 500. The 503 response
+    detects the rootless-Docker case (host socket missing → bind-mount becomes
+    an empty directory inside the container) and tells the user to set
+    `DOCKER_SOCK` to their `$XDG_RUNTIME_DIR/docker.sock`.
 - project: webapp
   bump: patch
   description: |
