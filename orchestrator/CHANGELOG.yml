@@ -1,5 +1,10 @@
-published: 0.0.3
+published: 0.0.4
 changes:
+- version: 0.0.4
+  date: '2026-05-10'
+  entries:
+  - bump: patch
+    description: "Continued release testing. \n"
 - version: 0.0.3
   date: '2026-05-09'
   entries:
