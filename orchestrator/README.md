@@ -67,6 +67,8 @@ Three mounts are required for the orchestrator to function:
 | `/var/run/microcontainers/` | `/var/run/microcontainers/` | Shared directory for per-container Unix sockets. Must also be mounted into each micro-container image. |
 | `/var/lib/orchestrator/db.sqlite` | `/var/lib/orchestrator/db.sqlite` | Persistent SQLite database. The file must exist on the host before starting. |
 
+The container entrypoint runs as root just long enough to detect the GID of the mounted `docker.sock`, add the `orchestrator` user to a group with that GID, and then drops privileges via `gosu`. This works for both rootful Docker (socket owned by `root:docker`) and rootless Docker (socket owned by the invoking user) without baking a GID into the image.
+
 A minimal `docker-compose.yml` is provided in the [repo root](../docker-compose.yml).
 
 ## API reference

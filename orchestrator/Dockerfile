@@ -9,6 +9,12 @@ RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
 
 FROM python:3.12-slim
 
+# gosu lets the entrypoint start as root, adjust the docker.sock group, then
+# drop privileges to the orchestrator user before exec'ing the server.
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends gosu && \
+    rm -rf /var/lib/apt/lists/*
+
 # Copy installed Python packages from builder
 COPY --from=builder /install /usr/local
 
@@ -20,9 +26,9 @@ RUN groupadd -g 1000 orchestrator && \
 
 WORKDIR /app
 COPY . ./orchestrator/
-
-USER 1000
+RUN chmod +x /app/orchestrator/entrypoint.sh
 
 EXPOSE 8000
 
+ENTRYPOINT ["/app/orchestrator/entrypoint.sh"]
 CMD ["uvicorn", "orchestrator.app:app", "--host", "0.0.0.0", "--port", "8000"]
