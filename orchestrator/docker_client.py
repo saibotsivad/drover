@@ -44,7 +44,7 @@ class DockerClient:
     def __init__(self, config: Config) -> None:
         self._client = httpx.AsyncClient(
             transport=httpx.AsyncHTTPTransport(uds=config.docker_sock),
-            base_url="http://docker/v1.43",
+            base_url="http://docker/v1.44",
             timeout=httpx.Timeout(30.0, connect=5.0),
         )
 
