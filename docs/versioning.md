@@ -25,8 +25,7 @@ flowchart TD
     vbr --> mergeRelease["Merge release PR"]
     mergeRelease --> pt(["push-tag workflow"])
     pt --> tags["&lt;project&gt;-v&lt;version&gt; git tags pushed"]
-    tags --> pw(["publish.yml builds and signs"])
-    pw --> ghcr["GHCR images tagged 1.2.0 / 1.2 / 1"]
+    pt --> ghcr["GHCR images tagged 1.2.0 / 1.2 / 1"]
 ```
 
 1. **Contributor PR.** Whoever is making the change drops a YAML file under
@@ -42,9 +41,18 @@ flowchart TD
    against its parent, finds every `*/CHANGELOG.yml` that changed, reads
    each new `published` value, and pushes a git tag of the form
    `<project>-v<version>` (e.g. `orchestrator-v0.2.0`).
-4. **Publish.** Each prefixed tag is the trigger for `publish.yml`. The
-   captured Docker tags are unprefixed (`0.2.0`, `0.2`, `0`, plus
-   `sha-<short>`) — only the git tags carry the project prefix.
+4. **Publish.** The same `push-tag` workflow then calls the reusable
+   `publish-image.yml` once per affected project, passing the bare
+   semver as input. Each call builds, pushes, and cosign-signs the
+   image. The captured Docker tags are unprefixed (`0.2.0`, `0.2`, `0`,
+   plus `sha-<short>`) — only the git tags carry the project prefix.
+
+Tagging and publishing live in the same workflow run intentionally:
+GitHub Actions does not fire downstream workflows from events created by
+the default `GITHUB_TOKEN`, so a tag-push trigger on `publish.yml` would
+never run. Driving the publish directly from the workflow that created
+the tag avoids that dead-trigger trap and keeps the whole release in one
+log.
 
 A PR that doesn't include a change file is a no-op for releases.
 
@@ -149,15 +157,19 @@ What gets tagged on each kind of trigger:
 
 | Trigger | Docker tags produced |
 |---|---|
-| `<project>-v<X.Y.Z>` git tag (release) | `X.Y.Z`, `X.Y`, `X`, `sha-<short>` |
+| Versioning PR merged (per affected project) | `X.Y.Z`, `X.Y`, `X`, `latest`, `sha-<short>` |
 | Push to `main` touching `<project>/` | `sha-<short>` only |
 
-The version-extracting `type=match` patterns in the publish workflows are
-anchored to the project-prefixed tag format, so on a branch push they all
-silently produce nothing — only `type=sha` fires. That means a SHA-only
-build cannot accidentally claim the floating `X.Y` or `X` Docker tags;
-consumers pinned to those shorthands can never be pulled forward to an
-unreleased commit.
+The reusable `publish-image.yml` takes a `version` input. The
+`push-tag` workflow populates it from `CHANGELOG.yml`'s `published`
+field; `publish.yml` (the SHA-only path on `main`) leaves it empty.
+The metadata-action's `type=semver` rules are gated on
+`enable=${{ inputs.version != '' }}`, so on a branch push none of them
+fire — only `type=sha` does. That means a SHA-only build cannot
+accidentally claim the floating `X.Y` or `X` Docker tags; consumers
+pinned to those shorthands can never be pulled forward to an unreleased
+commit. The guarantee is structural (the empty-string gate) rather
+than relying on regex anchors against the git ref.
 
 Cosign signing runs identically for both kinds of build, so any image in
 GHCR — release or SHA-only — is verifiable with the same policy.
@@ -197,8 +209,9 @@ store it as a secret, and pass it as `GH_TOKEN` instead.
 | Workflow | Trigger | Job |
 |---|---|---|
 | `update-release-pr.yml` | `push` to `main` (paths-filtered to `changes/**`, the script, and the workflow itself) | Run the script, force-push `versioning`, create or update the release PR. |
-| `push-tag.yml` | `pull_request` `closed` where the head ref is `versioning` and `merged == true` | Diff the merge commit, push `<project>-v<version>` tags. |
-| `publish.yml` | `push` to any `<project>-v*` tag **or** `push` to `main` touching `<project>/**` | One `detect-changes` job feeds three prefix-gated build jobs (`publish-orchestrator`, `publish-builder`, `publish-webapp`). Release tag → full version + SHA tags. Main push → SHA tag only. |
+| `push-tag.yml` | `pull_request` `closed` where the head ref is `versioning` and `merged == true` (also `workflow_dispatch` for manual re-publish of an existing version) | A `detect` job diffs the merge commit, pushes `<project>-v<version>` tags, and emits per-project versions. Three downstream jobs `uses:` `publish-image.yml` to build, push, and cosign-sign each image with full version tags. |
+| `publish.yml` | `push` to `main` touching `<project>/**` | A `detect-changes` job feeds three jobs that `uses:` `publish-image.yml` with no version input — only the `sha-<short>` tag is emitted. |
+| `publish-image.yml` | `workflow_call` only | Reusable building block: log into GHCR, run `docker/metadata-action`, build/push, cosign-sign. Inputs: `image_suffix`, `context`, `version`, `mark_latest`. |
 | `prune-ghcr.yml` | Weekly cron (Mon 06:00 UTC) + `workflow_dispatch` | Delete SHA-only GHCR versions older than 30 days. Release versions are protected by their non-SHA tags. |
 | `pr-changeset-summary.yml` | `pull_request` opened / synchronize / reopened / ready_for_review (skipped on the `versioning` branch) | Diff the PR against its base, render a summary of any change files it adds, upsert a sticky comment on the PR. If no change file is present, the comment points the contributor at this doc. |
 
@@ -214,15 +227,18 @@ in the workflow YAML.
    published: "0.0.0"
    changes: []
    ```
-3. Decide whether the project is published as a Docker image. If yes, add a
-   prefix-gated job to `publish.yml` (or a new dedicated workflow file)
-   matching the existing `publish-orchestrator` / `publish-builder`
-   templates: trigger on `<project>-v*`, three `type=match` patterns for the
-   metadata extraction, cosign sign step. Also extend the `detect-changes`
-   job to output a flag for the new project so SHA-only builds fire on
-   relevant `main` pushes. If the project is **not** published (like
-   `executor`), do nothing else — the tags will fire harmlessly with no
-   listener.
+3. Decide whether the project is published as a Docker image. If yes:
+   - Add a per-project case to the `scan` step in `push-tag.yml`,
+     extend its outputs with `<project>_version`, and add a
+     `publish-<project>` job that `uses:` `publish-image.yml` with the
+     right `image_suffix` and `context` (mirror `publish-webapp`).
+   - Add the matching `publish-<project>` job to `publish.yml` and
+     extend its `detect-changes` outputs so SHA-only builds fire on
+     relevant `main` pushes.
+
+   If the project is **not** published (like `executor`), do nothing
+   else — the tag still gets created by the `scan` step's default
+   case, and no image build is triggered.
 
 Until step 2 lands on `main`, change files referencing the new project will
 fail validation in the script — that's intentional, it catches typos.

@@ -84,3 +84,28 @@ it before it reaches the Docker registry.
   legible to its own users.
 - The full lifecycle, the change-file format, and the workflow file
   layout are documented in [`docs/versioning.md`](../versioning.md).
+
+## Addendum (2026-05-10): tag is no longer the publish trigger
+
+The original implementation hung publish off the `<project>-v*` tag
+push. That trigger never fires in practice: GitHub Actions deliberately
+suppresses workflow runs for events created by the default
+`GITHUB_TOKEN`, and `push-tag.yml`'s checkout step uses exactly that
+token. Tags landed on the remote, but `publish.yml` stayed silent.
+
+The fix keeps the tag scheme above unchanged — git tags are still
+`<project>-v<MAJOR.MINOR.PATCH>`, Docker tags are still bare semver —
+but moves the publish step into `push-tag.yml` itself. After pushing
+the tag, `push-tag.yml` calls a new reusable workflow,
+`publish-image.yml`, with the bare semver passed in as input. The
+`docker/metadata-action` step now uses `type=semver` rules gated on
+`enable=${{ inputs.version != '' }}` rather than `type=match` against
+the git ref.
+
+The safety property the original ADR called "structural" still holds,
+just rephrased: only `push-tag.yml`'s scan of `CHANGELOG.yml` files can
+populate a non-empty `version` input. `publish.yml`'s SHA-only path on
+`main` always passes `version: ""`, so its semver rules never fire and
+a SHA-only build cannot promote `:1.2` or `:1`. The guard moved from a
+ref-anchored regex to an empty-string gate, but it remains
+unbypassable from a branch push.

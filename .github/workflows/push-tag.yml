@@ -1,21 +1,41 @@
-name: Push tag
+name: Tag and publish
 
 on:
   pull_request:
     types: [closed]
+  workflow_dispatch:
+    inputs:
+      project:
+        description: "Project to re-publish"
+        required: true
+        type: choice
+        options:
+          - orchestrator
+          - builder
+          - webapp
+      version:
+        description: "Version to publish (e.g. 1.2.3). Tag must already exist."
+        required: true
+        type: string
 
 permissions:
   contents: write
 
 jobs:
-  tag:
-    if: github.event.pull_request.merged == true && github.event.pull_request.head.ref == 'versioning'
+  detect:
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.pull_request.merged == true && github.event.pull_request.head.ref == 'versioning')
     runs-on: ubuntu-latest
+    outputs:
+      orchestrator_version: ${{ steps.scan.outputs.orchestrator_version }}
+      builder_version:      ${{ steps.scan.outputs.builder_version }}
+      webapp_version:       ${{ steps.scan.outputs.webapp_version }}
     steps:
       - name: Checkout merge commit
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.merge_commit_sha }}
+          ref: ${{ github.event.pull_request.merge_commit_sha || github.sha }}
           fetch-depth: 2
 
       - name: Set up Python
@@ -31,23 +51,89 @@ jobs:
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-      - name: Tag each project whose CHANGELOG.yml changed
+      - name: Scan changed CHANGELOG.yml files, push tags, emit versions
+        id: scan
         run: |
           set -euo pipefail
-          changed=$(git diff --name-only HEAD~1 HEAD -- '*/CHANGELOG.yml' || true)
-          if [ -z "$changed" ]; then
-            echo "No CHANGELOG.yml changes in this merge; nothing to tag."
-            exit 0
-          fi
-          while IFS= read -r path; do
-            project=$(dirname "$path")
-            version=$(python3 -c "import sys, yaml; print(yaml.safe_load(open(sys.argv[1]))['published'])" "$path")
-            tag="${project}-v${version}"
-            if git rev-parse -q --verify "refs/tags/${tag}" >/dev/null; then
-              echo "Tag ${tag} already exists; skipping."
-              continue
+          orchestrator_version=""
+          builder_version=""
+          webapp_version=""
+
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            case "${{ inputs.project }}" in
+              orchestrator) orchestrator_version="${{ inputs.version }}" ;;
+              builder)      builder_version="${{ inputs.version }}" ;;
+              webapp)       webapp_version="${{ inputs.version }}" ;;
+            esac
+          else
+            changed=$(git diff --name-only HEAD~1 HEAD -- '*/CHANGELOG.yml' || true)
+            if [ -n "$changed" ]; then
+              while IFS= read -r path; do
+                project=$(dirname "$path")
+                version=$(python3 -c "import sys, yaml; print(yaml.safe_load(open(sys.argv[1]))['published'])" "$path")
+                case "$project" in
+                  orchestrator) orchestrator_version="$version" ;;
+                  builder)      builder_version="$version" ;;
+                  webapp)       webapp_version="$version" ;;
+                  *)            echo "No publish target for project '$project'; only the git tag will be created." ;;
+                esac
+                tag="${project}-v${version}"
+                if git rev-parse -q --verify "refs/tags/${tag}" >/dev/null; then
+                  echo "Tag ${tag} already exists; skipping tag push."
+                else
+                  echo "Creating tag ${tag}"
+                  git tag -a "$tag" -m "${project} ${version}"
+                  git push origin "$tag"
+                fi
+              done <<< "$changed"
             fi
-            echo "Creating tag ${tag}"
-            git tag -a "$tag" -m "${project} ${version}"
-            git push origin "$tag"
-          done <<< "$changed"
+          fi
+
+          echo "orchestrator_version=$orchestrator_version" >> "$GITHUB_OUTPUT"
+          echo "builder_version=$builder_version"           >> "$GITHUB_OUTPUT"
+          echo "webapp_version=$webapp_version"             >> "$GITHUB_OUTPUT"
+
+  publish-orchestrator:
+    needs: detect
+    if: needs.detect.outputs.orchestrator_version != ''
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    uses: ./.github/workflows/publish-image.yml
+    with:
+      image_suffix: ""
+      context: ./orchestrator
+      version: ${{ needs.detect.outputs.orchestrator_version }}
+      mark_latest: true
+
+  publish-builder:
+    needs: detect
+    if: needs.detect.outputs.builder_version != ''
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    uses: ./.github/workflows/publish-image.yml
+    with:
+      image_suffix: "-builder"
+      context: ./builder
+      version: ${{ needs.detect.outputs.builder_version }}
+      mark_latest: true
+
+  publish-webapp:
+    needs: detect
+    if: needs.detect.outputs.webapp_version != ''
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    uses: ./.github/workflows/publish-image.yml
+    with:
+      image_suffix: "-webapp"
+      context: ./webapp
+      version: ${{ needs.detect.outputs.webapp_version }}
+      mark_latest: true
