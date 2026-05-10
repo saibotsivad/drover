@@ -1,5 +1,16 @@
-published: 0.0.4
+published: 0.0.5
 changes:
+- version: 0.0.5
+  date: '2026-05-10'
+  entries:
+  - bump: patch
+    description: |
+      Fix `Permission denied` when the orchestrator container connects to the
+      Docker socket. The entrypoint now starts as root, joins the `orchestrator`
+      user to the socket's group at runtime, then drops privileges via `gosu`.
+      Also adds FastAPI exception handlers for `httpx.RequestError` and
+      `DockerError` so socket / Docker failures surface as 503/502 responses
+      with a useful `detail` body instead of a bare 500.
 - version: 0.0.4
   date: '2026-05-10'
   entries:
