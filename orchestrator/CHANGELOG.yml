@@ -1,5 +1,11 @@
-published: 0.0.6
+published: 0.0.7
 changes:
+- version: 0.0.7
+  date: '2026-05-10'
+  entries:
+  - bump: patch
+    description: |
+      Bump the Docker API version.
 - version: 0.0.6
   date: '2026-05-10'
   entries:
