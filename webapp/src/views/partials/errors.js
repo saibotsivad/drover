@@ -17,6 +17,8 @@ export function describeOrchestratorError(err) {
 		if (err.status === 401) return { status: 401, title: 'Unauthorized', detail: 'The orchestrator rejected the request. Check that DROVER_API_KEY matches the orchestrator.' };
 		if (err.status === 404) return { status: 404, title: 'Not found', detail: detail || 'The orchestrator did not find the requested resource.' };
 		if (err.status === 422) return { status: 422, title: 'Invalid request', detail: detail || 'The orchestrator rejected the request as invalid.' };
+		if (err.status === 502) return { status: 502, title: 'Docker backend error', detail: detail || 'The orchestrator could not talk to the Docker daemon.' };
+		if (err.status === 503) return { status: 503, title: 'Docker backend unavailable', detail: detail || 'The orchestrator could not reach the Docker daemon.' };
 		return { status: err.status, title: `Orchestrator error (HTTP ${err.status})`, detail };
 	}
 	return { status: 500, title: 'Unexpected error', detail: err?.message ?? null };

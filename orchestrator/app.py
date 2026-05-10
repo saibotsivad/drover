@@ -5,8 +5,9 @@ import time
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
+import httpx
 from fastapi import FastAPI, Request
-from starlette.responses import Response
+from starlette.responses import JSONResponse, Response
 
 from orchestrator.auth import auth_middleware
 from orchestrator.config import Config, load_config
@@ -16,7 +17,7 @@ from orchestrator.container_manager import (
     ContainerStateConflict,
 )
 from orchestrator.database import Database
-from orchestrator.docker_client import DockerClient
+from orchestrator.docker_client import DockerClient, DockerError
 from orchestrator.routers import containers, images
 from orchestrator.socket_manager import SocketManager
 
@@ -156,6 +157,32 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Drover Orchestrator", lifespan=lifespan)
 app.include_router(images.router)
 app.include_router(containers.router)
+
+
+@app.exception_handler(httpx.RequestError)
+async def _httpx_request_error(request: Request, exc: httpx.RequestError) -> JSONResponse:
+    msg = str(exc)
+    logger.error("Docker daemon unreachable: %s", msg)
+    if "Permission denied" in msg:
+        detail = (
+            "Permission denied accessing the Docker socket. "
+            "Make sure /var/run/docker.sock is mounted into the orchestrator "
+            "container and that the orchestrator user can read/write it "
+            "(the entrypoint joins the socket's group automatically — check "
+            "that the socket is actually mounted)."
+        )
+    else:
+        detail = f"Cannot reach the Docker daemon: {msg}"
+    return JSONResponse(status_code=503, content={"detail": detail})
+
+
+@app.exception_handler(DockerError)
+async def _docker_error(request: Request, exc: DockerError) -> JSONResponse:
+    logger.warning("Docker API error: %s", exc)
+    return JSONResponse(
+        status_code=502,
+        content={"detail": f"Docker API error ({exc.status_code}): {exc.message}"},
+    )
 
 
 @app.middleware("http")
