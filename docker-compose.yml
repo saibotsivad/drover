@@ -29,7 +29,7 @@ services:
     networks: [drover]
     depends_on: [orchestrator]
     ports:
-      - "8080:8080"
+      - "9091:8080"
     environment:
       DROVER_ORCHESTRATOR_URL: http://orchestrator:8000
       LOG_LEVEL: info
