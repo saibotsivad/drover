@@ -1,5 +1,13 @@
-published: 0.0.4
+published: 0.0.5
 changes:
+- version: 0.0.5
+  date: '2026-05-10'
+  entries:
+  - bump: patch
+    description: |
+      Render friendlier titles for orchestrator 502 / 503 responses
+      ("Docker backend error" / "Docker backend unavailable") instead of the
+      generic "Orchestrator error (HTTP …)".
 - version: 0.0.4
   date: '2026-05-10'
   entries:
