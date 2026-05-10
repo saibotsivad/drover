@@ -1,0 +1,15 @@
+- project: orchestrator
+  bump: patch
+  description: |
+    Handle the rootless-Docker case where `/var/run/docker.sock` doesn't
+    exist on the host. Docker silently materialises the missing source path
+    as an empty directory inside the container, so the previous fix saw a
+    non-socket and the call failed with EACCES.
+
+    The entrypoint now distinguishes "missing path", "directory" and
+    "non-socket" cases at startup and prints a hint pointing rootless users
+    at `$XDG_RUNTIME_DIR/docker.sock`. The 503 response body from the
+    Docker exception handler stats the configured socket and includes the
+    same hint, so it shows up in the webapp UI. `docker-compose.yml` now
+    bind-mounts `${DOCKER_SOCK:-/var/run/docker.sock}` and documents the
+    rootless override inline.
