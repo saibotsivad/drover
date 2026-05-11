@@ -9,10 +9,14 @@ function formatSize(bytes) {
 }
 
 function imageRow(image) {
+	const labelEntries = image.labels ? Object.entries(image.labels) : [];
 	return html`<tr>
 		<td><code>${image.name}</code></td>
 		<td>${image.tags && image.tags.length
 			? image.tags.map((t) => html`<code class="tag">${t}</code>`)
+			: html`<span class="muted">—</span>`}</td>
+		<td>${labelEntries.length
+			? labelEntries.map(([k, v]) => html`<code class="tag">${k}=${v}</code>`)
 			: html`<span class="muted">—</span>`}</td>
 		<td>${formatSize(image.size)}</td>
 		<td><time datetime="${image.created}">${image.created}</time></td>
@@ -29,12 +33,13 @@ export function imagesListPage(images) {
 				<tr>
 					<th>Name</th>
 					<th>Tags</th>
+					<th>Labels</th>
 					<th>Size</th>
 					<th>Created</th>
 				</tr>
 			</thead>
 			<tbody>${images.length === 0
-				? html`<tr class="empty"><td colspan="4">No Drover-managed images. Add the <code>drover.managed=true</code> and <code>drover.name=&lt;name&gt;</code> labels to an image to make it visible here.</td></tr>`
+				? html`<tr class="empty"><td colspan="5">No Drover-managed images. Add the <code>drover.managed=true</code> and <code>drover.name=&lt;name&gt;</code> labels to an image to make it visible here.</td></tr>`
 				: images.map(imageRow)}</tbody>
 		</table>
 	</section>`;

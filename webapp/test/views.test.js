@@ -60,8 +60,20 @@ const SAMPLE_CONTAINERS = [
 ];
 
 const SAMPLE_IMAGES = [
-	{ name: 'python-runner', tags: ['latest', '3.12'], size: 200_000_000, created: '2026-04-01T00:00:00Z' },
-	{ name: 'node-runner', tags: ['latest'], size: 150_000_000, created: '2026-04-02T00:00:00Z' },
+	{
+		name: 'python-runner',
+		tags: ['latest', '3.12'],
+		labels: { 'drover.managed': 'true', 'drover.name': 'python-runner' },
+		size: 200_000_000,
+		created: '2026-04-01T00:00:00Z',
+	},
+	{
+		name: 'node-runner',
+		tags: ['latest'],
+		labels: { 'drover.managed': 'true', 'drover.name': 'node-runner' },
+		size: 150_000_000,
+		created: '2026-04-02T00:00:00Z',
+	},
 ];
 
 // --- /views/containers ----------------------------------------------------
@@ -172,6 +184,8 @@ test('GET /views/images renders the image list', async () => {
 		const text = await res.text();
 		assert.match(text, /python-runner/);
 		assert.match(text, /node-runner/);
+		assert.match(text, /drover\.managed=true/);
+		assert.match(text, /drover\.name=python-runner/);
 	} finally {
 		await close();
 	}

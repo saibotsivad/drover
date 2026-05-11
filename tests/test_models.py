@@ -181,6 +181,10 @@ class TestImageSummary:
         summary = ImageSummary.from_docker(data)
         assert summary.name == "python-runner"
         assert summary.tags == ["latest", "1.0"]
+        assert summary.labels == {
+            "drover.managed": "true",
+            "drover.name": "python-runner",
+        }
         assert summary.size == 123456
 
     def test_from_docker_no_tags(self):
@@ -193,6 +197,10 @@ class TestImageSummary:
         summary = ImageSummary.from_docker(data)
         assert summary.name == "python-runner"
         assert summary.tags == []
+        assert summary.labels == {
+            "drover.managed": "true",
+            "drover.name": "python-runner",
+        }
 
     def test_from_docker_missing_labels(self):
         """An image without the drover.name label yields an empty name."""
@@ -205,6 +213,28 @@ class TestImageSummary:
         summary = ImageSummary.from_docker(data)
         assert summary.name == ""
         assert summary.tags == ["latest"]
+        assert summary.labels == {}
+
+    def test_from_docker_filters_non_drover_labels(self):
+        """Non-drover labels (e.g. OCI image labels) are not exposed."""
+        data = {
+            "RepoTags": [],
+            "Labels": {
+                "drover.managed": "true",
+                "drover.name": "python-runner",
+                "drover.template": "true",
+                "org.opencontainers.image.source": "https://example.com/repo",
+                "maintainer": "ops@example.com",
+            },
+            "Size": 0,
+            "Created": 1700000000,
+        }
+        summary = ImageSummary.from_docker(data)
+        assert summary.labels == {
+            "drover.managed": "true",
+            "drover.name": "python-runner",
+            "drover.template": "true",
+        }
 
 
 class TestImageDetail:
@@ -226,6 +256,10 @@ class TestImageDetail:
         assert detail.architecture == "amd64"
         assert detail.os == "linux"
         assert detail.tags == ["latest"]
+        assert detail.labels == {
+            "drover.managed": "true",
+            "drover.name": "python-runner",
+        }
 
     def test_from_docker_inspect_no_config(self):
         """Defensive: an inspect payload missing Config still parses."""
@@ -238,6 +272,7 @@ class TestImageDetail:
         detail = ImageDetail.from_docker_inspect(data)
         assert detail.name == ""
         assert detail.tags == []
+        assert detail.labels == {}
 
 
 class TestContainerStatus:

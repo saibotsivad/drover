@@ -140,23 +140,24 @@ class ExecStatusResponse(BaseModel):
 class ImageSummary(BaseModel):
     name: str
     tags: list[str]
+    labels: dict[str, str] = Field(default_factory=dict)
     size: int
     created: datetime
 
     @classmethod
     def from_docker(cls, data: dict) -> "ImageSummary":
-        # Drover-managed images carry the short name in the ``drover.name``
-        # label; tags are informational only.
-        labels = data.get("Labels") or {}
-        name = labels.get("drover.name", "")
+        # Identity comes from the ``drover.*`` label set; ``RepoTags`` is
+        # surfaced as informational metadata only.
+        labels = _drover_labels(data.get("Labels"))
         tags = []
         for tag in data.get("RepoTags") or []:
             _, _, t = tag.partition(":")
             if t:
                 tags.append(t)
         return cls(
-            name=name,
+            name=labels.get("drover.name", ""),
             tags=tags,
+            labels=labels,
             size=data.get("Size", 0),
             created=datetime.fromtimestamp(data["Created"]),
         )
@@ -169,19 +170,31 @@ class ImageDetail(ImageSummary):
 
     @classmethod
     def from_docker_inspect(cls, data: dict) -> "ImageDetail":
-        labels = (data.get("Config") or {}).get("Labels") or {}
-        name = labels.get("drover.name", "")
+        labels = _drover_labels((data.get("Config") or {}).get("Labels"))
         tags = []
         for tag in data.get("RepoTags") or []:
             _, _, t = tag.partition(":")
             if t:
                 tags.append(t)
         return cls(
-            name=name,
+            name=labels.get("drover.name", ""),
             tags=tags,
+            labels=labels,
             size=data.get("Size", 0),
             created=datetime.fromisoformat(data["Created"]),
             id=data["Id"],
             architecture=data.get("Architecture"),
             os=data.get("Os"),
         )
+
+
+def _drover_labels(raw: dict | None) -> dict[str, str]:
+    """Return only the ``drover.*`` labels from a Docker label dict.
+
+    Filters non-Drover labels so the response doesn't leak unrelated
+    operator-defined metadata (e.g. org.opencontainers, vendor-specific
+    tooling) that has no meaning to Drover callers.
+    """
+    if not raw:
+        return {}
+    return {k: v for k, v in raw.items() if k.startswith("drover.")}

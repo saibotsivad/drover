@@ -149,7 +149,7 @@ Drover discovers images by Docker labels rather than by tag prefix. Images must 
 | `drover.managed` | `"true"` |
 | `drover.name` | short name used to reference the image (e.g. `"python-runner"`) |
 
-`{name}` in `GET /images/{name}` is matched against the image's `drover.name` label. The returned `name` field on `ImageSummary` and `ImageDetail` is the value of that label, and the `tags` field lists the image's tags for informational use. Because labels are baked into the image, the same image can be pulled from any registry (for example `ghcr.io/saibotsivad/drover-builder:latest`) and the orchestrator will still recognise it.
+`{name}` in `GET /images/{name}` is matched against the image's `drover.name` label. The returned `name` field on `ImageSummary` and `ImageDetail` is the value of that label, the `labels` field exposes the full `drover.*` label map (so callers can see flags like `drover.template`), and the `tags` field lists the image's Docker tags for informational use. Because labels are baked into the image, the same image can be pulled from any registry (for example `ghcr.io/saibotsivad/drover-builder:latest`) and the orchestrator will still recognise it.
 
 ## Container lifecycle
 
