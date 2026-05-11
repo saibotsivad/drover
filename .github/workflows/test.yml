@@ -63,7 +63,8 @@ jobs:
       - name: Build image
         uses: docker/build-push-action@v6
         with:
-          context: ./orchestrator
+          context: .
+          file: ./orchestrator/Dockerfile
           push: false
           load: true
           tags: drover:test
@@ -102,7 +103,8 @@ jobs:
       - name: Build image
         uses: docker/build-push-action@v6
         with:
-          context: ./webapp
+          context: .
+          file: ./webapp/Dockerfile
           push: false
           load: true
           tags: drover-webapp:test

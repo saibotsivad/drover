@@ -3,11 +3,11 @@
 FROM node:22-slim AS build
 WORKDIR /build
 
-COPY package.json package-lock.json ./
+COPY webapp/package.json webapp/package-lock.json ./
 RUN npm ci
 
-COPY scripts/ ./scripts/
-COPY public/ ./public/
+COPY webapp/scripts/ ./scripts/
+COPY webapp/public/ ./public/
 RUN npm run vendor
 
 # -------------------------------------------------------------------
@@ -15,10 +15,10 @@ RUN npm run vendor
 FROM node:22-slim
 WORKDIR /app
 
-COPY --chown=node:node package.json package-lock.json ./
+COPY --chown=node:node webapp/package.json webapp/package-lock.json ./
 RUN npm ci --omit=dev && npm cache clean --force
 
-COPY --chown=node:node src/ ./src/
+COPY --chown=node:node webapp/src/ ./src/
 COPY --from=build --chown=node:node /build/public/ ./public/
 
 USER node

@@ -105,7 +105,7 @@ jobs:
     uses: ./.github/workflows/publish-image.yml
     with:
       image_suffix: ""
-      context: ./orchestrator
+      dockerfile: ./orchestrator/Dockerfile
       version: ${{ needs.detect.outputs.orchestrator_version }}
       mark_latest: true
 
@@ -120,7 +120,7 @@ jobs:
     uses: ./.github/workflows/publish-image.yml
     with:
       image_suffix: "-builder"
-      context: ./builder
+      dockerfile: ./builder/Dockerfile
       version: ${{ needs.detect.outputs.builder_version }}
       mark_latest: true
 
@@ -135,7 +135,7 @@ jobs:
     uses: ./.github/workflows/publish-image.yml
     with:
       image_suffix: "-webapp"
-      context: ./webapp
+      dockerfile: ./webapp/Dockerfile
       version: ${{ needs.detect.outputs.webapp_version }}
       mark_latest: true
 

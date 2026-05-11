@@ -2,7 +2,7 @@ FROM python:3.12-slim AS builder
 
 WORKDIR /build
 
-COPY requirements.txt .
+COPY orchestrator/requirements.txt .
 RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
 
 # -------------------------------------------------------------------
@@ -25,7 +25,7 @@ RUN groupadd -g 1000 orchestrator && \
     chown orchestrator:orchestrator /var/lib/orchestrator /var/run/microcontainers
 
 WORKDIR /app
-COPY . ./orchestrator/
+COPY orchestrator/ ./orchestrator/
 RUN chmod +x /app/orchestrator/entrypoint.sh
 
 EXPOSE 8000

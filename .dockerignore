@@ -1,0 +1,31 @@
+# Files excluded from the Docker build context. These are repo-level
+# concerns (or developer-machine junk) that no image needs to see, so
+# we keep them out of the tar that the Docker CLI ships to the daemon
+# at the start of every build.
+
+# Version control
+.git/
+
+# Node / JS
+node_modules/
+
+# Python caches and build artifacts
+**/__pycache__/
+**/*.pyc
+**/.pytest_cache/
+**/*.egg-info/
+
+# Local virtual envs
+.venv/
+venv/
+env/
+
+# CI definitions, docs, and changeset metadata — repo-level only
+.github/
+docs/
+changes/
+
+# Editor / OS junk
+.DS_Store
+.idea/
+.vscode/
