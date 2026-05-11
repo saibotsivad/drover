@@ -1,0 +1,14 @@
+- project: orchestrator
+  bump: patch
+  description: |
+    Switched image discovery from the `drover/` name prefix to Docker
+    labels: an image is now considered Drover-managed when it carries
+    `drover.managed=true` and `drover.name=<name>`. Image responses
+    additionally expose a `labels` field carrying the full `drover.*`
+    label set (filtered so non-Drover labels don't leak), and the
+    `tags` field lists the underlying Docker tags for information only.
+- project: webapp
+  bump: patch
+  description: |
+    The images view renders a new Labels column showing each `drover.*`
+    label as a chip alongside the existing Tags column.
