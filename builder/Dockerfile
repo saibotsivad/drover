@@ -15,7 +15,12 @@
 #   - git               : clone source repos to build from
 #   - drover-executor   : the reference guest agent from /executor
 #
-# See ./README.md for build, run, and customisation notes.
+# Build context is the repo root (so this Dockerfile can COPY in the
+# sibling /executor folder). Build it from the repo root with:
+#
+#     docker build -f builder/Dockerfile -t drover-builder:dev .
+#
+# See ./README.md for operator setup and customisation notes.
 
 FROM python:3.12-slim
 
@@ -47,12 +52,12 @@ RUN set -eux; \
     apt-get purge -y --auto-remove gnupg; \
     rm -rf /var/lib/apt/lists/*
 
-# Install the Drover executor (guest agent) directly from the repo. The
-# build context is ./builder so we can't COPY ../executor in; the
-# git+pip pattern from /executor/README.md is the supported install.
-ARG DROVER_EXECUTOR_REF=main
-RUN pip install --no-cache-dir \
-    "git+https://github.com/saibotsivad/drover.git@${DROVER_EXECUTOR_REF}#subdirectory=executor"
+# Install the Drover executor (guest agent) straight from the sibling
+# /executor folder in the repo. The build context is the repo root, so
+# COPY can reach it; the resulting binary lands as `drover-executor` on
+# PATH.
+COPY executor/ /tmp/executor/
+RUN pip install --no-cache-dir /tmp/executor && rm -rf /tmp/executor
 
 # Default agent: connect to /run/orchestrator.sock and serve commands
 # until the orchestrator stops the container or the idle timeout fires.

@@ -50,24 +50,22 @@ The privileged path is what makes it a *builder* — without
 
 ## Building locally
 
-From the repo root:
+The build context is the **repo root**, not `./builder`, because the
+Dockerfile pulls the executor source in via `COPY executor/ ...`.
+Build from the repo root and pass the Dockerfile explicitly:
 
 ```
-docker build -t ghcr.io/saibotsivad/drover-builder:dev ./builder
+docker build -f builder/Dockerfile -t ghcr.io/saibotsivad/drover-builder:dev .
 ```
 
-To pin the executor to a specific git ref instead of `main`:
+The executor that gets installed is whatever's in your working tree at
+`executor/`, so you can iterate on the agent and rebuild the builder
+image without committing or pushing anything first. The repo's
+top-level `.dockerignore` trims `.git/`, `node_modules/`, and similar
+noise out of the build context so this stays fast.
 
-```
-docker build \
-    --build-arg DROVER_EXECUTOR_REF=executor-v0.1.0 \
-    -t ghcr.io/saibotsivad/drover-builder:dev \
-    ./builder
-```
-
-The `DROVER_EXECUTOR_REF` build arg is forwarded straight into the
-`pip install git+https://github.com/saibotsivad/drover.git@<ref>#subdirectory=executor`
-line, so any branch, tag, or commit SHA is valid.
+To build from a specific tag instead of your working tree, check out
+that tag first (`git checkout builder-v0.1.0` etc.) and rebuild.
 
 ---
 
@@ -141,13 +139,13 @@ Three reasonable extension points, in order of intrusiveness.
 
 ### 1. Use a different executor version
 
-Pin to a tagged release at build time:
+Check out the ref you want and rebuild — the Dockerfile installs from
+the local `executor/` folder, so the executor that gets baked in
+tracks your working tree:
 
 ```
-docker build \
-    --build-arg DROVER_EXECUTOR_REF=executor-v0.2.0 \
-    -t my-org/drover-builder:executor-0.2.0 \
-    ./builder
+git checkout executor-v0.2.0
+docker build -f builder/Dockerfile -t my-org/drover-builder:executor-0.2.0 .
 ```
 
 ### 2. Add extra tooling

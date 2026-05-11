@@ -2,8 +2,23 @@
   bump: minor
   description: |
     First real cut of the builder image. Replaces the stub Dockerfile
-    with one that bundles the `drover-executor` guest agent, the Docker
-    CLI (plus buildx), and git, so the orchestrator can drive it as a
-    privileged micro-container that builds, pulls, and pushes images on
-    the host Docker daemon. Adds `builder/README.md` documenting the
-    image contents, build, operator setup, and customisation hooks.
+    with one that bundles the `drover-executor` guest agent (installed
+    from the sibling `/executor` folder via `COPY` + `pip install`),
+    the Docker CLI (plus buildx), and git, so the orchestrator can
+    drive it as a privileged micro-container that builds, pulls, and
+    pushes images on the host Docker daemon. Adds `builder/README.md`
+    documenting the image contents, build, operator setup, and
+    customisation hooks.
+
+    Build infrastructure: all three published images
+    (`orchestrator`, `builder`, `webapp`) now build with the repo
+    root as the Docker build context so Dockerfiles can `COPY`
+    across project folders. The reusable `publish-image.yml`
+    workflow takes a `dockerfile` path instead of a `context` path;
+    callers in `publish.yml`, `push-tag.yml`, and `test.yml` are
+    updated accordingly. A top-level `.dockerignore` trims `.git/`,
+    `node_modules/`, caches, and similar noise out of the context
+    send. `orchestrator/Dockerfile` and `webapp/Dockerfile` are
+    updated to prefix their `COPY` sources with their project
+    folders — image contents are identical to before, only the build
+    invocation changes.

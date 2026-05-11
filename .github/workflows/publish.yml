@@ -44,7 +44,7 @@ jobs:
     uses: ./.github/workflows/publish-image.yml
     with:
       image_suffix: ""
-      context: ./orchestrator
+      dockerfile: ./orchestrator/Dockerfile
 
   publish-builder:
     needs: detect-changes
@@ -57,7 +57,7 @@ jobs:
     uses: ./.github/workflows/publish-image.yml
     with:
       image_suffix: "-builder"
-      context: ./builder
+      dockerfile: ./builder/Dockerfile
 
   publish-webapp:
     needs: detect-changes
@@ -70,4 +70,4 @@ jobs:
     uses: ./.github/workflows/publish-image.yml
     with:
       image_suffix: "-webapp"
-      context: ./webapp
+      dockerfile: ./webapp/Dockerfile
