@@ -1,5 +1,5 @@
 - project: orchestrator
-  bump: minor
+  bump: patch
   description: |
     Switched image discovery from the `drover/` name prefix to Docker
     labels: an image is now considered Drover-managed when it carries
@@ -8,7 +8,7 @@
     label set (filtered so non-Drover labels don't leak), and the
     `tags` field lists the underlying Docker tags for information only.
 - project: webapp
-  bump: minor
+  bump: patch
   description: |
     The images view renders a new Labels column showing each `drover.*`
     label as a chip alongside the existing Tags column.
