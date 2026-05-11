@@ -1,5 +1,5 @@
 - project: builder
-  bump: minor
+  bump: patch
   description: |
     First real cut of the builder image. Replaces the stub Dockerfile
     with one that bundles the `drover-executor` guest agent (installed
