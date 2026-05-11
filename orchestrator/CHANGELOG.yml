@@ -1,5 +1,16 @@
-published: 0.0.7
+published: 0.0.8
 changes:
+- version: 0.0.8
+  date: '2026-05-11'
+  entries:
+  - bump: patch
+    description: |
+      Switched image discovery from the `drover/` name prefix to Docker
+      labels: an image is now considered Drover-managed when it carries
+      `drover.managed=true` and `drover.name=<name>`. Image responses
+      additionally expose a `labels` field carrying the full `drover.*`
+      label set (filtered so non-Drover labels don't leak), and the
+      `tags` field lists the underlying Docker tags for information only.
 - version: 0.0.7
   date: '2026-05-10'
   entries:
