@@ -1,5 +1,12 @@
-published: 0.0.5
+published: 0.0.6
 changes:
+- version: 0.0.6
+  date: '2026-05-11'
+  entries:
+  - bump: patch
+    description: |
+      The images view renders a new Labels column showing each `drover.*`
+      label as a chip alongside the existing Tags column.
 - version: 0.0.5
   date: '2026-05-10'
   entries:
