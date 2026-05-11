@@ -140,22 +140,24 @@ class ExecStatusResponse(BaseModel):
 class ImageSummary(BaseModel):
     name: str
     tags: list[str]
+    labels: dict[str, str] = Field(default_factory=dict)
     size: int
     created: datetime
 
     @classmethod
     def from_docker(cls, data: dict) -> "ImageSummary":
-        repo_tags = data.get("RepoTags") or []
-        # Extract short name from first tag (e.g. "drover/python-runner:latest" -> "python-runner")
-        name = ""
+        # Identity comes from the ``drover.*`` label set; ``RepoTags`` is
+        # surfaced as informational metadata only.
+        labels = _drover_labels(data.get("Labels"))
         tags = []
-        for tag in repo_tags:
-            repo, _, t = tag.partition(":")
-            name = name or repo.removeprefix("drover/")
-            tags.append(t)
+        for tag in data.get("RepoTags") or []:
+            _, _, t = tag.partition(":")
+            if t:
+                tags.append(t)
         return cls(
-            name=name,
+            name=labels.get("drover.name", ""),
             tags=tags,
+            labels=labels,
             size=data.get("Size", 0),
             created=datetime.fromtimestamp(data["Created"]),
         )
@@ -167,19 +169,32 @@ class ImageDetail(ImageSummary):
     os: str | None = None
 
     @classmethod
-    def from_docker_inspect(cls, short_name: str, data: dict) -> "ImageDetail":
-        repo_tags = data.get("RepoTags") or []
+    def from_docker_inspect(cls, data: dict) -> "ImageDetail":
+        labels = _drover_labels((data.get("Config") or {}).get("Labels"))
         tags = []
-        for tag in repo_tags:
+        for tag in data.get("RepoTags") or []:
             _, _, t = tag.partition(":")
             if t:
                 tags.append(t)
         return cls(
-            name=short_name,
+            name=labels.get("drover.name", ""),
             tags=tags,
+            labels=labels,
             size=data.get("Size", 0),
             created=datetime.fromisoformat(data["Created"]),
             id=data["Id"],
             architecture=data.get("Architecture"),
             os=data.get("Os"),
         )
+
+
+def _drover_labels(raw: dict | None) -> dict[str, str]:
+    """Return only the ``drover.*`` labels from a Docker label dict.
+
+    Filters non-Drover labels so the response doesn't leak unrelated
+    operator-defined metadata (e.g. org.opencontainers, vendor-specific
+    tooling) that has no meaning to Drover callers.
+    """
+    if not raw:
+        return {}
+    return {k: v for k, v in raw.items() if k.startswith("drover.")}

@@ -45,6 +45,18 @@ services:
       LOG_LEVEL: info
       # DROVER_API_KEY: change-me
 
+  # Template image — not a long-running service. The orchestrator discovers
+  # it on the host Docker daemon by its drover.managed / drover.name labels
+  # and launches containers from it on demand. This entry exists so
+  # `docker compose pull` (and `up`) fetch the image; the container itself
+  # exits immediately and is not restarted.
+  builder:
+    image: ghcr.io/saibotsivad/drover-builder:latest
+    # Or build from source:
+    # build: ./builder
+    command: ["true"]
+    restart: "no"
+
 networks:
   drover:
 

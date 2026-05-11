@@ -3,3 +3,6 @@
 #
 
 FROM python:3.12-slim
+
+LABEL drover.managed="true"
+LABEL drover.name="builder"

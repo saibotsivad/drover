@@ -173,38 +173,106 @@ class TestCreateContainerRequest:
 class TestImageSummary:
     def test_from_docker(self):
         data = {
-            "RepoTags": ["drover/python-runner:latest", "drover/python-runner:1.0"],
+            "RepoTags": ["ghcr.io/example/python-runner:latest", "ghcr.io/example/python-runner:1.0"],
+            "Labels": {"drover.managed": "true", "drover.name": "python-runner"},
             "Size": 123456,
             "Created": 1700000000,
         }
         summary = ImageSummary.from_docker(data)
         assert summary.name == "python-runner"
         assert summary.tags == ["latest", "1.0"]
+        assert summary.labels == {
+            "drover.managed": "true",
+            "drover.name": "python-runner",
+        }
         assert summary.size == 123456
 
     def test_from_docker_no_tags(self):
-        data = {"RepoTags": None, "Size": 0, "Created": 1700000000}
+        data = {
+            "RepoTags": None,
+            "Labels": {"drover.managed": "true", "drover.name": "python-runner"},
+            "Size": 0,
+            "Created": 1700000000,
+        }
+        summary = ImageSummary.from_docker(data)
+        assert summary.name == "python-runner"
+        assert summary.tags == []
+        assert summary.labels == {
+            "drover.managed": "true",
+            "drover.name": "python-runner",
+        }
+
+    def test_from_docker_missing_labels(self):
+        """An image without the drover.name label yields an empty name."""
+        data = {
+            "RepoTags": ["random/image:latest"],
+            "Labels": None,
+            "Size": 0,
+            "Created": 1700000000,
+        }
         summary = ImageSummary.from_docker(data)
         assert summary.name == ""
-        assert summary.tags == []
+        assert summary.tags == ["latest"]
+        assert summary.labels == {}
+
+    def test_from_docker_filters_non_drover_labels(self):
+        """Non-drover labels (e.g. OCI image labels) are not exposed."""
+        data = {
+            "RepoTags": [],
+            "Labels": {
+                "drover.managed": "true",
+                "drover.name": "python-runner",
+                "drover.template": "true",
+                "org.opencontainers.image.source": "https://example.com/repo",
+                "maintainer": "ops@example.com",
+            },
+            "Size": 0,
+            "Created": 1700000000,
+        }
+        summary = ImageSummary.from_docker(data)
+        assert summary.labels == {
+            "drover.managed": "true",
+            "drover.name": "python-runner",
+            "drover.template": "true",
+        }
 
 
 class TestImageDetail:
     def test_from_docker_inspect(self):
         data = {
-            "RepoTags": ["drover/python-runner:latest"],
+            "RepoTags": ["ghcr.io/example/python-runner:latest"],
             "Size": 50000,
             "Created": "2024-01-01T00:00:00Z",
             "Id": "sha256:abc123",
             "Architecture": "amd64",
             "Os": "linux",
+            "Config": {
+                "Labels": {"drover.managed": "true", "drover.name": "python-runner"},
+            },
         }
-        detail = ImageDetail.from_docker_inspect("python-runner", data)
+        detail = ImageDetail.from_docker_inspect(data)
         assert detail.name == "python-runner"
         assert detail.id == "sha256:abc123"
         assert detail.architecture == "amd64"
         assert detail.os == "linux"
         assert detail.tags == ["latest"]
+        assert detail.labels == {
+            "drover.managed": "true",
+            "drover.name": "python-runner",
+        }
+
+    def test_from_docker_inspect_no_config(self):
+        """Defensive: an inspect payload missing Config still parses."""
+        data = {
+            "RepoTags": [],
+            "Size": 50000,
+            "Created": "2024-01-01T00:00:00Z",
+            "Id": "sha256:abc123",
+        }
+        detail = ImageDetail.from_docker_inspect(data)
+        assert detail.name == ""
+        assert detail.tags == []
+        assert detail.labels == {}
 
 
 class TestContainerStatus:

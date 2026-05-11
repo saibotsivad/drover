@@ -131,7 +131,7 @@ test('POST /actions/containers/:id/stop returns the updated row', async () => {
 			assert.equal(path, '/containers/c-aaa/stop');
 			return {
 				id: 'c-aaa',
-				image: 'drover/python-runner',
+				image: 'python-runner',
 				privileged: false,
 				status: 'stopped',
 				label: null,

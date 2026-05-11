@@ -21,7 +21,6 @@ from orchestrator.docker_client import (
     ContainerConflictError,
     ContainerNotFoundError,
     DockerClient,
-    ImageNotFoundError,
 )
 from orchestrator.id_gen import generate_id
 from orchestrator.models import (
@@ -73,7 +72,7 @@ class PrivilegedNotConfigured(ContainerError):
 
 class ImageNotFound(ContainerError):
     def __init__(self, image: str) -> None:
-        super().__init__(404, f"Image 'drover/{image}' not found")
+        super().__init__(404, f"Image '{image}' not found")
 
 
 class ContainerNotConnected(ContainerError):
@@ -288,11 +287,14 @@ class ContainerManager:
                 raise PrivilegedNotConfigured()
             image = self._config.privileged_image
         else:
-            image = f"drover/{req.image}"
-            try:
-                await self._docker.inspect_image(image)
-            except ImageNotFoundError:
+            # Resolve the short name supplied by the caller to a concrete
+            # Docker image via the ``drover.name`` label.  Prefer the image
+            # ID so the create call is unambiguous even if the same image
+            # carries multiple tags.
+            matches = await self._docker.list_images(name=req.image)
+            if not matches:
                 raise ImageNotFound(req.image)
+            image = matches[0]["Id"]
 
         # 2. Generate ID and insert DB row in initializing state
         container_id = generate_id()
