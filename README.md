@@ -235,6 +235,22 @@ services:
 
 (These are build-time labels on the image itself, not runtime labels on a service container — keep them under `build.labels`, not the top-level `labels` field.)
 
+To label a pre-built upstream image (one that doesn't already carry the Drover labels), use `dockerfile_inline` to derive a thin image that just adds them:
+
+```yaml
+services:
+  builder:
+    image: my-org/drover-builder:latest
+    build:
+      context: .
+      dockerfile_inline: |
+        FROM ghcr.io/saibotsivad/drover-builder:latest
+        LABEL drover.managed="true"
+        LABEL drover.name="builder"
+```
+
+Compose has no way to attach labels to an image it merely pulls — it can only add labels to images it builds — so the inline `FROM` is what makes the new labels stick. If the upstream image already carries the Drover labels (anything published from this repo does), skip the `build:` block and just `image:` it directly; labels are baked into the image and travel with it.
+
 ### Image API
 
 | Method | Path | Description |
