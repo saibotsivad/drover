@@ -109,7 +109,7 @@ GET    /containers/{id}/exec/{cmd_id}     Poll command output
 
 | Field | Type | Default | Constraints |
 |---|---|---|---|
-| `image` | string | required | Alphanumeric, dots, hyphens, underscores, slashes; max 256 chars. Resolved as `drover/<image>` unless `privileged: true`. |
+| `image` | string | required | Alphanumeric, dots, hyphens, underscores, slashes; max 256 chars. Unless `privileged: true`, the value must match the `drover.name` label of an installed image (see [Images](#images)). |
 | `privileged` | bool | `false` | Requires `PRIVILEGED_IMAGE` to be configured. |
 | `env` | object | `{}` | Keys: POSIX identifiers, max 256 chars. Values: max 32 KB. |
 | `label` | string | `null` | Printable chars; max 1024 chars. |
@@ -138,11 +138,18 @@ GET    /containers/{id}/exec/{cmd_id}     Poll command output
 ### Images
 
 ```
-GET /images           List all drover/* images
+GET /images           List all Drover-managed images
 GET /images/{name}    Get image details
 ```
 
-Images must be tagged with the `drover/` prefix to appear in these listings. `{name}` is the bare name without the prefix (e.g., `/images/python-runner`).
+Drover discovers images by Docker labels rather than by tag prefix. Images must carry both of the following labels to appear in these listings:
+
+| Label | Value |
+|---|---|
+| `drover.managed` | `"true"` |
+| `drover.name` | short name used to reference the image (e.g. `"python-runner"`) |
+
+`{name}` in `GET /images/{name}` is matched against the image's `drover.name` label. The returned `name` field on `ImageSummary` and `ImageDetail` is the value of that label, and the `tags` field lists the image's tags for informational use. Because labels are baked into the image, the same image can be pulled from any registry (for example `ghcr.io/saibotsivad/drover-builder:latest`) and the orchestrator will still recognise it.
 
 ## Container lifecycle
 

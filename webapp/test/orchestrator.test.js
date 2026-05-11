@@ -83,10 +83,10 @@ test('postJson sends body as JSON and returns parsed response', async () => {
 	});
 	try {
 		const client = createOrchestratorClient({ baseUrl: orch.url });
-		const data = await client.postJson('/containers', { image: 'drover/x' });
+		const data = await client.postJson('/containers', { image: 'x' });
 		assert.equal(receivedMethod, 'POST');
 		assert.equal(receivedContentType, 'application/json');
-		assert.deepEqual(JSON.parse(receivedBody), { image: 'drover/x' });
+		assert.deepEqual(JSON.parse(receivedBody), { image: 'x' });
 		assert.deepEqual(data, { id: 'c1' });
 	} finally {
 		await orch.close();

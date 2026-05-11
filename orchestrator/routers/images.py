@@ -16,8 +16,12 @@ async def list_images(request: Request) -> list[ImageSummary]:
 @router.get("/{name}")
 async def get_image(name: str, request: Request) -> ImageDetail:
     docker: DockerClient = request.app.state.docker
-    try:
-        data = await docker.inspect_image(f"drover/{name}")
-    except ImageNotFoundError:
+    matches = await docker.list_images(name=name)
+    if not matches:
         raise HTTPException(status_code=404, detail=f"Image '{name}' not found")
-    return ImageDetail.from_docker_inspect(name, data)
+    try:
+        data = await docker.inspect_image(matches[0]["Id"])
+    except ImageNotFoundError:
+        # Image was removed between the list and inspect calls.
+        raise HTTPException(status_code=404, detail=f"Image '{name}' not found")
+    return ImageDetail.from_docker_inspect(data)

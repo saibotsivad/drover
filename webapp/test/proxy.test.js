@@ -156,11 +156,11 @@ test('proxy forwards request body and the orchestrator response', async () => {
 		const res = await fetch(`${app.url}/api/orchestrator/containers`, {
 			method: 'POST',
 			headers: { 'Content-Type': 'application/json' },
-			body: JSON.stringify({ image: 'drover/example' }),
+			body: JSON.stringify({ image: 'example' }),
 		});
 		assert.equal(res.status, 201);
 		const body = await res.json();
-		assert.deepEqual(body, { echoed: { image: 'drover/example' } });
+		assert.deepEqual(body, { echoed: { image: 'example' } });
 	} finally {
 		await app.close();
 		await orch.close();

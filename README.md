@@ -31,7 +31,7 @@ To run this system, the host requires:
 
 1. **Docker in rootless mode** running as the operator user
 2. **The orchestrator container** started with the mounts described below
-3. **At least one micro-container image** built and tagged with the `drover/` prefix so the orchestrator has something to launch
+3. **At least one micro-container image** built with the required Drover labels (`drover.managed=true` and `drover.name=<name>`) so the orchestrator has something to launch (see [Image Management](#image-management))
 4. (Optional) **A privileged container image** built and available on the host (required only if privileged micro-containers will be used)
 
 The orchestrator is configured via environment variables at startup:
@@ -145,7 +145,7 @@ Both standard and privileged micro-containers share the same lifecycle, socket p
 | `/run/docker.sock` | No | Passes through host Docker socket |
 | gVisor runtime | Yes | No |
 
-A privileged micro-container uses the image named by `PRIVILEGED_IMAGE` and does not use a `drover/`-prefixed image. It also bypasses gVisor, allowing for more system interop as needed.
+A privileged micro-container uses the image named by `PRIVILEGED_IMAGE` directly and is not subject to the `drover.managed` label requirement. It also bypasses gVisor, allowing for more system interop as needed.
 
 ### Socket Protocol
 
@@ -193,9 +193,20 @@ The guest agent is responsible for sending heartbeats at an interval shorter tha
 
 ## Image Management
 
-### Naming Convention
+### Label Contract
 
-All operator-managed workload images are tagged with the prefix `drover/` (e.g. `drover/python-runner`, `drover/node-sandbox`). This prefix distinguishes them from everything else on the host. List and validation operations use `docker image ls --filter=reference=drover/*`.
+Workload images are identified by two Docker labels baked in at build time:
+
+| Label | Value | Required |
+|---|---|---|
+| `drover.managed` | `"true"` | yes |
+| `drover.name` | short name used to launch containers (e.g. `"python-runner"`) | yes |
+
+An image without both labels is invisible to Drover. The `drover.*` namespace is reserved for future Drover-specific metadata (templates, versions, etc.).
+
+Because labels are baked into the image and survive re-tagging, the same image can be pulled from any registry (e.g. `ghcr.io/saibotsivad/drover-builder:latest`) and the orchestrator will still recognise it by label.
+
+List and validation operations use `docker image ls --filter label=drover.managed=true`.
 
 The privileged image is operator-supplied, named by the `PRIVILEGED_IMAGE` env var, and is not managed through the image or container API.
 
@@ -203,14 +214,19 @@ The privileged image is operator-supplied, named by the `PRIVILEGED_IMAGE` env v
 
 Because a privileged micro-container has access to the host Docker socket and shares the same lifecycle as any other container, image building is just another container workload that the Drover operator manages.
 
-The only constraint is that whatever process builds the image must tag it with the `drover/` prefix so the orchestrator can find it.
+The only constraint is that the resulting image must carry the required labels. In a `Dockerfile`:
+
+```dockerfile
+LABEL drover.managed="true"
+LABEL drover.name="my-image"
+```
 
 ### Image API
 
 | Method | Path | Description |
 |---|---|---|
-| `GET` | `/images` | List all `drover/*` images and their status |
-| `GET` | `/images/{name}` | Get status and metadata for a specific image |
+| `GET` | `/images` | List all Drover-managed images (those carrying `drover.managed=true`) |
+| `GET` | `/images/{name}` | Get status and metadata for the image whose `drover.name` matches `{name}` |
 
 ---
 
@@ -238,7 +254,7 @@ The only constraint is that whatever process builds the image must tag it with t
 ```
 
 - If `privileged` is `true` and `PRIVILEGED_IMAGE` is not set, the request is rejected.
-- If `privileged` is `false` or omitted, the orchestrator validates that `drover/<image>` exists and is in a ready state.
+- If `privileged` is `false` or omitted, the orchestrator validates that a Drover-managed image with a matching `drover.name` label is installed.
 
 ### Request Validation
 

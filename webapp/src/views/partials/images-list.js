@@ -34,7 +34,7 @@ export function imagesListPage(images) {
 				</tr>
 			</thead>
 			<tbody>${images.length === 0
-				? html`<tr class="empty"><td colspan="4">No <code>drover/*</code> images.</td></tr>`
+				? html`<tr class="empty"><td colspan="4">No Drover-managed images. Add the <code>drover.managed=true</code> and <code>drover.name=&lt;name&gt;</code> labels to an image to make it visible here.</td></tr>`
 				: images.map(imageRow)}</tbody>
 		</table>
 	</section>`;

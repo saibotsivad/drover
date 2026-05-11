@@ -14,13 +14,23 @@ from orchestrator.container_manager import (
     PrivilegedNotConfigured,
     _docker_state_to_status,
 )
-from orchestrator.docker_client import ContainerNotFoundError, ImageNotFoundError
+from orchestrator.docker_client import ContainerNotFoundError
 from orchestrator.models import ContainerStatus, CreateContainerRequest
 
 
 @pytest.fixture
 def docker():
     mock = AsyncMock()
+    # Default: any image lookup returns a single matching image.
+    mock.list_images = AsyncMock(
+        return_value=[
+            {
+                "Id": "sha256:image_abc123",
+                "RepoTags": ["example/python-runner:latest"],
+                "Labels": {"drover.managed": "true", "drover.name": "python-runner"},
+            }
+        ]
+    )
     mock.inspect_image = AsyncMock(return_value={})
     mock.create_container = AsyncMock(return_value={"Id": "docker_abc123"})
     mock.start_container = AsyncMock()
@@ -90,12 +100,14 @@ async def test_create_container_returns_initializing(manager, docker, sockets, d
     assert resp.timeout_seconds == 300
     assert resp.error_code is None
 
-    # Phase 1 validated the image synchronously
-    docker.inspect_image.assert_called_once_with("drover/python-runner")
+    # Phase 1 looked the image up by its drover.name label synchronously.
+    docker.list_images.assert_called_once_with(name="python-runner")
 
-    # Phase 2 runs in the background
+    # Phase 2 runs in the background and uses the resolved image ID.
     await _await_init(manager, resp.id)
     docker.create_container.assert_called_once()
+    create_arg = docker.create_container.call_args.args[0]
+    assert create_arg["Image"] == "sha256:image_abc123"
     docker.start_container.assert_called_once_with("docker_abc123")
     sockets.create_socket.assert_called_once_with(resp.id)
 
@@ -105,7 +117,7 @@ async def test_create_container_returns_initializing(manager, docker, sockets, d
 
 
 async def test_create_container_image_not_found(manager, docker):
-    docker.inspect_image.side_effect = ImageNotFoundError(404, "not found")
+    docker.list_images.return_value = []
     with pytest.raises(ImageNotFound):
         await manager.create_container(
             CreateContainerRequest(image="nonexistent")
@@ -137,9 +149,11 @@ async def test_create_privileged_with_config(config, db, docker, sockets):
         CreateContainerRequest(image="ignored", privileged=True)
     )
     assert resp.privileged is True
-    # Should NOT inspect the drover/ image, since privileged uses the configured image
-    docker.inspect_image.assert_not_called()
+    # Privileged containers use the configured image directly; no label lookup.
+    docker.list_images.assert_not_called()
     await _await_init(mgr, resp.id)
+    create_arg = docker.create_container.call_args.args[0]
+    assert create_arg["Image"] == "my-priv-image"
 
 
 async def test_create_docker_failure_transitions_to_error(

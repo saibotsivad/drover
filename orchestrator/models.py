@@ -145,14 +145,15 @@ class ImageSummary(BaseModel):
 
     @classmethod
     def from_docker(cls, data: dict) -> "ImageSummary":
-        repo_tags = data.get("RepoTags") or []
-        # Extract short name from first tag (e.g. "drover/python-runner:latest" -> "python-runner")
-        name = ""
+        # Drover-managed images carry the short name in the ``drover.name``
+        # label; tags are informational only.
+        labels = data.get("Labels") or {}
+        name = labels.get("drover.name", "")
         tags = []
-        for tag in repo_tags:
-            repo, _, t = tag.partition(":")
-            name = name or repo.removeprefix("drover/")
-            tags.append(t)
+        for tag in data.get("RepoTags") or []:
+            _, _, t = tag.partition(":")
+            if t:
+                tags.append(t)
         return cls(
             name=name,
             tags=tags,
@@ -167,15 +168,16 @@ class ImageDetail(ImageSummary):
     os: str | None = None
 
     @classmethod
-    def from_docker_inspect(cls, short_name: str, data: dict) -> "ImageDetail":
-        repo_tags = data.get("RepoTags") or []
+    def from_docker_inspect(cls, data: dict) -> "ImageDetail":
+        labels = (data.get("Config") or {}).get("Labels") or {}
+        name = labels.get("drover.name", "")
         tags = []
-        for tag in repo_tags:
+        for tag in data.get("RepoTags") or []:
             _, _, t = tag.partition(":")
             if t:
                 tags.append(t)
         return cls(
-            name=short_name,
+            name=name,
             tags=tags,
             size=data.get("Size", 0),
             created=datetime.fromisoformat(data["Created"]),

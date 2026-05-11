@@ -35,7 +35,7 @@ function startApp(orchestrator) {
 const SAMPLE_CONTAINERS = [
 	{
 		id: 'c-aaa',
-		image: 'drover/python-runner',
+		image: 'python-runner',
 		privileged: false,
 		status: 'running',
 		label: 'experiment-1',
@@ -47,7 +47,7 @@ const SAMPLE_CONTAINERS = [
 	},
 	{
 		id: 'c-bbb',
-		image: 'drover/node-runner',
+		image: 'node-runner',
 		privileged: false,
 		status: 'destroyed',
 		label: null,
@@ -133,7 +133,7 @@ test('GET /views/containers/:id renders metadata', async () => {
 		assert.equal(res.status, 200);
 		const text = await res.text();
 		assert.match(text, /Container <code>c-aaa<\/code>/);
-		assert.match(text, /drover\/python-runner/);
+		assert.match(text, /python-runner/);
 		assert.match(text, /experiment-1/);
 		assert.match(text, /id="container-meta"/);
 	} finally {

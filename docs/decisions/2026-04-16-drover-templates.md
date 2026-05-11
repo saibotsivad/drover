@@ -5,7 +5,7 @@
 
 ## Context
 
-Drover's current workflow requires pre-built images (with the `drover/` prefix) to launch micro-containers. This creates friction for users who want to customize their execution environment: they must build a Docker image from primitives with the privileged container, and then reference it via the API.
+Drover's current workflow requires pre-built images (carrying the `drover.managed=true` and `drover.name=<name>` labels) to launch micro-containers. This creates friction for users who want to customize their execution environment: they must build a Docker image from primitives with the privileged container, and then reference it via the API.
 
 A common use case is iterative environment setup: install dependencies, configure tools, verify the setup works, then reuse that configured state for subsequent work. Docker supports this via `docker commit`, which creates a new image from a container's filesystem state. We want to expose this capability through Drover's API as a **template** system.
 
@@ -43,7 +43,7 @@ POST /containers/{id}/template
 This operation:
 
 1. Verifies the container is stopped (filesystem state is stable)
-2. Creates a new image via `docker commit` named `drover/template-{name}-{hash}`
+2. Creates a new image via `docker commit` carrying the labels `drover.managed=true`, `drover.name={name}`, and `drover.template=true` (the image tag itself is incidental — discovery is by label)
 3. Records the template in the database
 4. The original container remains unchanged
 
@@ -74,7 +74,7 @@ The orchestrator will:
 
 ### 5. No Template-of-Template
 
-Template images will be stored with a distinct prefix (`drover/template-*` vs `drover/*` for base images). The template creation endpoint will reject containers started from images with this prefix.
+Template images are distinguished from base images by a `drover.template=true` label (alongside the standard `drover.managed=true` / `drover.name=<name>` pair). The template creation endpoint will reject containers started from images carrying `drover.template=true`.
 
 ## Reasoning
 
@@ -123,7 +123,7 @@ Stopping the container ensures the filesystem is in a known, quiescent state bef
 
 ### For Image Builders
 
-- All `drover/*` base images must install the executor at `/usr/local/bin/drover`
+- All Drover-managed base images (those carrying `drover.managed=true`) must install the executor at `/usr/local/bin/drover`
 - The executor must be the default entry point for template-based workflows
 - The builder Dockerfile in this repo should be updated to reflect this requirement
 
@@ -131,7 +131,7 @@ Stopping the container ensures the filesystem is in a known, quiescent state bef
 
 - New workflow: create container → exec setup commands → stop → create template → launch from template
 - Template names are user-provided and scoped (likely per-API-key or global)
-- Templates appear in `GET /images` listings with their `drover/template-*` prefix
+- Templates appear in `GET /images` listings alongside base images and can be distinguished by the presence of the `drover.template=true` label
 
 ### Open Topics to Settle
 
@@ -148,7 +148,7 @@ The current proposal uses `"template": "name"` instead of `"image": "name"` in t
 We need to track:
 
 - Template name, creation time, source container ID
-- The underlying Docker image name (`drover/template-{name}-{hash}`)
+- The underlying Docker image (identified by image ID, with `drover.name={name}` and `drover.template=true` labels applied at commit time)
 - Whether a container was started from a template (for the single-level constraint)
 
 Options:
@@ -178,4 +178,4 @@ Options:
 ## Related Decisions
 
 - [2026-04-11: WebSockets for streaming](2026-04-11-websockets-for-streaming.md) — Templates will use the same streaming infrastructure for setup commands
-- Image naming convention (`drover/` prefix) — Templates extend this with `drover/template-*`
+- Image label contract (`drover.managed`, `drover.name`) — Templates extend this with `drover.template=true`

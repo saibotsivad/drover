@@ -69,11 +69,20 @@ class DockerClient:
 
     # --- Images ---
 
-    async def list_images(self, prefix: str = "drover/*") -> list[dict]:
-        logger.debug("GET /images/json prefix=%s", prefix)
+    async def list_images(self, name: str | None = None) -> list[dict]:
+        """List Drover-managed images.
+
+        Always filters on ``drover.managed=true``.  When ``name`` is given,
+        also filters on ``drover.name=<name>`` so callers can look up a
+        single image by its short name without fetching the whole set.
+        """
+        labels = ["drover.managed=true"]
+        if name is not None:
+            labels.append(f"drover.name={name}")
+        logger.debug("GET /images/json labels=%s", labels)
         resp = await self._client.get(
             "/images/json",
-            params={"filters": json.dumps({"reference": [prefix]})},
+            params={"filters": json.dumps({"label": labels})},
         )
         logger.debug("GET /images/json -> %s", resp.status_code)
         self._check(resp, entity="image")
