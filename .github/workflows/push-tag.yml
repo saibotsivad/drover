@@ -20,6 +20,7 @@ on:
 
 permissions:
   contents: write
+  pull-requests: write
 
 jobs:
   detect:
@@ -137,3 +138,46 @@ jobs:
       context: ./webapp
       version: ${{ needs.detect.outputs.webapp_version }}
       mark_latest: true
+
+  notify-pr:
+    needs: [detect, publish-orchestrator, publish-builder, publish-webapp]
+    if: |
+      always() &&
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.merged == true &&
+      github.event.pull_request.head.ref == 'versioning' &&
+      needs.detect.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Post publish confirmation comment
+        run: |
+          set -euo pipefail
+          registry="ghcr.io/${{ github.repository }}"
+          lines=()
+
+          if [[ "${{ needs.publish-orchestrator.result }}" == "success" ]]; then
+            lines+=("- **orchestrator** \`${{ needs.detect.outputs.orchestrator_version }}\` → \`${registry}\`")
+          fi
+          if [[ "${{ needs.publish-builder.result }}" == "success" ]]; then
+            lines+=("- **builder** \`${{ needs.detect.outputs.builder_version }}\` → \`${registry}-builder\`")
+          fi
+          if [[ "${{ needs.publish-webapp.result }}" == "success" ]]; then
+            lines+=("- **webapp** \`${{ needs.detect.outputs.webapp_version }}\` → \`${registry}-webapp\`")
+          fi
+
+          if [[ ${#lines[@]} -eq 0 ]]; then
+            echo "No images were successfully published; skipping comment."
+            exit 0
+          fi
+
+          body=":white_check_mark: **Published**
+
+          $(printf '%s\n' "${lines[@]}")"
+
+          gh pr comment ${{ github.event.pull_request.number }} \
+            --repo "${{ github.repository }}" \
+            --body "$body"
