@@ -221,6 +221,20 @@ LABEL drover.managed="true"
 LABEL drover.name="my-image"
 ```
 
+Or, if the image is defined in a `docker-compose.yml`, the same labels can be applied at build time via the `labels` key on the build step:
+
+```yaml
+services:
+  my-image:
+    build:
+      context: ./my-image
+      labels:
+        drover.managed: "true"
+        drover.name: "my-image"
+```
+
+(These are build-time labels on the image itself, not runtime labels on a service container — keep them under `build.labels`, not the top-level `labels` field.)
+
 ### Image API
 
 | Method | Path | Description |
