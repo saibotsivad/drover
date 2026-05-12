@@ -227,6 +227,8 @@ accurately interleaved by time.
 
 ```
 e2e/logs/
+├── orchestrator.log                  # Full container log (ci mode only)
+├── webapp.log                        # Full container log (ci mode only)
 └── 2026-05-12T14-30-00Z/             # RUN_ID
     ├── summary.log                   # One line per step, with first-failure pointer
     ├── 01-health/
@@ -244,6 +246,12 @@ e2e/logs/
 `summary.log` is the entry point for automated systems: it identifies the
 first failure and names the chunk file to inspect. Each chunk file is
 fully self-contained for diagnosis.
+
+The top-level `orchestrator.log` and `webapp.log` are only written by
+`./e2e/run.sh ci`, which captures full container logs to disk just before
+tearing the stack down. That gives the CI workflow something to print and
+upload as an artifact after the containers are gone — `docker logs` would
+otherwise fail with "no such container" in the post-teardown steps.
 
 ### Library design
 

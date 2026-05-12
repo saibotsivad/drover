@@ -191,14 +191,40 @@ cmd_test() {
 	return "$overall_status"
 }
 
+cmd_collect_logs() {
+	# Dump the full container logs to a stable path under e2e/logs/ so
+	# they survive `cmd_down` and end up in the CI artifact (the e2e
+	# workflow uploads everything under e2e/logs/). The chunk files
+	# written during `cmd_test` only cover per-step windows; these
+	# capture everything emitted by the containers across the whole run,
+	# including startup banners and any tear-down logs.
+	mkdir -p "$E2E_DIR/logs"
+	if docker inspect "$ORCHESTRATOR_CONTAINER" >/dev/null 2>&1; then
+		echo "==> Capturing orchestrator logs to e2e/logs/orchestrator.log"
+		docker logs "$ORCHESTRATOR_CONTAINER" > "$E2E_DIR/logs/orchestrator.log" 2>&1 || true
+	else
+		echo "==> Orchestrator container not present; nothing to capture"
+	fi
+	if docker inspect "$WEBAPP_CONTAINER" >/dev/null 2>&1; then
+		echo "==> Capturing webapp logs to e2e/logs/webapp.log"
+		docker logs "$WEBAPP_CONTAINER" > "$E2E_DIR/logs/webapp.log" 2>&1 || true
+	else
+		echo "==> Webapp container not present; nothing to capture"
+	fi
+}
+
 cmd_ci() {
-	# One-shot run for CI: bring the stack up, run the tests, tear it
-	# down. Even if tests fail we still try to tear down — the workflow
-	# uploads e2e/logs/ as an artifact before this script exits, so the
-	# tear-down failing wouldn't lose anything.
-	cmd_up
+	# One-shot run for CI: bring the stack up, run the tests, capture
+	# the container logs to files (so the workflow can print them after
+	# tear-down without `docker logs` failing on missing containers),
+	# then tear the stack down. Every phase is best-effort after the
+	# first failure so the artifact ends up populated regardless.
 	local status=0
-	cmd_test || status=$?
+	cmd_up || status=$?
+	if [ "$status" -eq 0 ]; then
+		cmd_test || status=$?
+	fi
+	cmd_collect_logs || true
 	cmd_down || true
 	return "$status"
 }

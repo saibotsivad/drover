@@ -48,13 +48,27 @@ jobs:
       - name: Run e2e suite
         run: ./e2e/run.sh ci
 
+      # `./e2e/run.sh ci` captures the full container logs to
+      # e2e/logs/{orchestrator,webapp}.log before it tears the stack
+      # down, so these steps print them from disk rather than calling
+      # `docker logs` against containers that no longer exist.
       - name: Print orchestrator logs
         if: always()
-        run: docker logs drover-e2e-orchestrator || true
+        run: |
+          if [ -f e2e/logs/orchestrator.log ]; then
+            cat e2e/logs/orchestrator.log
+          else
+            echo "(no orchestrator log captured)"
+          fi
 
       - name: Print webapp logs
         if: always()
-        run: docker logs drover-e2e-webapp || true
+        run: |
+          if [ -f e2e/logs/webapp.log ]; then
+            cat e2e/logs/webapp.log
+          else
+            echo "(no webapp log captured)"
+          fi
 
       - name: Upload e2e logs
         if: always()
