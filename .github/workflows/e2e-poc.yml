@@ -44,10 +44,18 @@ jobs:
 
       - name: Start orchestrator
         run: |
+          # SOCKET_DIR must be a bind-mount at the same path inside and outside
+          # the orchestrator container. When the orchestrator tells Docker to
+          # mount a socket into the builder container, Docker resolves that path
+          # from the host — so the host path and the in-container path must match.
+          mkdir -p /var/run/drover-sockets
           docker run -d --name drover-e2e \
             -p 8000:8000 \
             -e DB_PATH=/tmp/db.sqlite \
-            -e SOCKET_DIR=/tmp/sockets \
+            -e SOCKET_DIR=/var/run/drover-sockets \
+            -e PRIVILEGED_IMAGE=drover-builder:e2e \
+            -v /var/run/drover-sockets:/var/run/drover-sockets \
+            -v /var/run/docker.sock:/var/run/docker.sock \
             drover:e2e
 
       - name: Wait for health
@@ -70,9 +78,50 @@ jobs:
             | python3 -c "import sys, json; d = json.load(sys.stdin); assert d['healthy'] is True, d"
           echo "Health check passed"
 
+      - name: Launch privileged container
+        run: |
+          RESPONSE=$(curl -sf -X POST http://localhost:8000/containers \
+            -H 'Content-Type: application/json' \
+            -d '{"image": "builder", "privileged": true}')
+          echo "Create response: $RESPONSE"
+          CONTAINER_ID=$(echo "$RESPONSE" | python3 -c "import sys, json; print(json.load(sys.stdin)['id'])")
+          echo "Container ID: $CONTAINER_ID"
+          echo "DROVER_CONTAINER_ID=$CONTAINER_ID" >> "$GITHUB_ENV"
+
+          for i in $(seq 1 30); do
+            STATUS_RESPONSE=$(curl -sf "http://localhost:8000/containers/$CONTAINER_ID")
+            STATUS=$(echo "$STATUS_RESPONSE" | python3 -c "import sys, json; print(json.load(sys.stdin)['status'])")
+            echo "Status (${i}s): $STATUS"
+            if [ "$STATUS" = "running" ]; then
+              echo "Builder container is running"
+              break
+            fi
+            if [ "$STATUS" = "error" ]; then
+              ERROR_CODE=$(echo "$STATUS_RESPONSE" | python3 -c "import sys, json; print(json.load(sys.stdin).get('error_code', 'unknown'))")
+              echo "Builder container failed with error_code: $ERROR_CODE"
+              exit 1
+            fi
+            if [ "$i" -eq 30 ]; then
+              echo "Builder container did not become running within 30s"
+              exit 1
+            fi
+            sleep 1
+          done
+
       - name: Print orchestrator logs
         if: always()
         run: docker logs drover-e2e
+
+      - name: Print builder container logs
+        if: always()
+        run: |
+          DOCKER_ID=$(docker ps -a --filter "ancestor=drover-builder:e2e" --format "{{.ID}}" | head -1)
+          if [ -n "$DOCKER_ID" ]; then
+            echo "Builder Docker container ID: $DOCKER_ID"
+            docker logs "$DOCKER_ID"
+          else
+            echo "No builder container found"
+          fi
 
       - name: Stop orchestrator
         if: always()
