@@ -223,12 +223,67 @@ socket and is returned via the API — it does not appear in orchestrator
 logs. Both sources appear as separate sections because they cannot be
 accurately interleaved by time.
 
+The chunk-file format intentionally captures only the orchestrator and
+webapp logs per step. Logs from the *micro-containers* that the
+orchestrator spawns are not interleaved here — see the next section for
+why and where they end up instead.
+
+### Micro-container logs
+
+Every `POST /containers` call causes the orchestrator to spawn a real
+Docker container — the *micro-container* that runs the guest agent and
+whatever work the caller exec's into it. Its stdout and stderr (the
+guest agent's output, plus anything an exec'd command printed) are just
+as important to debugging as the orchestrator's own logs: they're the
+only window into what the guest agent saw, which is often where socket
+errors, gVisor misconfiguration, or guest-side crashes show up.
+
+These logs are **not** interleaved into the per-step chunk files. There
+are two reasons:
+
+1. **No reliable per-step window.** A single test step can span several
+   exec calls against one micro-container, and a single micro-container
+   may outlive several test steps. The chunk file's `T1 → T2+grace`
+   window — which is meaningful for the orchestrator and webapp because
+   those are long-lived services — doesn't have a sensible
+   interpretation for a micro-container that started mid-test.
+2. **No Docker ID exposed to the test scripts.** The orchestrator's
+   public API identifies containers by its own generated ID, not by the
+   Docker ID. Filtering `docker logs <docker-id>` per step would require
+   either an API change to surface `docker_id` or a side-channel query
+   into the orchestrator's database — both heavier than the problem
+   warrants.
+
+So instead, `./e2e/run.sh ci` does a holistic post-mortem dump just
+before tear-down: every Docker container carrying the
+`drover.managed=true` label (which the builder image bakes in via its
+Dockerfile, and which every spawned container inherits) has its full
+`docker logs` output written to:
+
+```
+e2e/logs/microcontainers/<docker-id>.log
+```
+
+Each file starts with a small header naming the Docker ID, the image,
+and the auto-generated Docker container name, followed by the raw
+container log. The orchestrator's own log lines mention the
+micro-container's Docker ID whenever they interact with it (search for
+`docker=<short-id>`), so a developer can grep an orchestrator log line
+for that short ID and immediately find the matching micro-container
+file in this directory.
+
+The micro-container logs are uploaded as part of the standard
+`e2e/logs/` artifact when the workflow fails.
+
 ### Run directory layout
 
 ```
 e2e/logs/
 ├── orchestrator.log                  # Full container log (ci mode only)
 ├── webapp.log                        # Full container log (ci mode only)
+├── microcontainers/                  # Full container log per spawned micro-container (ci mode only)
+│   ├── <docker-id>.log
+│   └── …
 └── 2026-05-12T14-30-00Z/             # RUN_ID
     ├── summary.log                   # One line per step, with first-failure pointer
     ├── 01-health/
@@ -247,11 +302,12 @@ e2e/logs/
 first failure and names the chunk file to inspect. Each chunk file is
 fully self-contained for diagnosis.
 
-The top-level `orchestrator.log` and `webapp.log` are only written by
-`./e2e/run.sh ci`, which captures full container logs to disk just before
-tearing the stack down. That gives the CI workflow something to print and
-upload as an artifact after the containers are gone — `docker logs` would
-otherwise fail with "no such container" in the post-teardown steps.
+The top-level `orchestrator.log`, `webapp.log`, and `microcontainers/`
+directory are only written by `./e2e/run.sh ci`, which captures full
+container logs to disk just before tearing the stack down. That gives
+the CI workflow something to print and upload as an artifact after the
+containers are gone — `docker logs` would otherwise fail with "no such
+container" in the post-teardown steps.
 
 ### Library design
 

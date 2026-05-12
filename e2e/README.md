@@ -51,6 +51,16 @@ Every `./e2e/run.sh test` invocation creates a fresh run directory under
 - One subdirectory per test (e.g. `03-privileged-container/`) holding a
   self-contained chunk file per step.
 
+`./e2e/run.sh ci` additionally dumps full container logs to disk just
+before tear-down, so they survive the workflow's post-test steps:
+
+- `e2e/logs/orchestrator.log`, `e2e/logs/webapp.log` — full logs of the
+  long-running services.
+- `e2e/logs/microcontainers/<docker-id>.log` — one file per Docker
+  micro-container the orchestrator spawned during the run. The
+  orchestrator's own log lines reference these by `docker=<short-id>`
+  so you can cross-reference.
+
 `e2e/logs/` is gitignored. On GitHub Actions it's uploaded as an artifact
 when the workflow fails.
 

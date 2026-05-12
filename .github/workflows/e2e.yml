@@ -70,6 +70,25 @@ jobs:
             echo "(no webapp log captured)"
           fi
 
+      - name: Print micro-container logs
+        if: always()
+        run: |
+          # One file per Docker container the orchestrator spawned. The
+          # files are written by `./e2e/run.sh ci` before tear-down (see
+          # docs/full-e2e-suite.md → "Micro-container logs"). Print each
+          # in its own grouped section so the workflow log stays scannable.
+          shopt -s nullglob
+          files=(e2e/logs/microcontainers/*.log)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "(no micro-container logs captured)"
+            exit 0
+          fi
+          for f in "${files[@]}"; do
+            echo "::group::$f"
+            cat "$f"
+            echo "::endgroup::"
+          done
+
       - name: Upload e2e logs
         if: always()
         uses: actions/upload-artifact@v4
