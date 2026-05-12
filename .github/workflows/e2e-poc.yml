@@ -83,7 +83,7 @@ jobs:
         run: |
           RESPONSE=$(curl -sf -X POST http://localhost:8000/containers \
             -H 'Content-Type: application/json' \
-            -d '{"image": "builder", "privileged": true}')
+            -d '{"image": "builder", "privileged": true, "env": {"EXAMPLE": "hello"}}')
           echo "Create response: $RESPONSE"
           CONTAINER_ID=$(echo "$RESPONSE" | python3 -c "import sys, json; print(json.load(sys.stdin)['id'])")
           echo "Container ID: $CONTAINER_ID"
@@ -104,6 +104,47 @@ jobs:
             fi
             if [ "$i" -eq 30 ]; then
               echo "Builder container did not become running within 30s"
+              exit 1
+            fi
+            sleep 1
+          done
+
+      - name: Exec command in container
+        run: |
+          EXEC_RESPONSE=$(curl -sf -X POST "http://localhost:8000/containers/$DROVER_CONTAINER_ID/exec" \
+            -H 'Content-Type: application/json' \
+            -d '{"command": "echo $EXAMPLE"}')
+          echo "Exec response: $EXEC_RESPONSE"
+          COMMAND_ID=$(echo "$EXEC_RESPONSE" | python3 -c "import sys, json; print(json.load(sys.stdin)['command_id'])")
+          echo "Command ID: $COMMAND_ID"
+
+          for i in $(seq 1 30); do
+            EXEC_STATUS=$(curl -sf "http://localhost:8000/containers/$DROVER_CONTAINER_ID/exec/$COMMAND_ID")
+            STATUS=$(echo "$EXEC_STATUS" | python3 -c "import sys, json; print(json.load(sys.stdin)['status'])")
+            echo "Exec status (${i}s): $STATUS"
+            if [ "$STATUS" = "complete" ]; then
+              EXIT_CODE=$(echo "$EXEC_STATUS" | python3 -c "import sys, json; print(json.load(sys.stdin)['exit_code'])")
+              STDOUT=$(echo "$EXEC_STATUS" | python3 -c "
+import sys, json
+msgs = json.load(sys.stdin)['messages']
+print(''.join(m['data'] for m in msgs if m['stream'] == 'stdout'), end='')
+")
+              echo "Exit code: $EXIT_CODE"
+              echo "Stdout: $STDOUT"
+              if [ "$EXIT_CODE" != "0" ]; then
+                echo "Command failed with exit code $EXIT_CODE"
+                exit 1
+              fi
+              if echo "$STDOUT" | grep -q "hello"; then
+                echo "Output check passed"
+              else
+                echo "Expected 'hello' in stdout, got: $STDOUT"
+                exit 1
+              fi
+              break
+            fi
+            if [ "$i" -eq 30 ]; then
+              echo "Command did not complete within 30s"
               exit 1
             fi
             sleep 1
