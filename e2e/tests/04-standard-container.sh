@@ -1,0 +1,81 @@
+#!/usr/bin/env bash
+# Same lifecycle as test 03, but for a non-privileged container running
+# under gVisor (the runsc runtime). The orchestrator must be configured
+# with a non-builder discoverable image — by convention this test uses
+# `builder` because the same image carries `drover.name=builder` and runs
+# the executor without needing the host Docker socket bind-mount (the
+# orchestrator only mounts /run/docker.sock into privileged containers).
+#
+# If runsc is not installed on the host, gVisor cannot run and the test
+# skips cleanly with a SKIP line and exit 0. On CI the e2e workflow
+# installs runsc as a setup step, so this never skips there.
+
+# shellcheck source=../lib/common.sh
+. "$(dirname "$0")/../lib/common.sh"
+
+echo "[test] 04-standard-container: non-privileged lifecycle under gVisor"
+
+if ! command -v runsc >/dev/null 2>&1; then
+	echo "  SKIP: gVisor (runsc) not installed on this host"
+	exit 0
+fi
+
+# --- 1. create -------------------------------------------------------------
+
+step_begin "create-container"
+step_set_wait "running" 30
+REQUEST_BODY='{"image": "builder", "privileged": false, "env": {"DROVER_TEST_VAR": "hello_drover"}}'
+api_post "${ORCHESTRATOR_URL}/containers" "$REQUEST_BODY"
+assert_equals "201" "$E2E_RESPONSE_STATUS" "POST /containers status"
+CONTAINER_ID=$(printf '%s' "$E2E_RESPONSE_BODY" | jq -r '.id')
+assert_not_empty "$CONTAINER_ID" "container id returned"
+echo "  container_id=$CONTAINER_ID"
+if ! wait_container_status "$CONTAINER_ID" "running" 45; then
+	# If the container went to error, surface error_code in the chunk so
+	# missing --host-uds=all (the gVisor flag the orchestrator needs) is
+	# immediately diagnosable.
+	ERROR_CODE=$(printf '%s' "$E2E_RESPONSE_BODY" | jq -r '.error_code // empty')
+	if [ -n "$ERROR_CODE" ]; then
+		e2e_fail "non-privileged container failed: error_code=$ERROR_CODE (check that runsc daemon.json includes --host-uds=all)"
+	fi
+	e2e_fail "non-privileged container did not reach running"
+fi
+FINAL=$(printf '%s' "$E2E_RESPONSE_BODY" | jq -r '.status')
+assert_equals "running" "$FINAL" "final status is running"
+step_end
+
+# --- 2. exec ---------------------------------------------------------------
+
+step_begin "exec-command"
+step_set_wait "complete" 30
+EXEC_BODY='{"command": "echo $DROVER_TEST_VAR"}'
+api_post "${ORCHESTRATOR_URL}/containers/${CONTAINER_ID}/exec" "$EXEC_BODY"
+assert_equals "201" "$E2E_RESPONSE_STATUS" "POST exec status"
+COMMAND_ID=$(printf '%s' "$E2E_RESPONSE_BODY" | jq -r '.command_id')
+assert_not_empty "$COMMAND_ID" "command id returned"
+
+EXEC_RESULT=$(wait_exec_complete "$CONTAINER_ID" "$COMMAND_ID" 30) \
+	|| e2e_fail "exec did not complete"
+EXIT_CODE=$(printf '%s' "$EXEC_RESULT" | jq -r '.exit_code')
+STDOUT=$(printf '%s' "$EXEC_RESULT" | jq -r '[.messages[] | select(.stream == "stdout") | .data] | join("")')
+STDERR=$(printf '%s' "$EXEC_RESULT" | jq -r '[.messages[] | select(.stream == "stderr") | .data] | join("")')
+step_set_exec_result "$EXIT_CODE" "$STDOUT" "$STDERR"
+assert_zero "$EXIT_CODE" "exec exit code"
+assert_contains "$STDOUT" "hello_drover" "exec stdout"
+step_end
+
+# --- 3. stop ---------------------------------------------------------------
+
+step_begin "stop-container"
+step_set_wait "stopped" 30
+api_post "${ORCHESTRATOR_URL}/containers/${CONTAINER_ID}/stop"
+if [ "$E2E_RESPONSE_STATUS" != "200" ] && [ "$E2E_RESPONSE_STATUS" != "202" ]; then
+	e2e_fail "POST /containers/{id}/stop returned $E2E_RESPONSE_STATUS"
+fi
+wait_container_status "$CONTAINER_ID" "stopped" 30 \
+	|| e2e_fail "container did not reach stopped"
+FINAL=$(printf '%s' "$E2E_RESPONSE_BODY" | jq -r '.status')
+assert_equals "stopped" "$FINAL" "final status is stopped"
+step_end
+
+echo "[test] 04-standard-container: ok"

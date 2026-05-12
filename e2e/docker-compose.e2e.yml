@@ -1,0 +1,69 @@
+# End-to-end test stack for Drover.
+#
+# All three components — orchestrator, webapp, and the builder image template
+# — are built from source on every `up`. The stack runs with deterministic
+# ports and a hard-coded API key so the test scripts can talk to it without
+# any per-run setup.
+#
+# Notes:
+# - SOCKET_DIR is bind-mounted at the same path inside and outside the
+#   orchestrator container (/tmp/drover-sockets). When the orchestrator asks
+#   the host Docker daemon to mount a per-container socket into a builder,
+#   Docker resolves the path against the host filesystem, so host and
+#   in-container paths must match.
+# - DROVER_API_KEY here is the SHA-256 hex digest of the plain-text key
+#   "drover-e2e-test-key" (committed in e2e/.env.test). Both halves are
+#   intentionally checked into the repo: this stack only ever runs against
+#   throwaway local/CI environments.
+
+name: drover-e2e
+
+services:
+  orchestrator:
+    build:
+      context: ..
+      dockerfile: orchestrator/Dockerfile
+    image: drover-orchestrator:e2e
+    container_name: drover-e2e-orchestrator
+    ports:
+      - "8000:8000"
+    environment:
+      DB_PATH: /var/lib/orchestrator/db.sqlite
+      SOCKET_DIR: /tmp/drover-sockets
+      PRIVILEGED_IMAGE: drover-builder:e2e
+      LOG_LEVEL: INFO
+      DROVER_API_KEY: 78bb43a35e23d69a38ec1b64886b858607ec407fa916f7e0390e0a015a0ba031
+    volumes:
+      - drover-data:/var/lib/orchestrator
+      - /tmp/drover-sockets:/tmp/drover-sockets
+      - /var/run/docker.sock:/var/run/docker.sock
+
+  webapp:
+    build:
+      context: ..
+      dockerfile: webapp/Dockerfile
+    image: drover-webapp:e2e
+    container_name: drover-e2e-webapp
+    ports:
+      - "9091:8080"
+    environment:
+      DROVER_ORCHESTRATOR_URL: http://orchestrator:8000
+      DROVER_API_KEY: drover-e2e-test-key
+      LOG_LEVEL: info
+    depends_on:
+      - orchestrator
+
+  # The builder image is a template — it isn't a long-running service. This
+  # entry exists so `docker compose build` produces the image with its
+  # `drover.managed` / `drover.name` labels visible to the orchestrator's
+  # image-discovery code. The container itself runs `true` and exits.
+  builder:
+    build:
+      context: ..
+      dockerfile: builder/Dockerfile
+    image: drover-builder:e2e
+    command: ["true"]
+    restart: "no"
+
+volumes:
+  drover-data:
