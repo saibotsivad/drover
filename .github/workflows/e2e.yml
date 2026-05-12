@@ -1,0 +1,65 @@
+name: E2E
+
+# Manual-trigger only for now. Once the suite is stable and fast enough
+# this can be promoted to `pull_request` against main — the job already
+# tears the stack down at the end and uploads logs on failure, so there
+# are no carry-over side effects to worry about.
+on:
+  workflow_dispatch:
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install gVisor (runsc)
+        run: |
+          set -e
+          ARCH=$(uname -m)
+          URL="https://storage.googleapis.com/gvisor/releases/release/latest/${ARCH}"
+          wget -q "${URL}/runsc" "${URL}/runsc.sha512"
+          sha512sum -c runsc.sha512
+          rm -f runsc.sha512
+          chmod 755 runsc
+          sudo mv runsc /usr/local/bin/
+          sudo runsc install
+          # Without --host-uds=all, gVisor blocks the guest agent from
+          # connecting back to the per-container orchestrator socket
+          # bind-mounted into the container, and every non-privileged
+          # container hits init_timeout. See docs/rfc/2026-05-12-e2e-testing.md.
+          sudo python3 -c "import json; p='/etc/docker/daemon.json'; d=json.load(open(p)); d['runtimes']['runsc']['runtimeArgs']=['--host-uds=all']; json.dump(d,open(p,'w'),indent=2)"
+          sudo systemctl reload docker
+
+      - name: Install jq
+        run: |
+          # Ubuntu runners already ship with jq, but a missing jq breaks
+          # the assertion helpers in a confusing way, so install
+          # explicitly and let the step fail loudly if it isn't available.
+          if ! command -v jq >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends jq
+          fi
+          jq --version
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Run e2e suite
+        run: ./e2e/run.sh ci
+
+      - name: Print orchestrator logs
+        if: always()
+        run: docker logs drover-e2e-orchestrator || true
+
+      - name: Print webapp logs
+        if: always()
+        run: docker logs drover-e2e-webapp || true
+
+      - name: Upload e2e logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-logs
+          path: e2e/logs/
+          if-no-files-found: warn
