@@ -28,7 +28,7 @@ jobs:
           # Without --host-uds=all, gVisor blocks the guest agent from
           # connecting back to the per-container orchestrator socket
           # bind-mounted into the container, and every non-privileged
-          # container hits init_timeout. See docs/rfc/2026-05-12-e2e-testing.md.
+          # container hits init_timeout. See docs/full-e2e-suite.md.
           sudo python3 -c "import json; p='/etc/docker/daemon.json'; d=json.load(open(p)); d['runtimes']['runsc']['runtimeArgs']=['--host-uds=all']; json.dump(d,open(p,'w'),indent=2)"
           sudo systemctl reload docker
 

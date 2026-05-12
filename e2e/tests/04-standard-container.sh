@@ -6,9 +6,11 @@
 # the executor without needing the host Docker socket bind-mount (the
 # orchestrator only mounts /run/docker.sock into privileged containers).
 #
-# If runsc is not installed on the host, gVisor cannot run and the test
-# skips cleanly with a SKIP line and exit 0. On CI the e2e workflow
-# installs runsc as a setup step, so this never skips there.
+# If runsc is not installed on the host, gVisor cannot run. By default
+# this test FAILS in that case, because a silent skip would let an
+# accidentally-missing gVisor install pass as a green run. To opt into
+# skipping when runsc really isn't available (and you know you're not
+# testing the non-privileged path), set E2E_ALLOW_MISSING_RUNSC=1.
 
 # shellcheck source=../lib/common.sh
 . "$(dirname "$0")/../lib/common.sh"
@@ -16,8 +18,14 @@
 echo "[test] 04-standard-container: non-privileged lifecycle under gVisor"
 
 if ! command -v runsc >/dev/null 2>&1; then
-	echo "  SKIP: gVisor (runsc) not installed on this host"
-	exit 0
+	if [ "${E2E_ALLOW_MISSING_RUNSC:-}" = "1" ]; then
+		echo "  SKIP: gVisor (runsc) not installed; skipped because E2E_ALLOW_MISSING_RUNSC=1"
+		exit 0
+	fi
+	echo "  FAIL: gVisor (runsc) is not installed on this host." >&2
+	echo "        Install it via docs/install-runsc-gvisor.md, or rerun with" >&2
+	echo "        E2E_ALLOW_MISSING_RUNSC=1 to skip this test explicitly." >&2
+	exit 1
 fi
 
 # --- 1. create -------------------------------------------------------------

@@ -9,7 +9,8 @@
 #   ./e2e/run.sh test                  Run tests against an already-up stack
 #   ./e2e/run.sh ci                    up + test + down (one-shot)
 #
-# See docs/rfc/2026-05-12-e2e-testing.md for the lifecycle rationale.
+# See docs/full-e2e-suite.md for the lifecycle rationale, and
+# e2e/README.md for a developer-focused quickstart.
 
 set -Eeuo pipefail
 
