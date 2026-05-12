@@ -49,6 +49,7 @@ jobs:
           # mount a socket into the builder container, Docker resolves that path
           # from the host — so the host path and the in-container path must match.
           mkdir -p /tmp/drover-sockets
+          chmod 777 /tmp/drover-sockets
           docker run -d --name drover-e2e \
             -p 8000:8000 \
             -e DB_PATH=/tmp/db.sqlite \
