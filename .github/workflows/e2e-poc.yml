@@ -186,6 +186,92 @@ jobs:
           echo "$RESPONSE" | python3 -c "import sys, json; d=json.load(sys.stdin); assert d['name']=='test-worker', d"
           echo "Image verified"
 
+      - name: Stop privileged container
+        run: |
+          curl -sf -X POST "http://localhost:8000/containers/$DROVER_CONTAINER_ID/stop"
+
+          for i in $(seq 1 30); do
+            STATUS_RESPONSE=$(curl -sf "http://localhost:8000/containers/$DROVER_CONTAINER_ID")
+            STATUS=$(echo "$STATUS_RESPONSE" | python3 -c "import sys, json; print(json.load(sys.stdin)['status'])")
+            echo "Status (${i}s): $STATUS"
+            if [ "$STATUS" = "stopped" ]; then
+              echo "Privileged container stopped"
+              break
+            fi
+            if [ "$i" -eq 30 ]; then
+              echo "Privileged container did not stop within 30s"
+              exit 1
+            fi
+            sleep 1
+          done
+
+      - name: Launch non-privileged container (gVisor)
+        run: |
+          RESPONSE=$(curl -sf -X POST http://localhost:8000/containers \
+            -H 'Content-Type: application/json' \
+            -d '{"image": "test-worker", "privileged": false, "env": {"EXAMPLE": "hello"}}')
+          echo "Create response: $RESPONSE"
+          WORKER_ID=$(echo "$RESPONSE" | python3 -c "import sys, json; print(json.load(sys.stdin)['id'])")
+          echo "Worker ID: $WORKER_ID"
+          echo "DROVER_WORKER_ID=$WORKER_ID" >> "$GITHUB_ENV"
+
+          for i in $(seq 1 30); do
+            STATUS_RESPONSE=$(curl -sf "http://localhost:8000/containers/$WORKER_ID")
+            STATUS=$(echo "$STATUS_RESPONSE" | python3 -c "import sys, json; print(json.load(sys.stdin)['status'])")
+            echo "Status (${i}s): $STATUS"
+            if [ "$STATUS" = "running" ]; then
+              echo "Non-privileged container is running"
+              break
+            fi
+            if [ "$STATUS" = "error" ]; then
+              ERROR_CODE=$(echo "$STATUS_RESPONSE" | python3 -c "import sys, json; print(json.load(sys.stdin).get('error_code', 'unknown'))")
+              echo "Non-privileged container failed with error_code: $ERROR_CODE"
+              exit 1
+            fi
+            if [ "$i" -eq 30 ]; then
+              echo "Non-privileged container did not become running within 30s"
+              exit 1
+            fi
+            sleep 1
+          done
+
+      - name: Exec command in non-privileged container
+        run: |
+          EXEC_RESPONSE=$(curl -sf -X POST "http://localhost:8000/containers/$DROVER_WORKER_ID/exec" \
+            -H 'Content-Type: application/json' \
+            -d '{"command": "echo $EXAMPLE"}')
+          echo "Exec response: $EXEC_RESPONSE"
+          COMMAND_ID=$(echo "$EXEC_RESPONSE" | python3 -c "import sys, json; print(json.load(sys.stdin)['command_id'])")
+          echo "Command ID: $COMMAND_ID"
+
+          for i in $(seq 1 30); do
+            EXEC_STATUS=$(curl -sf "http://localhost:8000/containers/$DROVER_WORKER_ID/exec/$COMMAND_ID")
+            STATUS=$(echo "$EXEC_STATUS" | python3 -c "import sys, json; print(json.load(sys.stdin)['status'])")
+            echo "Exec status (${i}s): $STATUS"
+            if [ "$STATUS" = "complete" ]; then
+              EXIT_CODE=$(echo "$EXEC_STATUS" | python3 -c "import sys, json; print(json.load(sys.stdin)['exit_code'])")
+              STDOUT=$(echo "$EXEC_STATUS" | python3 -c "import sys, json; d=json.load(sys.stdin); print(''.join(m['data'] for m in d['messages'] if m['stream']=='stdout'), end='')")
+              echo "Exit code: $EXIT_CODE"
+              echo "Stdout: $STDOUT"
+              if [ "$EXIT_CODE" != "0" ]; then
+                echo "Command failed with exit code $EXIT_CODE"
+                exit 1
+              fi
+              if echo "$STDOUT" | grep -q "hello"; then
+                echo "Output check passed"
+              else
+                echo "Expected 'hello' in stdout, got: $STDOUT"
+                exit 1
+              fi
+              break
+            fi
+            if [ "$i" -eq 30 ]; then
+              echo "Command did not complete within 30s"
+              exit 1
+            fi
+            sleep 1
+          done
+
       - name: Print orchestrator logs
         if: always()
         run: docker logs drover-e2e
@@ -199,6 +285,17 @@ jobs:
             docker logs "$DOCKER_ID"
           else
             echo "No builder container found"
+          fi
+
+      - name: Print worker container logs
+        if: always()
+        run: |
+          DOCKER_ID=$(docker ps -a --filter "ancestor=drover-test-worker:e2e" --format "{{.ID}}" | head -1)
+          if [ -n "$DOCKER_ID" ]; then
+            echo "Worker Docker container ID: $DOCKER_ID"
+            docker logs "$DOCKER_ID"
+          else
+            echo "No worker container found"
           fi
 
       - name: Stop orchestrator
