@@ -48,13 +48,13 @@ jobs:
           # the orchestrator container. When the orchestrator tells Docker to
           # mount a socket into the builder container, Docker resolves that path
           # from the host — so the host path and the in-container path must match.
-          mkdir -p /var/run/drover-sockets
+          mkdir -p /tmp/drover-sockets
           docker run -d --name drover-e2e \
             -p 8000:8000 \
             -e DB_PATH=/tmp/db.sqlite \
-            -e SOCKET_DIR=/var/run/drover-sockets \
+            -e SOCKET_DIR=/tmp/drover-sockets \
             -e PRIVILEGED_IMAGE=drover-builder:e2e \
-            -v /var/run/drover-sockets:/var/run/drover-sockets \
+            -v /tmp/drover-sockets:/tmp/drover-sockets \
             -v /var/run/docker.sock:/var/run/docker.sock \
             drover:e2e
 
