@@ -21,14 +21,7 @@ jobs:
           # Allow gVisor containers to connect to host Unix domain sockets.
           # Without this the guest agent cannot connect back to the orchestrator
           # socket that is bind-mounted into the container.
-          sudo python3 -c "
-import json
-with open('/etc/docker/daemon.json') as f:
-    d = json.load(f)
-d['runtimes']['runsc']['runtimeArgs'] = ['--host-uds=all']
-with open('/etc/docker/daemon.json', 'w') as f:
-    json.dump(d, f, indent=2)
-"
+          sudo python3 -c "import json; p='/etc/docker/daemon.json'; d=json.load(open(p)); d['runtimes']['runsc']['runtimeArgs']=['--host-uds=all']; json.dump(d,open(p,'w'),indent=2)"
           sudo systemctl reload docker
 
       - uses: actions/checkout@v4
