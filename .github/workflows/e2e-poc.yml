@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  orchestrator:
+  stack:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -19,6 +19,15 @@ jobs:
           push: false
           load: true
           tags: drover:e2e
+
+      - name: Build builder image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./builder/Dockerfile
+          push: false
+          load: true
+          tags: drover-builder:e2e
 
       - name: Start orchestrator
         run: |
@@ -56,18 +65,26 @@ jobs:
         if: always()
         run: docker stop drover-e2e
 
-  builder:
+  gvisor:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Install gVisor
+        run: |
+          set -e
+          ARCH=$(uname -m)
+          URL="https://storage.googleapis.com/gvisor/releases/release/latest/${ARCH}"
+          wget -q "${URL}/runsc" "${URL}/runsc.sha512"
+          sha512sum -c runsc.sha512
+          rm -f runsc.sha512
+          chmod 755 runsc
+          sudo mv runsc /usr/local/bin/
 
-      - uses: docker/setup-buildx-action@v3
+      - name: Configure Docker runtime
+        run: |
+          sudo runsc install
+          sudo systemctl reload docker
 
-      - name: Build builder image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: ./builder/Dockerfile
-          push: false
-          load: true
-          tags: drover-builder:e2e
+      - name: Verify gVisor runtime
+        run: |
+          docker run --rm --runtime=runsc hello-world
+          echo "gVisor runtime verified"
