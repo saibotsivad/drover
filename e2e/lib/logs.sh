@@ -9,7 +9,7 @@
 #
 # The chunk format is plain text with labelled sections, readable by both
 # humans and automated systems without preprocessing. It is described in
-# detail in docs/rfc/2026-05-12-e2e-testing.md.
+# detail in docs/full-e2e-suite.md.
 
 # Grace period (in milliseconds) added to the end of the capture window
 # so log lines that flush slightly after the API call's terminal state
