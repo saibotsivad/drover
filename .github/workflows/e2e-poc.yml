@@ -124,11 +124,7 @@ jobs:
             echo "Exec status (${i}s): $STATUS"
             if [ "$STATUS" = "complete" ]; then
               EXIT_CODE=$(echo "$EXEC_STATUS" | python3 -c "import sys, json; print(json.load(sys.stdin)['exit_code'])")
-              STDOUT=$(echo "$EXEC_STATUS" | python3 -c "
-import sys, json
-msgs = json.load(sys.stdin)['messages']
-print(''.join(m['data'] for m in msgs if m['stream'] == 'stdout'), end='')
-")
+              STDOUT=$(echo "$EXEC_STATUS" | python3 -c "import sys, json; d=json.load(sys.stdin); print(''.join(m['data'] for m in d['messages'] if m['stream']=='stdout'), end='')")
               echo "Exit code: $EXIT_CODE"
               echo "Stdout: $STDOUT"
               if [ "$EXIT_CODE" != "0" ]; then
