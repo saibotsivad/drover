@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  orchestrator-smoke:
+  orchestrator:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -55,3 +55,19 @@ jobs:
       - name: Stop orchestrator
         if: always()
         run: docker stop drover-e2e
+
+  builder:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build builder image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./builder/Dockerfile
+          push: false
+          load: true
+          tags: drover-builder:e2e
