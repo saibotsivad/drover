@@ -146,6 +146,46 @@ jobs:
             sleep 1
           done
 
+      - name: Build image from inside builder container
+        run: |
+          BUILD_CMD="git clone --depth 1 https://github.com/saibotsivad/drover.git /tmp/drover && DOCKER_HOST=unix:///run/docker.sock docker build -f /tmp/drover/builder/Dockerfile --label drover.managed=true --label drover.name=test-worker -t drover-test-worker:e2e /tmp/drover"
+          EXEC_RESPONSE=$(curl -sf -X POST "http://localhost:8000/containers/$DROVER_CONTAINER_ID/exec" \
+            -H 'Content-Type: application/json' \
+            -d "{\"command\": \"$BUILD_CMD\"}")
+          echo "Exec response: $EXEC_RESPONSE"
+          COMMAND_ID=$(echo "$EXEC_RESPONSE" | python3 -c "import sys, json; print(json.load(sys.stdin)['command_id'])")
+          echo "Command ID: $COMMAND_ID"
+
+          for i in $(seq 1 120); do
+            EXEC_STATUS=$(curl -sf "http://localhost:8000/containers/$DROVER_CONTAINER_ID/exec/$COMMAND_ID")
+            STATUS=$(echo "$EXEC_STATUS" | python3 -c "import sys, json; print(json.load(sys.stdin)['status'])")
+            if [ "$STATUS" = "complete" ]; then
+              echo "--- build output ---"
+              echo "$EXEC_STATUS" | python3 -c "import sys, json; d=json.load(sys.stdin); print(''.join(m['data'] for m in d['messages']), end='')"
+              echo "--- end build output ---"
+              EXIT_CODE=$(echo "$EXEC_STATUS" | python3 -c "import sys, json; print(json.load(sys.stdin)['exit_code'])")
+              echo "Exit code: $EXIT_CODE"
+              if [ "$EXIT_CODE" != "0" ]; then
+                echo "Build failed"
+                exit 1
+              fi
+              echo "Build succeeded"
+              break
+            fi
+            if [ "$i" -eq 120 ]; then
+              echo "Build did not complete within 120s"
+              exit 1
+            fi
+            sleep 1
+          done
+
+      - name: Verify built image is discoverable
+        run: |
+          RESPONSE=$(curl -sf "http://localhost:8000/images/test-worker")
+          echo "Image response: $RESPONSE"
+          echo "$RESPONSE" | python3 -c "import sys, json; d=json.load(sys.stdin); assert d['name']=='test-worker', d"
+          echo "Image verified"
+
       - name: Print orchestrator logs
         if: always()
         run: docker logs drover-e2e
