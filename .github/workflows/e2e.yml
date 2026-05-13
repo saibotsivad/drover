@@ -48,13 +48,29 @@ jobs:
       - name: Run e2e suite
         run: ./e2e/run.sh ci
 
-      - name: Print orchestrator logs
+      # `./e2e/run.sh ci` captures every container's full logs to disk
+      # before it tears the stack down (see docs/full-e2e-suite.md). This
+      # step prints every file under e2e/logs/ in its own collapsible
+      # group so the workflow view mirrors the contents of the uploaded
+      # artifact below — anything you'd download from the artifact is
+      # also viewable inline.
+      - name: Print e2e logs
         if: always()
-        run: docker logs drover-e2e-orchestrator || true
-
-      - name: Print webapp logs
-        if: always()
-        run: docker logs drover-e2e-webapp || true
+        run: |
+          if [ ! -d e2e/logs ]; then
+            echo "(no e2e/logs directory present)"
+            exit 0
+          fi
+          found=0
+          while IFS= read -r -d '' f; do
+            found=1
+            echo "::group::$f"
+            cat -- "$f"
+            echo "::endgroup::"
+          done < <(find e2e/logs -type f -print0 | sort -z)
+          if [ "$found" -eq 0 ]; then
+            echo "(no e2e log files captured)"
+          fi
 
       - name: Upload e2e logs
         if: always()

@@ -80,6 +80,19 @@ cmd_up() {
 cmd_down() {
 	echo "==> Stopping stack and dropping volumes"
 	compose down --volumes --remove-orphans
+
+	# Compose only knows about the services it created (orchestrator,
+	# webapp, builder). The micro-containers the orchestrator spawned
+	# during the run aren't tracked by compose, so they'd linger across
+	# runs locally. Remove them here, best-effort.
+	local micro_ids
+	micro_ids=$(docker ps -aq --filter "label=drover.managed=true" 2>/dev/null || true)
+	if [ -n "$micro_ids" ]; then
+		echo "==> Removing drover-managed micro-containers"
+		# shellcheck disable=SC2086
+		docker rm -f $micro_ids >/dev/null 2>&1 || true
+	fi
+
 	# The bind-mount directory is owned by root after the orchestrator's
 	# socket activity. Clean it up so the next `up` starts fresh.
 	if [ -d "$SOCKET_DIR" ]; then
@@ -191,14 +204,73 @@ cmd_test() {
 	return "$overall_status"
 }
 
+cmd_collect_logs() {
+	# Dump the full container logs to stable paths under e2e/logs/ so
+	# they survive `cmd_down` and end up in the CI artifact (the e2e
+	# workflow uploads everything under e2e/logs/). The chunk files
+	# written during `cmd_test` only cover per-step windows for the
+	# orchestrator and webapp; these capture everything emitted by every
+	# container across the whole run, including the spawned
+	# micro-containers' guest-agent output. See docs/full-e2e-suite.md
+	# for the rationale.
+	mkdir -p "$E2E_DIR/logs"
+	if docker inspect "$ORCHESTRATOR_CONTAINER" >/dev/null 2>&1; then
+		echo "==> Capturing orchestrator logs to e2e/logs/orchestrator.log"
+		docker logs "$ORCHESTRATOR_CONTAINER" > "$E2E_DIR/logs/orchestrator.log" 2>&1 || true
+	else
+		echo "==> Orchestrator container not present; nothing to capture"
+	fi
+	if docker inspect "$WEBAPP_CONTAINER" >/dev/null 2>&1; then
+		echo "==> Capturing webapp logs to e2e/logs/webapp.log"
+		docker logs "$WEBAPP_CONTAINER" > "$E2E_DIR/logs/webapp.log" 2>&1 || true
+	else
+		echo "==> Webapp container not present; nothing to capture"
+	fi
+
+	# Micro-containers spawned by the orchestrator. They inherit the
+	# `drover.managed=true` label from the builder image's Dockerfile,
+	# so we can discover them by label even though their IDs are not
+	# known up front. One log file per Docker container ID — see the
+	# "Micro-container logs" section in docs/full-e2e-suite.md.
+	local micro_ids
+	micro_ids=$(docker ps -a --filter "label=drover.managed=true" --format '{{.ID}}' 2>/dev/null || true)
+	if [ -z "$micro_ids" ]; then
+		echo "==> No drover-managed micro-containers found to capture"
+		return 0
+	fi
+
+	local micro_dir="$E2E_DIR/logs/microcontainers"
+	mkdir -p "$micro_dir"
+	while IFS= read -r id; do
+		[ -z "$id" ] && continue
+		local image name
+		image=$(docker inspect --format '{{.Config.Image}}' "$id" 2>/dev/null || echo "unknown")
+		# Drop the leading slash that docker inspect's `.Name` carries.
+		name=$(docker inspect --format '{{.Name}}' "$id" 2>/dev/null | sed 's|^/||' || echo "")
+		echo "==> Capturing micro-container ${id:0:12} ($image) to e2e/logs/microcontainers/${id:0:12}.log"
+		{
+			printf 'DOCKER_ID:      %s\n' "$id"
+			printf 'IMAGE:          %s\n' "$image"
+			printf 'CONTAINER_NAME: %s\n' "$name"
+			printf '\n'
+			printf -- '--- LOGS ---\n'
+		} > "$micro_dir/$id.log"
+		docker logs "$id" >>"$micro_dir/$id.log" 2>&1 || true
+	done <<< "$micro_ids"
+}
+
 cmd_ci() {
-	# One-shot run for CI: bring the stack up, run the tests, tear it
-	# down. Even if tests fail we still try to tear down — the workflow
-	# uploads e2e/logs/ as an artifact before this script exits, so the
-	# tear-down failing wouldn't lose anything.
-	cmd_up
+	# One-shot run for CI: bring the stack up, run the tests, capture
+	# the container logs to files (so the workflow can print them after
+	# tear-down without `docker logs` failing on missing containers),
+	# then tear the stack down. Every phase is best-effort after the
+	# first failure so the artifact ends up populated regardless.
 	local status=0
-	cmd_test || status=$?
+	cmd_up || status=$?
+	if [ "$status" -eq 0 ]; then
+		cmd_test || status=$?
+	fi
+	cmd_collect_logs || true
 	cmd_down || true
 	return "$status"
 }
