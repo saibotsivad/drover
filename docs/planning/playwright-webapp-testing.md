@@ -157,10 +157,8 @@ This test also reuses the container from Test 2.
 
 ## Implementation checklist
 
-- [ ] Pin a specific `mcr.microsoft.com/playwright` image tag (match Node 22 since
-      the webapp already uses it) and record it here.
-- [ ] Add `playwright-runner` service to `docker-compose.e2e.yml` (profiles:
-      playwright).
+- [ ] Add `playwright-runner` service with image `mcr.microsoft.com/playwright:v1.52.0-noble`
+      to `docker-compose.e2e.yml` (profiles: playwright).
 - [ ] Create `e2e/playwright/package.json` with `@playwright/test` dependency.
 - [ ] Create `e2e/playwright/playwright.config.ts` (single Chromium project, env-var
       `baseURL`, output to `results/`).
@@ -174,23 +172,20 @@ This test also reuses the container from Test 2.
 - [ ] Add a note to `e2e/README.md` explaining how to run the Playwright suite
       locally.
 
+## Settled decisions
+
+- **Shared container for Tests 2–4:** Tests 2, 3, and 4 share one container via a
+  `test.describe`-level `beforeAll` fixture. This matches how the existing bash suite
+  works within a single test file.
+
+- **Playwright image tag:** Pinned to `mcr.microsoft.com/playwright:v1.52.0-noble`.
+  Bump deliberately; never use `latest`.
+
+- **No test teardown:** Tests 2–4 leave the container running. The `e2e/run.sh down`
+  step already cleans up all `drover.managed=true` containers, so no `afterAll` stop
+  hook is needed.
+
 ## Open questions / decisions for team review
-
-- **Shared vs. isolated container for Tests 2–4:** Sharing one container across all
-  three tests is faster and mirrors real usage, but a failure in Test 2 will skip
-  Tests 3 and 4. Alternatively each test launches its own container (slower but
-  independent). Recommendation: share, since the existing bash suite already does
-  this within a single test file.
-
-- **Playwright image tag:** `mcr.microsoft.com/playwright:v1.52.0-noble` is current
-  as of the time this doc was written. We should pin a tag and bump it deliberately
-  rather than using `latest`.
-
-- **Test teardown:** Tests 2–4 leave the container in `running` state. The
-  `e2e/run.sh down` step's micro-container cleanup (filter `drover.managed=true`)
-  already removes these, so no explicit stop-in-test teardown is strictly required.
-  However, it may be cleaner to stop the container in an `afterAll` hook so partial
-  runs don't leave debris when `down` is not called.
 
 - **exec UI flow:** The current webapp detail page (`/views/containers/:id`) will
   need to be confirmed to have an exec form and an output panel that Playwright can
