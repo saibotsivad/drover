@@ -598,3 +598,94 @@ def test_docker_state_unknown():
 
 def test_docker_state_empty():
     assert _docker_state_to_status({}) is None
+
+
+# -- get_logs --------------------------------------------------------------
+
+
+def _docker_log_frame(stream_type: int, payload: bytes) -> bytes:
+    return bytes([stream_type, 0, 0, 0]) + len(payload).to_bytes(4, "big") + payload
+
+
+async def test_get_logs_not_found(manager):
+    with pytest.raises(ContainerNotFound):
+        await manager.get_logs("missing")
+
+
+async def test_get_logs_combines_docker_and_buffer(
+    config, db, docker, sockets
+):
+    from orchestrator.log_buffer import RingBufferHandler
+
+    buffer = RingBufferHandler(capacity=50)
+    manager = ContainerManager(config, db, docker, sockets, buffer)
+
+    resp = await _create_running(manager, db, image="test-img")
+    cid = resp.id
+
+    # Seed orchestrator logs: one mentioning this container, one not.
+    import logging
+    log = logging.getLogger("test_get_logs")
+    log.handlers.clear()
+    log.addHandler(buffer)
+    log.propagate = False
+    log.setLevel(logging.DEBUG)
+    log.info("Container %s reached running", cid)
+    log.info("Container other_id reached running")
+
+    docker.get_container_logs = AsyncMock(
+        return_value=(
+            _docker_log_frame(1, b"hello stdout\n")
+            + _docker_log_frame(2, b"oops stderr\n")
+        )
+    )
+
+    payload = await manager.get_logs(cid)
+
+    assert payload.container_id == cid
+    assert payload.container_logs_unavailable is False
+    assert [f.stream for f in payload.container_logs] == ["stdout", "stderr"]
+    assert payload.container_logs[0].data == "hello stdout\n"
+    assert payload.container_logs[1].data == "oops stderr\n"
+
+    # Orchestrator records: only the one mentioning this container.
+    assert len(payload.orchestrator_logs) == 1
+    assert cid in payload.orchestrator_logs[0].message
+
+
+async def test_get_logs_handles_docker_container_gone(
+    config, db, docker, sockets
+):
+    from orchestrator.log_buffer import RingBufferHandler
+
+    buffer = RingBufferHandler(capacity=10)
+    manager = ContainerManager(config, db, docker, sockets, buffer)
+
+    resp = await _create_running(manager, db, image="test-img")
+
+    docker.get_container_logs = AsyncMock(
+        side_effect=ContainerNotFoundError(404, "gone")
+    )
+    payload = await manager.get_logs(resp.id)
+
+    assert payload.container_logs_unavailable is True
+    assert payload.container_logs == []
+
+
+async def test_get_logs_skips_docker_when_no_docker_id(manager, db):
+    """initializing containers may have no docker_id yet; skip Docker call."""
+    resp = await manager.create_container(
+        CreateContainerRequest(image="test-img")
+    )
+    # Don't await init — leave docker_id NULL by clearing it first.
+    await db.execute_insert(
+        "UPDATE containers SET docker_id = NULL WHERE id = ?", (resp.id,)
+    )
+
+    payload = await manager.get_logs(resp.id)
+
+    assert payload.container_logs == []
+    assert payload.container_logs_unavailable is False
+
+    # Tidy up the background task so it doesn't leak between tests.
+    await _await_init(manager, resp.id)

@@ -151,7 +151,13 @@ class DockerClient:
 
     async def get_container_logs(
         self, container_id: str, tail: str = "all"
-    ) -> str:
+    ) -> bytes:
+        """Return the raw multiplexed log stream from Docker.
+
+        For non-TTY containers (Drover's default) the body is a sequence
+        of 8-byte-header frames; callers demultiplex via
+        ``demultiplex_docker_logs``. Bytes because the framing is binary.
+        """
         logger.debug("GET /containers/%s/logs tail=%s", container_id, tail)
         resp = await self._client.get(
             f"/containers/{container_id}/logs",
@@ -159,4 +165,44 @@ class DockerClient:
         )
         logger.debug("GET /containers/%s/logs -> %s", container_id, resp.status_code)
         self._check(resp, entity="container")
-        return resp.text
+        return resp.content
+
+
+_STREAM_NAMES = {1: "stdout", 2: "stderr"}
+
+
+def demultiplex_docker_logs(payload: bytes) -> list[dict]:
+    """Parse Docker's multiplexed log stream into ordered frames.
+
+    Each frame is ``[stream:1][reserved:3][len:4 big-endian][payload:len]``.
+    Stream 1 is stdout, 2 is stderr. Returns a list of
+    ``{"stream": str, "data": str}`` dicts, with payload decoded as
+    UTF-8 (replacement on invalid bytes — Docker may have rotated mid-
+    multibyte). Falls back to treating the whole payload as plain text
+    if the framing doesn't parse (e.g. TTY-enabled container).
+    """
+    if not payload:
+        return []
+
+    frames: list[dict] = []
+    i = 0
+    n = len(payload)
+    while i + 8 <= n:
+        stream_type = payload[i]
+        if stream_type not in _STREAM_NAMES:
+            # Not a valid frame header — treat the whole buffer as plain text.
+            return [{"stream": "stdout", "data": payload.decode("utf-8", "replace")}]
+        size = int.from_bytes(payload[i + 4 : i + 8], "big")
+        start = i + 8
+        end = start + size
+        if end > n:
+            # Truncated frame — best-effort: take what we have.
+            chunk = payload[start:n]
+        else:
+            chunk = payload[start:end]
+        frames.append({
+            "stream": _STREAM_NAMES[stream_type],
+            "data": chunk.decode("utf-8", "replace"),
+        })
+        i = end
+    return frames

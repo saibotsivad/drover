@@ -1,4 +1,5 @@
 import { html } from '../render.js';
+import { containerLogsPlaceholder } from './container-logs.js';
 import { statusPill } from './containers-list.js';
 
 function metadataRow(label, value) {
@@ -50,5 +51,6 @@ export function containerDetailPage(container) {
 			${container.error_code ? metadataRow('Error code', html`<code>${container.error_code}</code>`) : null}
 		</dl>
 		${actionBar(container)}
+		${containerLogsPlaceholder(container.id)}
 	</section>`;
 }

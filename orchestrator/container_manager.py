@@ -21,14 +21,19 @@ from orchestrator.docker_client import (
     ContainerConflictError,
     ContainerNotFoundError,
     DockerClient,
+    demultiplex_docker_logs,
 )
 from orchestrator.id_gen import generate_id
+from orchestrator.log_buffer import RingBufferHandler
 from orchestrator.models import (
     CommandMessage,
+    ContainerLogFrame,
+    ContainerLogsResponse,
     ContainerResponse,
     ContainerStatus,
     CreateContainerRequest,
     ExecStatusResponse,
+    OrchestratorLogRecord,
 )
 from orchestrator.socket_manager import SocketManager
 
@@ -136,12 +141,18 @@ def _docker_state_to_status(inspection: dict) -> ContainerStatus | None:
 
 class ContainerManager:
     def __init__(
-        self, config: Config, db: Database, docker: DockerClient, sockets: SocketManager
+        self,
+        config: Config,
+        db: Database,
+        docker: DockerClient,
+        sockets: SocketManager,
+        log_buffer: RingBufferHandler | None = None,
     ) -> None:
         self._config = config
         self._db = db
         self._docker = docker
         self._sockets = sockets
+        self._log_buffer = log_buffer
         # In-flight background initialization tasks keyed by container id.
         # Used for cancellation on ready-receipt and on orchestrator shutdown.
         self._init_tasks: dict[str, asyncio.Task] = {}
@@ -545,6 +556,61 @@ class ContainerManager:
                 )
 
         return _row_to_response(row)
+
+    # -- logs ---------------------------------------------------------------
+
+    async def get_logs(
+        self,
+        container_id: str,
+        *,
+        tail: int = 500,
+        orchestrator_limit: int = 200,
+    ) -> ContainerLogsResponse:
+        """Return both micro-container and orchestrator-side logs.
+
+        Docker logs are fetched live from the Docker API (best-effort:
+        absent when the container has no docker_id yet, or has been
+        removed). Orchestrator logs come from the in-memory ring buffer,
+        filtered to entries whose message mentions the container ID.
+        """
+        row = await self._db.fetchone(
+            "SELECT * FROM containers WHERE id = ?", (container_id,)
+        )
+        if not row:
+            raise ContainerNotFound(container_id)
+
+        container_frames: list[ContainerLogFrame] = []
+        unavailable = False
+        docker_id = row["docker_id"]
+        if docker_id:
+            try:
+                raw = await self._docker.get_container_logs(docker_id, tail=str(tail))
+                container_frames = [
+                    ContainerLogFrame(stream=f["stream"], data=f["data"])
+                    for f in demultiplex_docker_logs(raw)
+                ]
+            except ContainerNotFoundError:
+                unavailable = True
+
+        orchestrator_records: list[OrchestratorLogRecord] = []
+        if self._log_buffer is not None:
+            matches = self._log_buffer.filter_contains(
+                container_id, limit=orchestrator_limit
+            )
+            orchestrator_records = [
+                OrchestratorLogRecord(
+                    ts=m.ts, level=m.level, logger=m.logger, message=m.message
+                )
+                for m in matches
+            ]
+
+        return ContainerLogsResponse(
+            container_id=container_id,
+            status=ContainerStatus(row["status"]),
+            container_logs=container_frames,
+            orchestrator_logs=orchestrator_records,
+            container_logs_unavailable=unavailable,
+        )
 
     # -- stop ---------------------------------------------------------------
 

@@ -1,0 +1,16 @@
+- project: orchestrator
+  bump: minor
+  description: |
+    Added `GET /containers/{id}/logs` which returns the micro-container's
+    stdout/stderr (demultiplexed from Docker's log frames) alongside any
+    orchestrator log records mentioning the container ID. Orchestrator logs
+    are sourced from a new in-memory ring buffer (last 5000 records);
+    durable retention remains the responsibility of the planned on-disk
+    capture work.
+- project: webapp
+  bump: minor
+  description: |
+    Added a logs section under the destroy button on the container detail
+    page. Shows both the micro-container's output and orchestrator events
+    filtered to that container, and auto-refreshes every 3 seconds via
+    htmx while the container is still in a live state.

@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { layout } from '../views/layout.js';
 import { containerDetailPage } from '../views/partials/container-detail.js';
 import { containerListPage, containerRows } from '../views/partials/containers-list.js';
+import { containerLogsFragment } from '../views/partials/container-logs.js';
 import { describeOrchestratorError, errorPanel, renderOrchestratorError } from '../views/partials/errors.js';
 import { imagesListPage } from '../views/partials/images-list.js';
 import { launchFormPage } from '../views/partials/launch-form.js';
@@ -66,6 +67,21 @@ export function createViewsRouter({ orchestrator }) {
 				activePath: '/views/containers',
 				body: renderOrchestratorError(err),
 			}).toString());
+		}
+	});
+
+	router.get('/containers/:id/logs', async (req, res) => {
+		try {
+			const payload = await orchestrator.getJson(
+				`/containers/${encodeURIComponent(req.params.id)}/logs`,
+			);
+			sendFragment(res, containerLogsFragment(payload));
+		} catch (err) {
+			const { status } = describeOrchestratorError(err);
+			sendFragment(res, html`<section id="container-logs" class="logs-section">
+				<h2>Logs</h2>
+				${renderOrchestratorError(err)}
+			</section>`, status);
 		}
 	});
 

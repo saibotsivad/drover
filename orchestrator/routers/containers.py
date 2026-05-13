@@ -4,6 +4,7 @@ from fastapi import APIRouter, HTTPException, Request
 
 from orchestrator.container_manager import ContainerError, ContainerManager
 from orchestrator.models import (
+    ContainerLogsResponse,
     ContainerResponse,
     CreateContainerRequest,
     ExecRequest,
@@ -37,6 +38,16 @@ async def create_container(
 async def get_container(container_id: str, request: Request) -> ContainerResponse:
     try:
         return await _manager(request).get_container(container_id)
+    except ContainerError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.detail)
+
+
+@router.get("/{container_id}/logs")
+async def get_container_logs(
+    container_id: str, request: Request
+) -> ContainerLogsResponse:
+    try:
+        return await _manager(request).get_logs(container_id)
     except ContainerError as e:
         raise HTTPException(status_code=e.status_code, detail=e.detail)
 

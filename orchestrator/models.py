@@ -134,6 +134,33 @@ class ExecStatusResponse(BaseModel):
     messages: list[CommandMessage] = Field(default_factory=list)
 
 
+# --- Log models ---
+
+
+class ContainerLogFrame(BaseModel):
+    stream: str  # "stdout" or "stderr"
+    data: str
+
+
+class OrchestratorLogRecord(BaseModel):
+    ts: str
+    level: str
+    logger: str
+    message: str
+
+
+class ContainerLogsResponse(BaseModel):
+    container_id: str
+    status: ContainerStatus
+    # Empty when the container has no docker_id yet (initializing or
+    # destroyed). Each frame is a chunk Docker emitted on stdout/stderr.
+    container_logs: list[ContainerLogFrame] = Field(default_factory=list)
+    orchestrator_logs: list[OrchestratorLogRecord] = Field(default_factory=list)
+    # True when Docker logs were not retrievable (e.g. container already
+    # removed from Docker). The orchestrator records may still be useful.
+    container_logs_unavailable: bool = False
+
+
 # --- Image models ---
 
 

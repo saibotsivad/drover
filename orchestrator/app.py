@@ -18,6 +18,7 @@ from orchestrator.container_manager import (
 )
 from orchestrator.database import Database
 from orchestrator.docker_client import DockerClient, DockerError
+from orchestrator.log_buffer import RingBufferHandler
 from orchestrator.routers import containers, images
 from orchestrator.socket_manager import SocketManager
 
@@ -37,17 +38,20 @@ class _JsonFormatter(logging.Formatter):
         return json.dumps(obj, default=str)
 
 
-def setup_logging(level: str = "INFO") -> None:
+def setup_logging(level: str = "INFO") -> RingBufferHandler:
     handler = logging.StreamHandler()
     handler.setFormatter(_JsonFormatter())
+    buffer_handler = RingBufferHandler()
     root = logging.getLogger()
     root.handlers.clear()
     root.addHandler(handler)
+    root.addHandler(buffer_handler)
     root.setLevel(getattr(logging, level, logging.INFO))
     # Suppress noisy third-party loggers
     logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("httpcore").setLevel(logging.WARNING)
+    return buffer_handler
 
 
 logger = logging.getLogger(__name__)
@@ -102,7 +106,7 @@ async def _reaper_loop(
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     config = load_config()
-    setup_logging(config.log_level)
+    log_buffer = setup_logging(config.log_level)
     logger.info("Starting Drover orchestrator")
     if config.api_key_hash is None:
         logger.warning(
@@ -113,7 +117,7 @@ async def lifespan(app: FastAPI):
     docker = DockerClient(config)
     sockets = SocketManager(config, db)
 
-    container_manager = ContainerManager(config, db, docker, sockets)
+    container_manager = ContainerManager(config, db, docker, sockets, log_buffer)
     await container_manager.sync_containers()
 
     async def _handle_container_done(container_id: str) -> None:
@@ -135,6 +139,7 @@ async def lifespan(app: FastAPI):
     app.state.docker = docker
     app.state.sockets = sockets
     app.state.container_manager = container_manager
+    app.state.log_buffer = log_buffer
 
     reaper_task = asyncio.create_task(
         _reaper_loop(config, db, container_manager)

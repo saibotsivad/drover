@@ -241,6 +241,122 @@ test('GET /views/launch falls back to a free-text image input when /images fails
 
 // --- escape regression ----------------------------------------------------
 
+// --- /views/containers/:id/logs ------------------------------------------
+
+test('GET /views/containers/:id renders the logs placeholder', async () => {
+	const orchestrator = makeFakeOrchestrator({
+		getJson: async () => SAMPLE_CONTAINERS[0],
+	});
+	const { url, close } = await startApp(orchestrator);
+	try {
+		const res = await fetch(`${url}/views/containers/c-aaa`);
+		const text = await res.text();
+		assert.match(text, /id="container-logs"/);
+		assert.match(text, /hx-get="\/views\/containers\/c-aaa\/logs"/);
+		assert.match(text, /hx-trigger="load"/);
+	} finally {
+		await close();
+	}
+});
+
+test('GET /views/containers/:id/logs renders both panes and auto-refresh while running', async () => {
+	const payload = {
+		container_id: 'c-aaa',
+		status: 'running',
+		container_logs: [
+			{ stream: 'stdout', data: 'hello from app\n' },
+			{ stream: 'stderr', data: 'a warning line\n' },
+		],
+		orchestrator_logs: [
+			{ ts: '2026-05-01T12:00:00Z', level: 'INFO', logger: 'orchestrator.container_manager', message: 'Container c-aaa reached running' },
+			{ ts: '2026-05-01T12:01:00Z', level: 'WARNING', logger: 'orchestrator.container_manager', message: 'Container c-aaa idle timeout' },
+		],
+		container_logs_unavailable: false,
+	};
+	const orchestrator = makeFakeOrchestrator({
+		getJson: async (path) => {
+			assert.equal(path, '/containers/c-aaa/logs');
+			return payload;
+		},
+	});
+	const { url, close } = await startApp(orchestrator);
+	try {
+		const res = await fetch(`${url}/views/containers/c-aaa/logs`);
+		assert.equal(res.status, 200);
+		const text = await res.text();
+		assert.match(text, /hello from app/);
+		assert.match(text, /a warning line/);
+		assert.match(text, /Container c-aaa reached running/);
+		assert.match(text, /Container c-aaa idle timeout/);
+		assert.match(text, /hx-trigger="load, every 3s"/);
+		assert.match(text, /Auto-refreshing every 3 seconds/);
+	} finally {
+		await close();
+	}
+});
+
+test('GET /views/containers/:id/logs stops polling when container is no longer active', async () => {
+	const payload = {
+		container_id: 'c-aaa',
+		status: 'destroyed',
+		container_logs: [],
+		orchestrator_logs: [
+			{ ts: '2026-05-01T12:02:00Z', level: 'INFO', logger: 'orchestrator', message: 'Destroyed container c-aaa' },
+		],
+		container_logs_unavailable: true,
+	};
+	const orchestrator = makeFakeOrchestrator({ getJson: async () => payload });
+	const { url, close } = await startApp(orchestrator);
+	try {
+		const res = await fetch(`${url}/views/containers/c-aaa/logs`);
+		const text = await res.text();
+		assert.equal(text.includes('every 3s'), false, 'should not include auto-refresh trigger');
+		assert.match(text, /hx-trigger="load"/);
+		assert.match(text, /Docker has already removed this container/);
+		assert.match(text, /no longer active/);
+	} finally {
+		await close();
+	}
+});
+
+test('GET /views/containers/:id/logs escapes user-influenced fields', async () => {
+	const payload = {
+		container_id: 'c-aaa',
+		status: 'running',
+		container_logs: [{ stream: 'stdout', data: '<script>alert(1)</script>' }],
+		orchestrator_logs: [
+			{ ts: '2026-05-01T12:00:00Z', level: 'INFO', logger: 'x', message: 'Container <img src=x onerror=alert(1)>' },
+		],
+		container_logs_unavailable: false,
+	};
+	const orchestrator = makeFakeOrchestrator({ getJson: async () => payload });
+	const { url, close } = await startApp(orchestrator);
+	try {
+		const res = await fetch(`${url}/views/containers/c-aaa/logs`);
+		const text = await res.text();
+		assert.equal(text.includes('<script>alert(1)</script>'), false, 'container log leaked unescaped');
+		assert.equal(text.includes('<img src=x'), false, 'orchestrator log leaked unescaped');
+	} finally {
+		await close();
+	}
+});
+
+test('GET /views/containers/:id/logs surfaces orchestrator errors', async () => {
+	const orchestrator = makeFakeOrchestrator({
+		getJson: async () => { throw new OrchestratorHttpError(404, { detail: 'not found' }); },
+	});
+	const { url, close } = await startApp(orchestrator);
+	try {
+		const res = await fetch(`${url}/views/containers/missing/logs`);
+		assert.equal(res.status, 404);
+		const text = await res.text();
+		assert.match(text, /id="container-logs"/);
+		assert.match(text, /Not found/);
+	} finally {
+		await close();
+	}
+});
+
 test('GET /views/containers/:id escapes attacker-controlled fields', async () => {
 	const evilContainer = {
 		id: '<script>alert(1)</script>',
