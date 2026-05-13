@@ -2,9 +2,10 @@
 
 Concrete, sequenced checklist for implementing `docs/planning/container-log-retention.md`. Items are grouped by the three sequencing milestones in the plan. Each box is meant to be small enough that a single PR could land it.
 
-Two clarifications resolved up front (deviations from / additions to the plan):
+Three clarifications resolved up front (deviations from / additions to the plan):
 
 - **`GET /containers/{id}/logs` does not exist today.** The plan describes it as "the existing endpoint." We will add it now as a thin proxy over `DockerClient.get_container_logs()` so the plan's language matches reality. The pagination follow-up still owns broadening it.
+- **Two new file-access endpoints land in v1.** `GET /containers/{id}/logs/files` returns a JSON array of captured log filenames; `GET /containers/{id}/logs/files/{filename}` returns one file verbatim. Both return 409 (`LoggingNotEnabled`) when `DROVER_LOG_DIR` is unset and 404 when the container (or its log directory) is gone. This gives operators raw API access to retained logs without waiting for the pagination plan and makes e2e assertions trivial.
 - **One JSON object per multiplex chunk, not per output line.** Docker's `json-file` driver splits at newlines, but we will not — we emit one `{"log","stream","time"}` per parsed frame. This is a deliberate simplification of the "verbatim json-file" claim; document it in `docs/observability.md`.
 
 ---
@@ -78,24 +79,57 @@ After this milestone, captured logs land on disk for every container's full life
     - For rows mapped to `destroyed` by reconciliation: call `await self._logs.discard(container_id)` to be safe.
     - For the post-reconciliation `_fail_init` of stuck-`initializing` rows: existing `_fail_init` call already triggers `stop`; verify (don't double-call).
 
-### 2.3 Tests
+### 2.3 Unit tests for lifecycle wiring
 
-- [ ] Extend `tests/test_container_manager.py` with a fake `LogCaptureManager` (or use the real one against a temp directory) and assert:
-    - `start` is invoked exactly once per init success, with `since=None`.
-    - `start` is *not* invoked when Docker `start_container` raises.
-    - `stop` is invoked once on `stop_container`, once on `_fail_init`.
-    - `start` is invoked again on `resume_container` with the cursor value when one exists, `None` when it doesn't.
-    - `discard` is invoked exactly once on `destroy_container`, including the `error` and `initializing` cases.
+- [ ] Extend `tests/test_container_manager.py` using the **real** `LogCaptureManager` against a `tmp_path` directory (not a mock), with a fake `DockerClient` that yields a small canned multiplex stream. This catches integration bugs between the two managers (e.g. `start` being called with the wrong `since` type) that a mock would mask.
+- [ ] Assertions:
+    - `start` is invoked exactly once per init success and the writer task is running afterward.
+    - `start` is *not* invoked when Docker `start_container` raises (no log directory should appear).
+    - `stop` is invoked once on `stop_container`, once on `_fail_init`. After `stop`, the writer task is done and `.cursor` is on disk.
+    - `start` is invoked again on `resume_container` with the cursor value when one exists, `None` when it doesn't. Resume after stop reuses the latest `*.log` file (or rotates) — assert the file contents accumulate across the two segments.
+    - `discard` is invoked exactly once on `destroy_container`, including the `error` and `initializing` cases. After destroy the directory is gone from disk.
     - `sync_containers` re-issues `start` for rows that come back as `running`.
-- [ ] New integration-style test (or extension of the existing harness if there is one): create container, exec a chatty workload, stop, resume, read files off disk, assert content is present and ordered, destroy, assert directory is gone.
-- [ ] Init-window test: image whose entrypoint prints a sentinel string and sleeps 2s before exec'ing the agent. Capture and assert the sentinel is in `0.log`.
-- [ ] Init-timeout test: image that never starts the agent. After `init_timeout`, assert the row is `error`, the entrypoint's pre-failure stdout is in `0.log`, and the directory is still there. Destroy and assert it's gone.
+- [ ] End-to-end lifecycle behaviors (chatty workload, init-window capture, init-timeout retention, multi-segment resume) are exercised in the e2e suite — see 2.5. The unit tests above stay focused on call-site wiring.
 
-### 2.4 Add the missing `/logs` REST endpoint (deviation from plan)
+### 2.4 Log REST endpoints
 
-- [ ] `orchestrator/routers/containers.py`: add `GET /containers/{container_id}/logs` that calls `DockerClient.get_container_logs()` and returns it as `text/plain`. Accept an optional `?tail=N` query parameter (default `"all"`). Return 404 if the container row is missing; let `DockerError`/`ContainerNotFoundError` propagate to the existing handlers.
-- [ ] Document in the docstring and in `README.md` that this is a thin live proxy of Docker's logs API — no on-disk history yet, that's the pagination follow-up.
-- [ ] Unit test: 200 for a running container, 404 for an unknown container, 502 when Docker errors.
+Three routes. All return 404 when the container row does not exist; `/logs/files*` additionally return 409 (`LoggingNotEnabled`) when `DROVER_LOG_DIR` is unset.
+
+- [ ] `orchestrator/container_manager.py` (or a small new exception module): add `LoggingNotEnabled(ContainerError)` returning 409. Add `LogFileNotFound(ContainerError)` returning 404 (also used when the directory itself is missing).
+
+**`GET /containers/{container_id}/logs`** — live Docker proxy (deviation from plan; route did not exist).
+
+- [ ] `orchestrator/routers/containers.py`: thin proxy over `DockerClient.get_container_logs()`, returning `text/plain`. Optional `?tail=N` (default `"all"`). 404 on unknown container; existing `DockerError` handler covers 502.
+- [ ] Docstring + README: call this a live tail of Docker's logs API; on-disk history is reached via `/logs/files`.
+
+**`GET /containers/{container_id}/logs/files`** — list captured filenames.
+
+- [ ] Add `LogCaptureManager.list_files(container_id) -> list[str]`. Reads `{log_dir}/{container_id}/`, filters to entries matching `^\d+\.log$` (deliberately excluding `.cursor`), and returns them sorted by their integer prefix. Raises `LogFileNotFound` if the directory does not exist. Raises `LoggingNotEnabled` if `config.log_dir is None`.
+- [ ] `orchestrator/routers/containers.py`: new route returning `list[str]` JSON. Verify the container row exists first (404 path) before calling into `LogCaptureManager` (so the 404 reason ordering is predictable).
+- [ ] Unit tests in `tests/test_log_capture.py`: empty directory returns `[]`; directory with `0.log`, `2.log`, `10.log`, `.cursor` returns `["0.log", "2.log", "10.log"]`; missing directory raises `LogFileNotFound`; unset config raises `LoggingNotEnabled`.
+
+**`GET /containers/{container_id}/logs/files/{filename}`** — return one captured file verbatim.
+
+- [ ] Add `LogCaptureManager.open_file(container_id, filename) -> AsyncIterator[bytes]` (or `read_file_path(...) -> Path` if a `FileResponse` is simpler). Validate `filename` against `^\d+\.log$` and reject anything else as `LogFileNotFound` — this is the path-traversal guard, do not rely on the filesystem to reject `..`.
+- [ ] Route returns the file with `Content-Type: application/x-ndjson` (one JSON object per line). Use FastAPI's `FileResponse` or a streaming response — files may approach `DROVER_LOG_MAX_FILE_BYTES` (10 MiB default), don't load into memory.
+- [ ] Reads may race with the active writer rotating mid-request; tolerate truncated last lines (the response is still well-formed NDJSON because we always end each record with `\n` before returning to the network).
+- [ ] Unit tests: 200 with correct body for an existing file; 404 for `foo.log`, `../etc/passwd`, `0.txt`, `0.log` in a missing directory; 409 when `DROVER_LOG_DIR` is unset; 404 when the container row is missing.
+
+### 2.5 e2e integration assertions
+
+Extend the existing e2e suite rather than building a new integration harness in-tree. The e2e stack already sets `DROVER_LOG_DIR` (Milestone 3.1) so these assertions exercise the real on-disk path.
+
+- [ ] Extend `e2e/tests/03-privileged-container.sh` and `e2e/tests/04-standard-container.sh` after the exec step:
+    - `GET /containers/{id}/logs/files` → 200, body is a non-empty JSON array containing `0.log`.
+    - `GET /containers/{id}/logs/files/0.log` → 200, `Content-Type: application/x-ndjson`, body contains the sentinel the test workload printed (e.g. `"hello_drover"` from test 03).
+- [ ] After the `DELETE /containers/{id}` step in each test:
+    - `GET /containers/{id}/logs/files` → 404.
+    - `GET /containers/{id}/logs/files/0.log` → 404.
+- [ ] New `e2e/tests/05-log-retention.sh` covering the cases that need a *dedicated* container (i.e. don't slot cleanly into 03/04):
+    - Init-window capture: image whose entrypoint emits a sentinel and sleeps 2s before exec'ing the agent. Poll until `running`, then `GET /logs/files/0.log` and assert the sentinel is present.
+    - Init-timeout retention: image whose entrypoint emits a sentinel and then never connects the agent. Wait for `init_timeout_seconds + slack`, assert status `error`, `GET /logs/files/0.log` returns 200 with the sentinel. Then `DELETE` and assert 404.
+    - Stop / resume continuity: exec command A, stop, resume, exec command B, list files, fetch each, assert A's output appears before B's output across the file set.
+- [ ] Helper in `e2e/lib/`: small `assert_log_contains` wrapper around `api_get` + `jq -r '.log'` extraction, to keep the test bodies readable.
 
 ---
 
@@ -106,7 +140,7 @@ After this milestone, an operator can use the feature without reading the code.
 ### 3.1 Sample compose
 
 - [ ] `docker-compose.yml`: under `orchestrator.environment`, add `DROVER_LOG_DIR: /var/lib/orchestrator/logs` with an inline comment about (a) the doubled-disk-usage tradeoff vs. Docker's own log driver and (b) `docs/observability.md` for the full story. Logs live inside the existing `drover-data` volume — no new volume needed.
-- [ ] Manual smoke test: bring up the stack, create + exec + destroy a container, confirm `{drover-data}/logs/{id}/...` appears and goes away on destroy.
+- [ ] `e2e/docker-compose.e2e.yml`: same env-var addition, so the e2e assertions in 2.5 hit the real on-disk path. The e2e suite is the smoke test — no separate manual run needed.
 
 ### 3.2 New: `docs/observability.md`
 
@@ -129,7 +163,6 @@ Outline from the plan, expanded:
 ### 3.4 ADRs
 
 - [ ] `docs/decisions/<YYYY-MM-DD>-on-disk-log-format.md`: capture the decision to use Docker's `json-file` line format and the one-JSON-per-chunk deviation. Future engineer needs to know why we didn't split on newlines.
-- [ ] (Optional) `docs/decisions/<YYYY-MM-DD>-retention-on-destroy.md` if we decide it's load-bearing for later product decisions. Defer unless asked.
 
 ### 3.5 TODO.md
 
@@ -152,6 +185,14 @@ These are deliberately deferred per the plan; mention only to keep them off the 
 
 ## Open questions to surface during review
 
+Still open (carried from the first pass):
+
 - Should the writer record a fallback `time` when Docker's `timestamps=1` prefix is missing or malformed? Suggested default: use `datetime.now(timezone.utc).isoformat(timespec="microseconds") + "Z"` and log a `DEBUG` line. Confirm during 1.3.
 - What `since` resolution does Docker accept on the logs API in practice (integer seconds vs. RFC3339Nano)? Verify against the daemon during 1.4 cursor tests — if it only accepts seconds, the cursor file should store seconds and we accept up to one second of duplicates on resume.
 - Permissions: the orchestrator runs as UID 1000 and the existing Dockerfile chowns `/var/lib/orchestrator`. Confirm `mkdir({log_dir}/{id})` succeeds in the sample stack without a new entrypoint step.
+
+New, introduced by the file-access endpoints in 2.4:
+
+- 404 semantics for `/logs/files`: if the container row exists but the log directory does not (e.g. row predates `DROVER_LOG_DIR` being set, or a manual `rm -rf` happened), do we return 404 or 200 with `[]`? The checklist currently assumes 404 so the e2e "destroyed → 404" assertion is symmetric, but 200/`[]` is also defensible. Confirm before 2.4 lands.
+- `Content-Type` for the file endpoint: `application/x-ndjson` is the precise type but is not universally recognized by browsers/curl-formatters. `text/plain` would let `curl` display the body without `-o`. Default to `application/x-ndjson`; revisit if it bites during the e2e work.
+- Concurrency: a `/logs/files/N.log` request that hits the currently-active file races with the writer. Reads on a Linux file being appended-to are well-defined (you see whatever has flushed), and our writes always end with `\n`, so the worst case is a missing-tail. Worth a one-line note in `docs/observability.md` rather than a code change — confirm during 3.2.
