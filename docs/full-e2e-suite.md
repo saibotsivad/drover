@@ -339,20 +339,6 @@ ensure `jq` is present → set up Buildx → `./e2e/run.sh ci` → upload
 `e2e/logs/` as an artifact on failure. Total wall-clock time on a fresh
 `ubuntu-latest` runner is approximately 3–4 minutes.
 
-### Proof of concept
-
-Before the full suite was built, the technically risky steps — building
-both images from source, starting the orchestrator with the correct Docker
-socket and socket-directory bind-mounts, launching a privileged container
-and confirming the guest-agent handshake, exec-ing a command, building an
-image from inside the privileged container via the host Docker daemon,
-and finally launching and exec-ing a non-privileged container under gVisor
-(including discovering the `--host-uds=all` requirement) — were validated
-in a separate workflow.
-
-See [`.github/workflows/e2e-poc.yml`](../.github/workflows/e2e-poc.yml) for
-the complete validated sequence.
-
 ## Webapp testing (phased)
 
 - **Phase 1 (current)** — test 01 validates the webapp's `/health` endpoint
