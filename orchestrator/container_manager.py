@@ -23,6 +23,7 @@ from orchestrator.docker_client import (
     DockerClient,
 )
 from orchestrator.id_gen import generate_id
+from orchestrator.log_capture import LogCaptureManager
 from orchestrator.models import (
     CommandMessage,
     ContainerResponse,
@@ -40,13 +41,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
-class ContainerError(Exception):
-    """Base exception for container operations."""
-
-    def __init__(self, status_code: int, detail: str) -> None:
-        self.status_code = status_code
-        self.detail = detail
-        super().__init__(detail)
+from orchestrator.errors import ContainerError  # noqa: E402
 
 
 class ContainerNotFound(ContainerError):
@@ -136,12 +131,18 @@ def _docker_state_to_status(inspection: dict) -> ContainerStatus | None:
 
 class ContainerManager:
     def __init__(
-        self, config: Config, db: Database, docker: DockerClient, sockets: SocketManager
+        self,
+        config: Config,
+        db: Database,
+        docker: DockerClient,
+        sockets: SocketManager,
+        log_capture: LogCaptureManager,
     ) -> None:
         self._config = config
         self._db = db
         self._docker = docker
         self._sockets = sockets
+        self._logs = log_capture
         # In-flight background initialization tasks keyed by container id.
         # Used for cancellation on ready-receipt and on orchestrator shutdown.
         self._init_tasks: dict[str, asyncio.Task] = {}
@@ -232,9 +233,20 @@ class ContainerManager:
                     )
                     db_status = mapped.value
 
-                # Re-establish socket listener for containers still running
+                # Re-establish socket listener and log capture for
+                # containers still running.
                 if db_status == "running":
                     await self._sockets.create_socket(container_id)
+                    cursor = self._logs.read_cursor(container_id)
+                    try:
+                        await self._logs.start(
+                            container_id, docker_id, since=cursor
+                        )
+                    except Exception:
+                        logger.exception(
+                            "Startup sync: log capture failed to resume for %s",
+                            container_id,
+                        )
                     logger.info(
                         "Startup sync: re-established socket for container %s",
                         container_id,
@@ -245,6 +257,15 @@ class ContainerManager:
                     "UPDATE containers SET status = 'destroyed' WHERE id = ?",
                     (container_id,),
                 )
+                # Belt-and-braces: ensure the on-disk capture directory is
+                # cleaned up for rows the reconciler just marked destroyed.
+                try:
+                    await self._logs.discard(container_id)
+                except Exception:
+                    logger.exception(
+                        "Startup sync: failed to discard log capture for %s",
+                        container_id,
+                    )
                 logger.warning(
                     "Startup sync: container %s not found in Docker, marked destroyed",
                     container_id,
@@ -392,6 +413,17 @@ class ContainerManager:
 
             await self._docker.start_container(docker_id)
 
+            # Start log capture immediately so init-window stdout/stderr is
+            # retained even when the guest agent never connects.  Failures
+            # to start capture are non-fatal for the container — log and
+            # continue.
+            try:
+                await self._logs.start(container_id, docker_id, since=None)
+            except Exception:
+                logger.exception(
+                    "Container %s: log capture failed to start", container_id
+                )
+
             logger.info(
                 "Container %s Docker init complete (docker=%s); awaiting ready",
                 container_id,
@@ -461,6 +493,16 @@ class ContainerManager:
 
         if rowcount == 0:
             return
+
+        # Stop the log writer before tearing the Docker container down so
+        # the final captured chunks are persisted (directory is preserved
+        # for post-mortem of the failed init).
+        try:
+            await self._logs.stop(container_id)
+        except Exception:
+            logger.exception(
+                "Failed to stop log capture for container %s", container_id
+            )
 
         try:
             await self._sockets.destroy_socket(container_id)
@@ -570,6 +612,15 @@ class ContainerManager:
         except ContainerNotFoundError:
             pass  # Already gone
 
+        # The follow stream is closing in the background; await the writer
+        # task here so .cursor is persisted before stopped is observable.
+        try:
+            await self._logs.stop(container_id)
+        except Exception:
+            logger.exception(
+                "Failed to stop log capture for container %s", container_id
+            )
+
         now = _now_iso()
         await self._db.execute_insert(
             "UPDATE containers SET status = 'stopped', stopped_at = ? WHERE id = ?",
@@ -601,7 +652,18 @@ class ContainerManager:
         # Re-create the socket listener before starting the container
         await self._sockets.create_socket(container_id)
 
+        # Read the cursor before starting so we resume from the last
+        # captured timestamp.  None when no logs have been captured yet.
+        cursor = self._logs.read_cursor(container_id)
+
         await self._docker.start_container(row["docker_id"])
+
+        try:
+            await self._logs.start(container_id, row["docker_id"], since=cursor)
+        except Exception:
+            logger.exception(
+                "Container %s: log capture failed to resume", container_id
+            )
 
         now = _now_iso()
         await self._db.execute_insert(
@@ -647,6 +709,15 @@ class ContainerManager:
                 await self._docker.remove_container(docker_id, force=True)
             except ContainerNotFoundError:
                 pass  # Already removed
+
+        # Drop the captured logs along with the rest of the container's
+        # state — applies to errored and initializing rows too.
+        try:
+            await self._logs.discard(container_id)
+        except Exception:
+            logger.exception(
+                "Failed to discard log capture for container %s", container_id
+            )
 
         # Preserve existing stopped_at if already set (container was stopped
         # before being destroyed), otherwise record the current time.
