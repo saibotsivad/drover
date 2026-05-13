@@ -1,6 +1,8 @@
 # Drover CLI
 
 > Draft for team review — not yet adopted.
+>
+> **Status: blocked** — waiting on `docs/planning/websocket-streaming-plan.md` to land before the exec command can be implemented with real streaming output.
 
 ---
 
