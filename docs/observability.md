@@ -73,6 +73,14 @@ that's where your container logs live.
 - `.cursor` holds the timestamp of the most recently written record.
   Treat it as opaque; it exists only so the orchestrator can resume the
   Docker follow stream without gaps after a restart.
+- Rotation is **size-only**: when the active file would exceed
+  `DROVER_LOG_MAX_FILE_BYTES` on the next write, the writer closes it
+  and opens the next-numbered file. There is no time-based rotation,
+  so a long-quiet container's `0.log` may stay open for days.
+- Keep `DROVER_LOG_DIR` on local storage. Network filesystems (SMB,
+  NFS) can produce partial writes that look like a truncated last
+  line — log shippers handle that gracefully, but on-disk consistency
+  is best on a local POSIX filesystem.
 
 ### Line format
 

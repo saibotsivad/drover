@@ -5,10 +5,10 @@
 
 ## Context
 
-The container-log-retention feature
-(`docs/planning/container-log-retention.md`) writes captured
-micro-container stdout/stderr to disk under `DROVER_LOG_DIR`. We had to
-pick:
+The container-log-retention feature writes captured micro-container
+stdout/stderr to disk under `DROVER_LOG_DIR` (see the sibling ADR
+`2026-05-13-container-log-capture-architecture.md` for the capture
+pipeline). We had to pick:
 
 1. The line format (per-line schema and serialization).
 2. Whether to split that schema's payload at every newline (matching
@@ -89,7 +89,8 @@ each `\n` to produce one record per logical line.
 
 ## References
 
-- `docs/planning/container-log-retention.md` — the feature plan.
+- `docs/decisions/2026-05-13-container-log-capture-architecture.md` —
+  sibling ADR about the capture pipeline.
 - `docs/observability.md` — operator-facing reference, including the
   `log`-field-may-contain-newlines caveat for shippers.
 - `orchestrator/log_capture.py` — the writer implementation.

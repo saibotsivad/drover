@@ -63,7 +63,7 @@ step_end
 # stderr the moment it starts up, which the orchestrator captures into
 # 0.log via the Docker log stream.  We assert on that sentinel because
 # the exec stdout itself is piped through the socket and never reaches
-# container stdout.  See the open-ended-decisions section of WORKING.md.
+# container stdout.
 
 step_begin "assert-captured-logs"
 assert_log_files_contains "$CONTAINER_ID" "0.log"

@@ -16,7 +16,7 @@
 # delays before exec'ing the agent (or never execs it).  They are
 # already covered by the unit tests in tests/test_container_manager.py
 # (test_init_starts_log_capture, test_fail_init_persists_cursor_and_
-# keeps_directory).  See the open-ended-decisions section of WORKING.md.
+# keeps_directory).
 
 # shellcheck source=../lib/common.sh
 . "$(dirname "$0")/../lib/common.sh"
