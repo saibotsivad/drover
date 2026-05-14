@@ -6,29 +6,14 @@ from urllib.parse import quote
 import httpx
 
 from orchestrator.config import Config
+from orchestrator.errors import (
+    ContainerConflictError,
+    ContainerNotFoundError,
+    DockerError,
+    ImageNotFoundError,
+)
 
 logger = logging.getLogger(__name__)
-
-
-class DockerError(Exception):
-    """Base exception for Docker API errors."""
-
-    def __init__(self, status_code: int, message: str) -> None:
-        self.status_code = status_code
-        self.message = message
-        super().__init__(f"Docker API error ({status_code}): {message}")
-
-
-class ImageNotFoundError(DockerError):
-    """Raised when a Docker image is not found."""
-
-
-class ContainerNotFoundError(DockerError):
-    """Raised when a Docker container is not found."""
-
-
-class ContainerConflictError(DockerError):
-    """Raised on container state conflicts (e.g. already started/stopped)."""
 
 
 def _parse_error(resp: httpx.Response) -> str:

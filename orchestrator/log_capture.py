@@ -27,7 +27,7 @@ from pathlib import Path
 from typing import AsyncIterator, Awaitable, Callable
 
 from orchestrator.config import Config
-from orchestrator.errors import ContainerError
+from orchestrator.errors import ContainerError, LoggingNotEnabled, LogFileNotFound
 
 logger = logging.getLogger(__name__)
 
@@ -514,30 +514,3 @@ class LogCaptureManager:
             errno.errorcode.get(exc.errno, str(exc.errno)),
             exc,
         )
-
-
-# ---------------------------------------------------------------------------
-# Exceptions
-# ---------------------------------------------------------------------------
-
-
-# Imported lazily to avoid a circular dependency with container_manager;
-# both modules end up in ``orchestrator`` package which is fine, but we
-# keep the exception classes here so log_capture is self-contained.
-
-
-class LoggingNotEnabled(ContainerError):
-    """Raised when log-file endpoints are hit but DROVER_LOG_DIR is unset."""
-
-    def __init__(self) -> None:
-        super().__init__(
-            409,
-            "Container log retention is disabled (DROVER_LOG_DIR is unset)",
-        )
-
-
-class LogFileNotFound(ContainerError):
-    """Raised when a requested captured log file does not exist."""
-
-    def __init__(self, filename: str) -> None:
-        super().__init__(404, f"Captured log file '{filename}' not found")

@@ -17,10 +17,16 @@ from datetime import datetime, timezone
 
 from orchestrator.config import Config
 from orchestrator.database import Database
-from orchestrator.docker_client import (
-    ContainerConflictError,
+from orchestrator.docker_client import DockerClient
+from orchestrator.errors import (
+    CommandNotFound,
+    ContainerNotConnected,
+    ContainerNotFound,
     ContainerNotFoundError,
-    DockerClient,
+    ContainerStateConflict,
+    ImageNotFound,
+    PrivilegedNotConfigured,
+    ContainerConflictError,
 )
 from orchestrator.id_gen import generate_id
 from orchestrator.log_capture import LogCaptureManager
@@ -34,56 +40,6 @@ from orchestrator.models import (
 from orchestrator.socket_manager import SocketManager
 
 logger = logging.getLogger(__name__)
-
-
-# ---------------------------------------------------------------------------
-# Exceptions
-# ---------------------------------------------------------------------------
-
-
-from orchestrator.errors import ContainerError  # noqa: E402
-
-
-class ContainerNotFound(ContainerError):
-    def __init__(self, container_id: str) -> None:
-        super().__init__(404, f"Container '{container_id}' not found")
-
-
-class ContainerStateConflict(ContainerError):
-    def __init__(self, container_id: str, current: str, action: str) -> None:
-        super().__init__(
-            409,
-            f"Cannot {action} container '{container_id}' in state '{current}'",
-        )
-
-
-class PrivilegedNotConfigured(ContainerError):
-    def __init__(self) -> None:
-        super().__init__(
-            400,
-            "Privileged containers are not configured (PRIVILEGED_IMAGE is unset)",
-        )
-
-
-class ImageNotFound(ContainerError):
-    def __init__(self, image: str) -> None:
-        super().__init__(404, f"Image '{image}' not found")
-
-
-class ContainerNotConnected(ContainerError):
-    def __init__(self, container_id: str) -> None:
-        super().__init__(
-            409,
-            f"Container '{container_id}' has no active guest agent connection",
-        )
-
-
-class CommandNotFound(ContainerError):
-    def __init__(self, container_id: str, command_id: str) -> None:
-        super().__init__(
-            404,
-            f"Command '{command_id}' not found on container '{container_id}'",
-        )
 
 
 # ---------------------------------------------------------------------------

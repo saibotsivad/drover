@@ -3,12 +3,12 @@
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse, PlainTextResponse
 
-from orchestrator.container_manager import (
+from orchestrator.container_manager import ContainerManager
+from orchestrator.errors import (
     ContainerError,
-    ContainerManager,
     ContainerNotFound,
+    ContainerNotFoundError,
 )
-from orchestrator.docker_client import ContainerNotFoundError
 from orchestrator.log_capture import LogCaptureManager
 from orchestrator.models import (
     ContainerResponse,
