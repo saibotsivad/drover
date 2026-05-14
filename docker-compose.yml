@@ -30,6 +30,14 @@ services:
       DB_PATH: /var/lib/orchestrator/db.sqlite
       SOCKET_DIR: /var/run/microcontainers
       LOG_LEVEL: INFO
+      # Capture each micro-container's stdout/stderr to disk so the full
+      # history survives stop/restart and is reachable through
+      # /containers/{id}/logs/files. This roughly doubles per-container
+      # disk usage because Docker's own log driver also keeps a copy;
+      # docs/observability.md walks through how to disable one or the
+      # other if disk is tight. Logs live inside the existing
+      # drover-data volume — no second volume to manage.
+      DROVER_LOG_DIR: /var/lib/orchestrator/logs
       # DROVER_API_KEY: change-me
 
   webapp:

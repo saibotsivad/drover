@@ -18,6 +18,7 @@ from orchestrator.container_manager import (
 )
 from orchestrator.database import Database
 from orchestrator.docker_client import DockerClient, DockerError
+from orchestrator.log_capture import LogCaptureManager
 from orchestrator.routers import containers, images
 from orchestrator.socket_manager import SocketManager
 
@@ -112,8 +113,9 @@ async def lifespan(app: FastAPI):
     await db.connect()
     docker = DockerClient(config)
     sockets = SocketManager(config, db)
+    log_capture = LogCaptureManager(config, docker)
 
-    container_manager = ContainerManager(config, db, docker, sockets)
+    container_manager = ContainerManager(config, db, docker, sockets, log_capture)
     await container_manager.sync_containers()
 
     async def _handle_container_done(container_id: str) -> None:
@@ -134,6 +136,7 @@ async def lifespan(app: FastAPI):
     app.state.db = db
     app.state.docker = docker
     app.state.sockets = sockets
+    app.state.log_capture = log_capture
     app.state.container_manager = container_manager
 
     reaper_task = asyncio.create_task(
@@ -149,6 +152,7 @@ async def lifespan(app: FastAPI):
         pass
 
     await container_manager.shutdown()
+    await log_capture.shutdown()
     await sockets.close_all()
     await docker.close()
     await db.close()

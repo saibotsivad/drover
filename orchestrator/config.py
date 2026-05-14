@@ -12,6 +12,8 @@ class Config:
     init_timeout_seconds: int
     log_level: str
     api_key_hash: str | None
+    log_dir: str | None
+    log_max_file_bytes: int
 
 
 def load_config() -> Config:
@@ -28,4 +30,8 @@ def load_config() -> Config:
         ),
         log_level=os.environ.get("LOG_LEVEL", "INFO").upper(),
         api_key_hash=os.environ.get("DROVER_API_KEY"),
+        log_dir=os.environ.get("DROVER_LOG_DIR"),
+        log_max_file_bytes=int(
+            os.environ.get("DROVER_LOG_MAX_FILE_BYTES", str(10 * 1024 * 1024))
+        ),
     )

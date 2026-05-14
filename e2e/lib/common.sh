@@ -26,6 +26,8 @@ set +a
 . "$E2E_LIB_DIR/api.sh"
 # shellcheck disable=SC1091
 . "$E2E_LIB_DIR/logs.sh"
+# shellcheck disable=SC1091
+. "$E2E_LIB_DIR/log_files.sh"
 
 # Test scripts get their name from the basename of $0 minus the .sh
 # extension. The runner sets $E2E_RUN_ID and $E2E_RUN_LOG_DIR before

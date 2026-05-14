@@ -46,6 +46,20 @@ The orchestrator is configured via environment variables at startup:
 | `REAPER_INTERVAL_SECONDS` | No | `5` | How often (in seconds) the idle-timeout reaper runs. |
 | `DROVER_INIT_TIMEOUT_SECONDS` | No | `20` | Maximum time a container may spend in `initializing` before the watchdog transitions it to `error`. |
 | `LOG_LEVEL` | No | `INFO` | Python log level (`DEBUG`, `INFO`, `WARNING`, `ERROR`). |
+| `DROVER_LOG_DIR` | No | _(unset; sample compose sets it)_ | Root directory for captured micro-container stdout/stderr. When set, each container's full log history is kept on disk until the container is destroyed and is reachable through `GET /containers/{id}/logs/files`. When unset, Drover writes nothing and historical queries fall through to Docker's own log driver. See [docs/observability.md](docs/observability.md). |
+| `DROVER_LOG_MAX_FILE_BYTES` | No | `10485760` (10 MiB) | Per-file size threshold for log rotation under `DROVER_LOG_DIR`. Ignored when `DROVER_LOG_DIR` is unset. |
+
+### Container log retention
+
+When `DROVER_LOG_DIR` is set (the sample `docker-compose.yml` enables
+this by default), Drover captures each micro-container's stdout/stderr
+to disk. The full history survives container stop, orchestrator
+restart, and orchestrator upgrade, and is removed only when the
+container is destroyed. Captured files use Docker's `json-file` line
+format so Promtail, Vector, and Fluent Bit consume them without any
+Drover-specific configuration. See [docs/observability.md](docs/observability.md)
+for the full retention model, on-disk format, log-shipper examples, and
+the disk-usage trade-off vs. Docker's own log driver.
 
 ---
 

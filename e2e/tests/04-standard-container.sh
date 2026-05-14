@@ -72,6 +72,13 @@ assert_zero "$EXIT_CODE" "exec exit code"
 assert_contains "$STDOUT" "hello_drover" "exec stdout"
 step_end
 
+# --- 2b. captured-log files check -----------------------------------------
+
+step_begin "assert-captured-logs"
+assert_log_files_contains "$CONTAINER_ID" "0.log"
+assert_log_file_contains "$CONTAINER_ID" "0.log" "Connecting to"
+step_end
+
 # --- 3. stop ---------------------------------------------------------------
 
 step_begin "stop-container"
@@ -84,6 +91,17 @@ wait_container_status "$CONTAINER_ID" "stopped" 30 \
 	|| e2e_fail "container did not reach stopped"
 FINAL=$(printf '%s' "$E2E_RESPONSE_BODY" | jq -r '.status')
 assert_equals "stopped" "$FINAL" "final status is stopped"
+step_end
+
+# --- 4. destroy and verify logs are discarded ------------------------------
+
+step_begin "destroy-container"
+api_delete "${ORCHESTRATOR_URL}/containers/${CONTAINER_ID}"
+assert_equals "200" "$E2E_RESPONSE_STATUS" "DELETE /containers status"
+FINAL=$(printf '%s' "$E2E_RESPONSE_BODY" | jq -r '.status')
+assert_equals "destroyed" "$FINAL" "final status is destroyed"
+assert_log_files_empty "$CONTAINER_ID"
+assert_log_file_missing "$CONTAINER_ID" "0.log"
 step_end
 
 echo "[test] 04-standard-container: ok"

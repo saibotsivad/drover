@@ -1,5 +1,6 @@
 import json
 import logging
+from typing import AsyncIterator
 from urllib.parse import quote
 
 import httpx
@@ -160,3 +161,48 @@ class DockerClient:
         logger.debug("GET /containers/%s/logs -> %s", container_id, resp.status_code)
         self._check(resp, entity="container")
         return resp.text
+
+    async def stream_container_logs(
+        self,
+        container_id: str,
+        *,
+        since: float | int | None = None,
+        follow: bool = True,
+        tail: int | None = None,
+    ) -> AsyncIterator[bytes]:
+        """Yield raw bytes from Docker's multiplexed log stream.
+
+        Caller is responsible for parsing the 8-byte-header frame format
+        Docker uses when the container does not have a TTY.  We pass
+        ``timestamps=1`` so each frame's payload is prefixed with an
+        RFC3339Nano timestamp.
+        """
+        params: dict[str, str] = {
+            "stdout": "true",
+            "stderr": "true",
+            "follow": "true" if follow else "false",
+            "timestamps": "true",
+        }
+        if since is not None:
+            params["since"] = str(since)
+        if tail is not None:
+            params["tail"] = str(tail)
+        logger.debug(
+            "GET /containers/%s/logs (stream) since=%s follow=%s tail=%s",
+            container_id,
+            since,
+            follow,
+            tail,
+        )
+        async with self._client.stream(
+            "GET",
+            f"/containers/{container_id}/logs",
+            params=params,
+            timeout=httpx.Timeout(None, connect=5.0),
+        ) as resp:
+            if resp.status_code >= 400:
+                await resp.aread()
+                self._check(resp, entity="container")
+            async for chunk in resp.aiter_bytes():
+                if chunk:
+                    yield chunk
