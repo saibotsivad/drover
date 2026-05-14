@@ -9,61 +9,82 @@ query parameter.
 
 ## Backend — New orchestrator endpoint for filtered orchestrator logs
 
-The orchestrator currently logs only to stdout (a `StreamHandler` in
-`orchestrator/app.py`). To serve filtered orchestrator logs over HTTP we need
-to also write them to a file we can read back.
+The orchestrator already proxies Docker logs for micro-containers via
+`DockerClient.get_container_logs()`. We use the exact same mechanism to fetch
+the orchestrator container's own logs and filter them by `container_id`.
+No file-writing, no log handlers, no rotation — just a Docker API call at
+request time.
 
-- [ ] **Extend `setup_logging()` to accept an optional `log_dir` argument.**
-  When provided, attach a second `FileHandler` (using the same `_JsonFormatter`)
-  that writes to `{log_dir}/orchestrator.log`. Call it from `lifespan()` after
-  `load_config()`:
+- [ ] **Auto-detect the orchestrator's own Docker container ID at startup.**
+  In `lifespan()` (in `orchestrator/app.py`), after the Docker client is
+  initialised, read `/proc/self/cgroup` and extract the 64-character hex
+  container ID. Store it in `app.state.orchestrator_docker_id` (or `None` if
+  detection fails). This is zero-config for standard Docker deployments.
+
   ```python
-  setup_logging(config.log_level, log_dir=config.log_dir)
+  import re
+
+  def _detect_own_container_id() -> str | None:
+      try:
+          text = Path("/proc/self/cgroup").read_text()
+          for line in text.splitlines():
+              m = re.search(r'/([a-f0-9]{64})$', line)
+              if m:
+                  return m.group(1)
+      except OSError:
+          pass
+      return None
   ```
-  This means the file only appears when `DROVER_LOG_DIR` is set, which is
-  consistent with all other log-capture behaviour.
 
-  > **Rotation note:** use `logging.handlers.RotatingFileHandler` with a
-  > generous `maxBytes` (e.g. 50 MB) and `backupCount=2` so the file doesn't
-  > grow without bound. For the initial implementation a single unrotated file
-  > is acceptable if rotation adds complexity — call it out as a follow-up.
+  > If detection fails (uncommon — could happen in non-Docker runtimes or
+  > certain cgroupv2 setups), the endpoint below returns a 503 with a clear
+  > message rather than silently returning empty data.
 
-- [ ] **Add `GET /containers/{container_id}/orchestrator-logs` to
+- [ ] **Add `GET /{container_id}/logs/orchestrator` to
   `orchestrator/routers/containers.py`.**
-  - Validate the container exists with `_ensure_container_exists` (same pattern
-    as the other log endpoints).
-  - If `config.log_dir` is `None`, raise `HTTPException(409, "LoggingNotEnabled")`
-    (same error shape as the existing `LoggingNotEnabled` path in
-    `list_log_files` / `get_log_file`).
-  - If `{log_dir}/orchestrator.log` does not exist yet (orchestrator just
-    started or DROVER_LOG_DIR was set for the first time), return an empty
-    `PlainTextResponse` rather than a 404 — the file simply hasn't been
-    written yet.
-  - Read the file line-by-line and keep only lines that contain `container_id`
-    as a substring. Return the filtered content as `PlainTextResponse`.
-  - The container ID is a 26-character ULID (`[0-9A-Z]{26}`), so substring
-    matching has a negligible false-positive rate. No regex needed.
+  This slots neatly into the existing log-endpoint hierarchy:
+
+  | Endpoint | Source |
+  |---|---|
+  | `/{id}/logs` | Live Docker logs for the micro-container |
+  | `/{id}/logs/files` | List of Drover-captured files |
+  | `/{id}/logs/files/{filename}` | A specific captured file |
+  | `/{id}/logs/orchestrator` | Orchestrator Docker logs, filtered by `{id}` |
+
+  Implementation:
+  - Validate the container exists with `_ensure_container_exists` (same
+    pattern as the other log endpoints).
+  - Read `request.app.state.orchestrator_docker_id`. If `None`, return
+    `503` with detail `"Orchestrator container ID could not be detected"`.
+  - Call `docker.get_container_logs(orchestrator_docker_id, tail="all")` —
+    the same call used for micro-containers.
+  - Filter the returned text line-by-line, keeping only lines that contain
+    `container_id` as a substring. The 26-character ULID format makes
+    false-positive matches negligible.
+  - Return the filtered content as `PlainTextResponse`.
 
   ```python
-  @router.get("/{container_id}/orchestrator-logs")
+  @router.get("/{container_id}/logs/orchestrator")
   async def get_orchestrator_logs(
       container_id: str, request: Request
   ) -> PlainTextResponse:
       await _ensure_container_exists(request, container_id)
-      config: Config = request.app.state.config
-      if config.log_dir is None:
-          raise HTTPException(status_code=409, detail="LoggingNotEnabled")
-      log_path = Path(config.log_dir) / "orchestrator.log"
-      if not log_path.exists():
-          return PlainTextResponse(content="")
-      lines = [l for l in log_path.read_text().splitlines(keepends=True)
-               if container_id in l]
+      own_id = request.app.state.orchestrator_docker_id
+      if own_id is None:
+          raise HTTPException(
+              status_code=503,
+              detail="Orchestrator container ID could not be detected",
+          )
+      docker = request.app.state.docker
+      body = await docker.get_container_logs(own_id, tail="all")
+      lines = [l for l in body.splitlines(keepends=True) if container_id in l]
       return PlainTextResponse(content="".join(lines))
   ```
 
-  > **Performance note:** for very large `orchestrator.log` files this linear
-  > scan is fine initially. If the file grows large, add streaming or an index
-  > as a follow-up.
+  > **Note:** Docker's log buffer is finite (controlled by the host daemon's
+  > log driver settings). Logs older than what Docker retains won't appear.
+  > This is acceptable since we explicitly don't need persistence across
+  > orchestrator restarts.
 
 ---
 
@@ -78,7 +99,7 @@ section.
   - `"live"` (or absent/unknown) → fetch from `/{id}/logs`
   - `"file:{filename}"` → fetch from `/{id}/logs/files/{filename}` after
     validating the filename is in the files list (prevents path traversal)
-  - `"orchestrator"` → fetch from `/{id}/orchestrator-logs`
+  - `"orchestrator"` → fetch from `/{id}/logs/orchestrator`
 
 - [ ] **Fetch the file list** from `/{id}/logs/files` in parallel with the
   container fetch.
@@ -92,11 +113,11 @@ section.
     file list returned above, fall back to `"live"` silently (guards against
     stale URLs after log rotation).
   - Capture the raw text string as `logContent`.
-  - On **409** from any log endpoint: set `logContent = null` and
-    `logUnavailable: true`.
+  - On **409** or **503** from any log endpoint: set `logContent = null` and
+    `logUnavailable: true` (so the viewer can show an appropriate message).
   - On **404** from the live logs endpoint (container has no Docker ID yet, or
-    container was never started): set `logContent = ""` so the viewer renders
-    as empty rather than showing an error.
+    was never started): set `logContent = ""` so the viewer renders as empty
+    rather than showing an error.
 
 - [ ] **Pass all log state to the view:**
   ```js
@@ -104,7 +125,7 @@ section.
     logFiles,          // string[]
     filesUnavailable,  // bool — DROVER_LOG_DIR not set
     logSource,         // resolved string ("live" | "file:…" | "orchestrator")
-    logContent,        // string | null (null means 409)
+    logContent,        // string | null (null means unavailable/error)
   })
   ```
 
@@ -135,8 +156,8 @@ section.
      > "File-based log capture is not configured (DROVER_LOG_DIR is unset)"
 
   4. A `<pre id="log-viewer">` block that renders `logContent`:
-     - If `logContent` is `null` (409): render a short message instead of the
-       `<pre>`:
+     - If `logContent` is `null` (unavailable): render a short message instead
+       of the `<pre>`:
        > "Container logging not configured"
      - If `logContent` is `""`: render `(no log output)` in a muted style.
      - Otherwise: render `logContent` verbatim inside `<pre>`.
@@ -150,10 +171,10 @@ section.
 
 ## Rough edges and explicit decisions
 
-- [ ] **Log file size / truncation:** For now display the full content of
-  whatever is fetched. Add a note in the UI comment that we'll want pagination
-  or tail-N once files grow. The `/{id}/logs` endpoint already supports a
-  `?tail=N` query param — we can expose that later.
+- [ ] **Log content size / truncation:** For now display the full content of
+  whatever is fetched. The `/{id}/logs` endpoint already supports a `?tail=N`
+  query param — expose that later when needed. Orchestrator logs are filtered
+  to one container so they're naturally small.
 
 - [ ] **No auto-refresh:** The page is fully server-rendered on load. The
   `onchange` navigation reloads the page with the new selection. This is
@@ -165,10 +186,6 @@ section.
   around the filename part so filenames containing special characters (e.g.
   colons in ISO timestamps) round-trip cleanly.
 
-- [ ] **Orchestrator log file not yet written:** The new endpoint returns `""`
-  (empty 200) when `orchestrator.log` doesn't exist. The viewer renders this
-  as `(no log output)` which is clear and non-alarming.
-
 - [ ] **Destroying/destroyed containers:** Live Docker logs (`/logs`) return
   404 after the container is removed from Docker. The route falls back to
   empty content (see 404 handling above). The captured files remain on disk
@@ -179,7 +196,14 @@ section.
   side before being forwarded to the orchestrator. This is already called out
   in the route step above.
 
-- [ ] **`orchestrator.log` and container log directories don't collide:**
-  Container log dirs live at `{log_dir}/{container_id}/` (subdirectories).
-  `orchestrator.log` lives at `{log_dir}/orchestrator.log` (a file at the
-  root). No conflict.
+- [ ] **Orchestrator container ID detection reliability:** `/proc/self/cgroup`
+  works in all standard Docker deployments (both cgroupv1 and cgroupv2). If an
+  operator runs in an unusual environment where detection fails, they'll see a
+  503 on the orchestrator-logs option and can file an issue. A
+  `DROVER_ORCHESTRATOR_CONTAINER_ID` override env var could be added as a
+  follow-up if this proves problematic in practice.
+
+- [ ] **`orchestrator.log` / container log directories don't apply here:**
+  The simplified approach uses no files on disk for orchestrator logs, so
+  there is no naming collision to worry about with the `{log_dir}/{container_id}/`
+  directory structure.
