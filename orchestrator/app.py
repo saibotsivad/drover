@@ -1,9 +1,11 @@
 import asyncio
 import json
 import logging
+import re
 import time
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+from pathlib import Path
 
 import httpx
 from fastapi import FastAPI, Request
@@ -53,6 +55,23 @@ def setup_logging(level: str = "INFO") -> None:
 
 
 logger = logging.getLogger(__name__)
+
+
+def _detect_own_container_id() -> str | None:
+    """Return this process's Docker container ID by inspecting cgroup membership.
+
+    Works for both cgroupv1 and cgroupv2 in standard Docker deployments.
+    Returns ``None`` if detection fails (non-Docker runtime or unusual setup).
+    """
+    try:
+        text = Path("/proc/self/cgroup").read_text()
+    except OSError:
+        return None
+    for line in text.splitlines():
+        m = re.search(r"/([a-f0-9]{64})(?:\.scope)?$", line)
+        if m:
+            return m.group(1)
+    return None
 
 
 async def _reaper_loop(
@@ -133,12 +152,22 @@ async def lifespan(app: FastAPI):
     sockets.set_done_callback(_handle_container_done)
     sockets.set_ready_callback(container_manager.on_container_ready)
 
+    own_id = _detect_own_container_id()
+    if own_id is None:
+        logger.warning(
+            "Could not detect orchestrator's own Docker container ID from "
+            "/proc/self/cgroup; orchestrator log endpoint will return 503"
+        )
+    else:
+        logger.info("Detected orchestrator container ID: %s", own_id)
+
     app.state.config = config
     app.state.db = db
     app.state.docker = docker
     app.state.sockets = sockets
     app.state.log_capture = log_capture
     app.state.container_manager = container_manager
+    app.state.orchestrator_docker_id = own_id
 
     reaper_task = asyncio.create_task(
         _reaper_loop(config, db, container_manager)

@@ -1,4 +1,4 @@
-import { html } from '../render.js';
+import { html, safe } from '../render.js';
 import { statusPill } from './containers-list.js';
 
 function metadataRow(label, value) {
@@ -32,7 +32,53 @@ function actionBar(container) {
 	</div>`;
 }
 
-export function containerDetailPage(container) {
+function logSourceOption(value, label, selectedValue) {
+	const selected = value === selectedValue ? safe(' selected') : null;
+	return html`<option value="${value}"${selected}>${label}</option>`;
+}
+
+function logsSection(id, opts) {
+	const {
+		logFiles = [],
+		filesUnavailable = false,
+		logSource = 'live',
+		logContent = null,
+		logUnavailable = false,
+	} = opts || {};
+	const encodedId = encodeURIComponent(id);
+	const onchange = safe(
+		`window.location.href='/views/containers/${encodedId}?log_source='+encodeURIComponent(this.value)`,
+	);
+	const fileOptions = logFiles.map((name) =>
+		logSourceOption(`file:${encodeURIComponent(name)}`, name, logSource),
+	);
+	let viewer;
+	if (logContent === null) {
+		const message = logUnavailable
+			? 'Container logging not configured'
+			: 'Log file not found';
+		viewer = html`<p class="muted log-viewer-empty">${message}</p>`;
+	} else if (logContent === '') {
+		viewer = html`<p class="muted log-viewer-empty">(no log output)</p>`;
+	} else {
+		viewer = html`<pre id="log-viewer" class="log-viewer">${logContent}</pre>`;
+	}
+	return html`<section class="logs-section">
+		<h3>Logs</h3>
+		<label class="log-source-label">
+			Source
+			<select class="log-source-select" onchange="${onchange}">
+				${logSourceOption('live', 'Live container logs', logSource)}
+				${fileOptions}
+				${logSourceOption('orchestrator', 'Orchestrator logs', logSource)}
+			</select>
+		</label>
+		${filesUnavailable ? html`<p class="muted log-files-note">File-based log capture is not configured (DROVER_LOG_DIR is unset)</p>` : null}
+		${viewer}
+	</section>`;
+}
+
+export function containerDetailPage(container, logOpts = null) {
 	return html`<section>
 		<div class="page-header">
 			<h2>Container <code>${container.id}</code></h2>
@@ -50,5 +96,6 @@ export function containerDetailPage(container) {
 			${container.error_code ? metadataRow('Error code', html`<code>${container.error_code}</code>`) : null}
 		</dl>
 		${actionBar(container)}
+		${logOpts ? logsSection(container.id, logOpts) : null}
 	</section>`;
 }

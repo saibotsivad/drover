@@ -11,7 +11,7 @@ log driver, or when you need to debug a container after it has stopped.
 
 | Stream | Source | How to access | Retention |
 |---|---|---|---|
-| Orchestrator structured logs | The orchestrator process itself, written to stdout as one JSON object per line. | Whatever log driver the host Docker daemon is configured with (`json-file`, `journald`, `loki`, etc.) — `docker logs drover-orchestrator` is the simplest interactive view. | Driver-specific. Drover does not manage this. |
+| Orchestrator structured logs | The orchestrator process itself, written to stdout as one JSON object per line. | Whatever log driver the host Docker daemon is configured with (`json-file`, `journald`, `loki`, etc.) — `docker logs drover-orchestrator` is the simplest interactive view. For a per-container filtered view, `GET /containers/{id}/logs/orchestrator` returns only the orchestrator log lines that mention a specific container ID. | Driver-specific. Drover does not manage this. |
 | Micro-container stdout/stderr | Each Drover-managed container's own stdout/stderr. | Live tail: `GET /containers/{id}/logs` (proxies Docker's logs API). On-disk capture: `GET /containers/{id}/logs/files` and `/logs/files/{filename}` when `DROVER_LOG_DIR` is set (see §2). | When `DROVER_LOG_DIR` is set: kept until the container is destroyed. When unset: whatever Docker's log driver provides. |
 | Per-command stdout/stderr | The output of an `exec` command run inside a container, captured by the guest agent and streamed back over the per-container Unix socket. | `GET /containers/{id}/exec/{command_id}` returns the `messages` array from the `command_messages` table. | SQLite-backed; lives until the container row is destroyed. |
 
