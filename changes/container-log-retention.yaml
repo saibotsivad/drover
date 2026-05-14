@@ -1,5 +1,5 @@
 - project: orchestrator
-  bump: minor
+  bump: patch
   description: |
     Captured micro-container stdout/stderr is now retained on disk
     under `DROVER_LOG_DIR` and reachable through
