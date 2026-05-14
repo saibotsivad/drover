@@ -12,6 +12,7 @@ class Sink extends Writable {
 function makeFakeOrchestrator(handlers = {}) {
 	return {
 		getJson: handlers.getJson ?? (async () => { throw new Error('getJson not stubbed'); }),
+		getText: handlers.getText ?? (async () => { throw new Error('getText not stubbed'); }),
 		postJson: handlers.postJson ?? (async () => { throw new Error('postJson not stubbed'); }),
 		del: handlers.del ?? (async () => { throw new Error('del not stubbed'); }),
 	};
@@ -135,8 +136,13 @@ test('GET /views/containers renders an error page when the orchestrator is unrea
 test('GET /views/containers/:id renders metadata', async () => {
 	const orchestrator = makeFakeOrchestrator({
 		getJson: async (path) => {
-			assert.equal(path, '/containers/c-aaa');
-			return SAMPLE_CONTAINERS[0];
+			if (path === '/containers/c-aaa') return SAMPLE_CONTAINERS[0];
+			if (path === '/containers/c-aaa/logs/files') return [];
+			throw new Error(`unexpected getJson: ${path}`);
+		},
+		getText: async (path) => {
+			assert.equal(path, '/containers/c-aaa/logs');
+			return 'log line\n';
 		},
 	});
 	const { url, close } = await startApp(orchestrator);
@@ -148,6 +154,10 @@ test('GET /views/containers/:id renders metadata', async () => {
 		assert.match(text, /python-runner/);
 		assert.match(text, /experiment-1/);
 		assert.match(text, /id="container-meta"/);
+		assert.match(text, /<select[^>]*class="log-source-select"/);
+		assert.match(text, /Live container logs/);
+		assert.match(text, /Orchestrator logs/);
+		assert.match(text, /<pre id="log-viewer"[^>]*>log line\n<\/pre>/);
 	} finally {
 		await close();
 	}
@@ -156,6 +166,7 @@ test('GET /views/containers/:id renders metadata', async () => {
 test('GET /views/containers/:id renders 404 when orchestrator returns 404', async () => {
 	const orchestrator = makeFakeOrchestrator({
 		getJson: async () => { throw new OrchestratorHttpError(404, { detail: 'not found' }); },
+		getText: async () => { throw new OrchestratorHttpError(404, { detail: 'not found' }); },
 	});
 	const { url, close } = await startApp(orchestrator);
 	try {
@@ -163,6 +174,161 @@ test('GET /views/containers/:id renders 404 when orchestrator returns 404', asyn
 		assert.equal(res.status, 404);
 		const text = await res.text();
 		assert.match(text, /Not found/);
+	} finally {
+		await close();
+	}
+});
+
+test('GET /views/containers/:id lists log files in the source dropdown', async () => {
+	const orchestrator = makeFakeOrchestrator({
+		getJson: async (path) => {
+			if (path === '/containers/c-aaa') return SAMPLE_CONTAINERS[0];
+			if (path === '/containers/c-aaa/logs/files') return ['0.log', '1.log'];
+			throw new Error(`unexpected getJson: ${path}`);
+		},
+		getText: async () => '',
+	});
+	const { url, close } = await startApp(orchestrator);
+	try {
+		const res = await fetch(`${url}/views/containers/c-aaa`);
+		assert.equal(res.status, 200);
+		const text = await res.text();
+		assert.match(text, /<option\s+value="file:0\.log"[^>]*>0\.log<\/option>/);
+		assert.match(text, /<option\s+value="file:1\.log"[^>]*>1\.log<\/option>/);
+		assert.equal(text.includes('DROVER_LOG_DIR'), false);
+	} finally {
+		await close();
+	}
+});
+
+test('GET /views/containers/:id shows note when log files endpoint returns 409', async () => {
+	const orchestrator = makeFakeOrchestrator({
+		getJson: async (path) => {
+			if (path === '/containers/c-aaa') return SAMPLE_CONTAINERS[0];
+			if (path === '/containers/c-aaa/logs/files') throw new OrchestratorHttpError(409, { detail: 'disabled' });
+			throw new Error(`unexpected getJson: ${path}`);
+		},
+		getText: async () => 'live logs',
+	});
+	const { url, close } = await startApp(orchestrator);
+	try {
+		const res = await fetch(`${url}/views/containers/c-aaa`);
+		assert.equal(res.status, 200);
+		const text = await res.text();
+		assert.match(text, /DROVER_LOG_DIR/);
+	} finally {
+		await close();
+	}
+});
+
+test('GET /views/containers/:id?log_source=orchestrator fetches orchestrator logs', async () => {
+	let textPath = null;
+	const orchestrator = makeFakeOrchestrator({
+		getJson: async (path) => {
+			if (path === '/containers/c-aaa') return SAMPLE_CONTAINERS[0];
+			if (path === '/containers/c-aaa/logs/files') return [];
+			throw new Error(`unexpected getJson: ${path}`);
+		},
+		getText: async (path) => {
+			textPath = path;
+			return 'orchestrator log line\n';
+		},
+	});
+	const { url, close } = await startApp(orchestrator);
+	try {
+		const res = await fetch(`${url}/views/containers/c-aaa?log_source=orchestrator`);
+		assert.equal(res.status, 200);
+		assert.equal(textPath, '/containers/c-aaa/logs/orchestrator');
+		const text = await res.text();
+		assert.match(text, /<option\s+value="orchestrator"\s+selected/);
+		assert.match(text, /orchestrator log line/);
+	} finally {
+		await close();
+	}
+});
+
+test('GET /views/containers/:id?log_source=file:X fetches the file when listed', async () => {
+	let textPath = null;
+	const orchestrator = makeFakeOrchestrator({
+		getJson: async (path) => {
+			if (path === '/containers/c-aaa') return SAMPLE_CONTAINERS[0];
+			if (path === '/containers/c-aaa/logs/files') return ['0.log'];
+			throw new Error(`unexpected getJson: ${path}`);
+		},
+		getText: async (path) => {
+			textPath = path;
+			return 'file content\n';
+		},
+	});
+	const { url, close } = await startApp(orchestrator);
+	try {
+		const res = await fetch(`${url}/views/containers/c-aaa?log_source=file:0.log`);
+		assert.equal(res.status, 200);
+		assert.equal(textPath, '/containers/c-aaa/logs/files/0.log');
+		const text = await res.text();
+		assert.match(text, /file content/);
+	} finally {
+		await close();
+	}
+});
+
+test('GET /views/containers/:id?log_source=file:missing shows log file not found', async () => {
+	let textCalled = false;
+	const orchestrator = makeFakeOrchestrator({
+		getJson: async (path) => {
+			if (path === '/containers/c-aaa') return SAMPLE_CONTAINERS[0];
+			if (path === '/containers/c-aaa/logs/files') return ['0.log'];
+			throw new Error(`unexpected getJson: ${path}`);
+		},
+		getText: async () => { textCalled = true; return ''; },
+	});
+	const { url, close } = await startApp(orchestrator);
+	try {
+		const res = await fetch(`${url}/views/containers/c-aaa?log_source=file:nope.log`);
+		assert.equal(res.status, 200);
+		assert.equal(textCalled, false, 'should not fetch log content for invalid filename');
+		const text = await res.text();
+		assert.match(text, /Log file not found/);
+	} finally {
+		await close();
+	}
+});
+
+test('GET /views/containers/:id treats live 404 as empty log output', async () => {
+	const orchestrator = makeFakeOrchestrator({
+		getJson: async (path) => {
+			if (path === '/containers/c-aaa') return SAMPLE_CONTAINERS[0];
+			if (path === '/containers/c-aaa/logs/files') return [];
+			throw new Error(`unexpected getJson: ${path}`);
+		},
+		getText: async () => { throw new OrchestratorHttpError(404, { detail: 'no docker' }); },
+	});
+	const { url, close } = await startApp(orchestrator);
+	try {
+		const res = await fetch(`${url}/views/containers/c-aaa`);
+		assert.equal(res.status, 200);
+		const text = await res.text();
+		assert.match(text, /\(no log output\)/);
+	} finally {
+		await close();
+	}
+});
+
+test('GET /views/containers/:id?log_source=orchestrator handles 503', async () => {
+	const orchestrator = makeFakeOrchestrator({
+		getJson: async (path) => {
+			if (path === '/containers/c-aaa') return SAMPLE_CONTAINERS[0];
+			if (path === '/containers/c-aaa/logs/files') return [];
+			throw new Error(`unexpected getJson: ${path}`);
+		},
+		getText: async () => { throw new OrchestratorHttpError(503, { detail: 'cannot detect' }); },
+	});
+	const { url, close } = await startApp(orchestrator);
+	try {
+		const res = await fetch(`${url}/views/containers/c-aaa?log_source=orchestrator`);
+		assert.equal(res.status, 200);
+		const text = await res.text();
+		assert.match(text, /Container logging not configured/);
 	} finally {
 		await close();
 	}
@@ -254,7 +420,13 @@ test('GET /views/containers/:id escapes attacker-controlled fields', async () =>
 		last_seen: null,
 		error_code: null,
 	};
-	const orchestrator = makeFakeOrchestrator({ getJson: async () => evilContainer });
+	const orchestrator = makeFakeOrchestrator({
+		getJson: async (path) => {
+			if (path.endsWith('/logs/files')) return [];
+			return evilContainer;
+		},
+		getText: async () => '',
+	});
 	const { url, close } = await startApp(orchestrator);
 	try {
 		const res = await fetch(`${url}/views/containers/anything`);

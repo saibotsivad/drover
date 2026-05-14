@@ -165,6 +165,33 @@ async def list_log_files(container_id: str, request: Request) -> list[str]:
         raise HTTPException(status_code=e.status_code, detail=e.detail)
 
 
+@router.get("/{container_id}/logs/orchestrator")
+async def get_orchestrator_logs(
+    container_id: str, request: Request
+) -> PlainTextResponse:
+    """Orchestrator's own Docker logs, filtered to a single container.
+
+    Uses the same Docker log proxy as ``/logs`` but targets the
+    orchestrator's container ID (auto-detected at startup) and filters
+    line-by-line on substring match with ``container_id``. The 26-char
+    ULID format makes false-positive matches negligible.
+    """
+    await _ensure_container_exists(request, container_id)
+    own_id = request.app.state.orchestrator_docker_id
+    if own_id is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Orchestrator container ID could not be detected",
+        )
+    docker = request.app.state.docker
+    try:
+        body = await docker.get_container_logs(own_id, tail="all")
+    except ContainerNotFoundError as e:
+        raise HTTPException(status_code=503, detail=e.message)
+    lines = [l for l in body.splitlines(keepends=True) if container_id in l]
+    return PlainTextResponse(content="".join(lines))
+
+
 @router.get("/{container_id}/logs/files/{filename}")
 async def get_log_file(
     container_id: str, filename: str, request: Request

@@ -44,9 +44,9 @@ async function readBody(res) {
 	}
 }
 
-async function request(method, baseUrl, apiKey, pathAndQuery, { body, headers } = {}) {
+async function request(method, baseUrl, apiKey, pathAndQuery, { body, headers, accept = 'application/json' } = {}) {
 	const url = `${baseUrl.replace(/\/$/, '')}${pathAndQuery}`;
-	const init = { method, headers: buildHeaders(apiKey, headers) };
+	const init = { method, headers: buildHeaders(apiKey, { Accept: accept, ...headers }) };
 	if (body !== undefined) {
 		init.body = typeof body === 'string' ? body : JSON.stringify(body);
 		init.headers['Content-Type'] = init.headers['Content-Type'] || 'application/json';
@@ -65,6 +65,13 @@ async function request(method, baseUrl, apiKey, pathAndQuery, { body, headers } 
 	}
 
 	if (res.status === 204) return null;
+	if (accept === 'text/plain') {
+		try {
+			return await res.text();
+		} catch {
+			return null;
+		}
+	}
 	return readBody(res);
 }
 
@@ -72,6 +79,7 @@ export function createOrchestratorClient({ baseUrl, apiKey = null }) {
 	if (!baseUrl) throw new Error('createOrchestratorClient requires baseUrl');
 	return {
 		getJson: (pathAndQuery) => request('GET', baseUrl, apiKey, pathAndQuery),
+		getText: (pathAndQuery) => request('GET', baseUrl, apiKey, pathAndQuery, { accept: 'text/plain' }),
 		postJson: (pathAndQuery, body) => request('POST', baseUrl, apiKey, pathAndQuery, { body }),
 		del: (pathAndQuery) => request('DELETE', baseUrl, apiKey, pathAndQuery),
 	};
