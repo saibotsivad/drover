@@ -8,9 +8,18 @@ The items below are follow-up work and open design decisions identified during p
 
 The current exec API uses polling (`GET /containers/{id}/exec/{cmd_id}`). Real-time delivery via SSE or WebSocket would reduce latency and load for long-running commands. There's an RFC open that details some stuff about that with WebSockets.
 
-## Container log retention
+## List-endpoint pagination
 
-Docker container logs are fetched live from the Docker API and are lost once a container is removed. To preserve diagnostic information after destruction, logs could be captured and stored before the Docker container is removed. It's likely that a homelab setup would have its own logging service, eg Grafana, so this is not a primary or high priority goal. However, if we get streaming for stdout/stderr, the ability to stream overall container logs out for live debugging would certainly be appreciated.
+Container log retention landed via `DROVER_LOG_DIR` and the
+`/containers/{id}/logs/files` endpoints (see `docs/observability.md`),
+but `GET /containers/{id}/logs` is still the unmodified live-Docker
+proxy and the rest of the list endpoints (`GET /containers`,
+`GET /images`, exec messages) have no pagination contract. The next
+plan should design a single `since` / `until` / `limit` / `offset`
+shape and retrofit it everywhere — including broadening
+`/containers/{id}/logs` to read from disk when retention is enabled.
+This is the prerequisite for cutting a release that publicly advertises
+log retention as a feature.
 
 ## Container API data model refinement
 

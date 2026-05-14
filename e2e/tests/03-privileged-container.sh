@@ -57,6 +57,19 @@ assert_zero "$EXIT_CODE" "exec exit code"
 assert_contains "$STDOUT" "hello_drover" "exec stdout"
 step_end
 
+# --- 2b. captured-log files check -----------------------------------------
+#
+# The drover-executor writes "Connecting to /run/orchestrator.sock" to
+# stderr the moment it starts up, which the orchestrator captures into
+# 0.log via the Docker log stream.  We assert on that sentinel because
+# the exec stdout itself is piped through the socket and never reaches
+# container stdout.
+
+step_begin "assert-captured-logs"
+assert_log_files_contains "$CONTAINER_ID" "0.log"
+assert_log_file_contains "$CONTAINER_ID" "0.log" "Connecting to"
+step_end
+
 # --- 3. stop ---------------------------------------------------------------
 
 step_begin "stop-container"
@@ -74,7 +87,20 @@ FINAL=$(printf '%s' "$E2E_RESPONSE_BODY" | jq -r '.status')
 assert_equals "stopped" "$FINAL" "final status is stopped"
 step_end
 
-# --- 4. log assertion ------------------------------------------------------
+# --- 4. destroy and verify logs are discarded ------------------------------
+
+step_begin "destroy-container"
+api_delete "${ORCHESTRATOR_URL}/containers/${CONTAINER_ID}"
+assert_equals "200" "$E2E_RESPONSE_STATUS" "DELETE /containers status"
+FINAL=$(printf '%s' "$E2E_RESPONSE_BODY" | jq -r '.status')
+assert_equals "destroyed" "$FINAL" "final status is destroyed"
+# After discard, the row still exists but the capture directory is gone:
+# list returns []; the specific file returns 404.
+assert_log_files_empty "$CONTAINER_ID"
+assert_log_file_missing "$CONTAINER_ID" "0.log"
+step_end
+
+# --- 5. log assertion ------------------------------------------------------
 
 step_begin "assert-no-errors"
 ORCH_LOG="$E2E_RUN_LOG_DIR/orchestrator.full.log"

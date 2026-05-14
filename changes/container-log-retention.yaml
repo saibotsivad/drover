@@ -1,0 +1,9 @@
+- project: orchestrator
+  bump: patch
+  description: |
+    Captured micro-container stdout/stderr is now retained on disk
+    under `DROVER_LOG_DIR` and reachable through
+    `GET /containers/{id}/logs/files` (and `/logs/files/{filename}`)
+    until the container is destroyed. See
+    [`docs/observability.md`](../docs/observability.md) for the full
+    retention model, on-disk format, and log-shipper recipes.

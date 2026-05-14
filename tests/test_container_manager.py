@@ -1,5 +1,6 @@
 """Tests for ContainerManager state machine logic with mocked Docker and sockets."""
 
+import asyncio
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -15,6 +16,7 @@ from orchestrator.container_manager import (
     _docker_state_to_status,
 )
 from orchestrator.docker_client import ContainerNotFoundError
+from orchestrator.log_capture import LogCaptureManager
 from orchestrator.models import ContainerStatus, CreateContainerRequest
 
 
@@ -54,8 +56,16 @@ def sockets():
 
 
 @pytest.fixture
-def manager(config, db, docker, sockets):
-    return ContainerManager(config, db, docker, sockets)
+def log_capture(config):
+    # Default: log_dir is None so the manager is a no-op for the bulk of
+    # state-machine tests.  Specific tests that exercise the wiring opt in
+    # by replacing this with a manager backed by a tmp_path log_dir.
+    return LogCaptureManager(config, docker=None)
+
+
+@pytest.fixture
+def manager(config, db, docker, sockets, log_capture):
+    return ContainerManager(config, db, docker, sockets, log_capture)
 
 
 # -- helpers ----------------------------------------------------------------
@@ -143,8 +153,12 @@ async def test_create_privileged_with_config(config, db, docker, sockets):
         init_timeout_seconds=config.init_timeout_seconds,
         log_level=config.log_level,
         api_key_hash=None,
+        log_dir=config.log_dir,
+        log_max_file_bytes=config.log_max_file_bytes,
     )
-    mgr = ContainerManager(priv_config, db, docker, sockets)
+    mgr = ContainerManager(
+        priv_config, db, docker, sockets, LogCaptureManager(priv_config, docker=None)
+    )
     resp = await mgr.create_container(
         CreateContainerRequest(image="ignored", privileged=True)
     )
@@ -598,3 +612,210 @@ def test_docker_state_unknown():
 
 def test_docker_state_empty():
     assert _docker_state_to_status({}) is None
+
+
+# ---------------------------------------------------------------------------
+# Log-capture lifecycle wiring
+# ---------------------------------------------------------------------------
+#
+# Use a real LogCaptureManager backed by a tmp_path directory and a fake
+# Docker stream so that the on-disk side effects (directory, .cursor,
+# discard) are observable end-to-end.  These tests catch mismatches
+# between ContainerManager call sites and LogCaptureManager method
+# signatures that a mocked manager would silently accept.
+
+
+def _frame(stream_type: int, payload: bytes) -> bytes:
+    return bytes([stream_type, 0, 0, 0]) + len(payload).to_bytes(4, "big") + payload
+
+
+@pytest.fixture
+def log_config(config, tmp_path):
+    from orchestrator.config import Config
+
+    return Config(
+        privileged_image=config.privileged_image,
+        db_path=config.db_path,
+        socket_dir=config.socket_dir,
+        docker_sock=config.docker_sock,
+        reaper_interval_seconds=config.reaper_interval_seconds,
+        init_timeout_seconds=config.init_timeout_seconds,
+        log_level=config.log_level,
+        api_key_hash=None,
+        log_dir=str(tmp_path / "logs"),
+        log_max_file_bytes=10 * 1024 * 1024,
+    )
+
+
+@pytest.fixture
+def streamer():
+    """Yields one stdout frame and then parks forever (mimics follow=true)."""
+    calls: list[dict] = []
+
+    async def gen(docker_id, *, since=None, follow=True):
+        calls.append({"docker_id": docker_id, "since": since, "follow": follow})
+        yield _frame(1, b"2026-05-13T12:00:00.000000000Z hello\n")
+        await asyncio.Event().wait()
+
+    gen.calls = calls  # type: ignore[attr-defined]
+    return gen
+
+
+@pytest.fixture
+def log_capture_real(log_config, streamer):
+    return LogCaptureManager(log_config, docker=None, streamer=streamer)
+
+
+@pytest.fixture
+def manager_with_logs(log_config, db, docker, sockets, log_capture_real):
+    return ContainerManager(log_config, db, docker, sockets, log_capture_real)
+
+
+async def _await_first_log_line(log_capture, container_id, timeout=2.0):
+    """Spin until 0.log has at least one full line on disk."""
+    deadline = asyncio.get_event_loop().time() + timeout
+    log_dir = log_capture.container_dir(container_id)
+    while asyncio.get_event_loop().time() < deadline:
+        f = log_dir / "0.log"
+        if f.exists() and f.read_bytes().count(b"\n") >= 1:
+            return
+        await asyncio.sleep(0.01)
+    raise AssertionError(f"no log line ever landed in {log_dir / '0.log'}")
+
+
+async def test_init_starts_log_capture(manager_with_logs, log_capture_real, db):
+    resp = await manager_with_logs.create_container(
+        CreateContainerRequest(image="test-img")
+    )
+    await _await_init(manager_with_logs, resp.id)
+    await _await_first_log_line(log_capture_real, resp.id)
+    # Cleanup the in-flight capture so the test exits cleanly.
+    await log_capture_real.shutdown()
+
+
+async def test_init_does_not_start_capture_when_docker_start_fails(
+    manager_with_logs, log_capture_real, docker, db
+):
+    docker.start_container.side_effect = RuntimeError("docker boom")
+    resp = await manager_with_logs.create_container(
+        CreateContainerRequest(image="test-img")
+    )
+    await _await_init(manager_with_logs, resp.id)
+    # _fail_init runs and removes/discards nothing for a never-captured
+    # container; the directory must not exist at all.
+    assert not log_capture_real.container_dir(resp.id).exists()
+
+
+async def test_stop_persists_cursor(manager_with_logs, log_capture_real, db):
+    resp = await _create_running(manager_with_logs, db, image="test-img")
+    await _await_first_log_line(log_capture_real, resp.id)
+    await manager_with_logs.stop_container(resp.id)
+    cursor = (
+        log_capture_real.container_dir(resp.id) / ".cursor"
+    ).read_text()
+    assert cursor.startswith("2026-05-13T12:00:00")
+
+
+async def test_fail_init_persists_cursor_and_keeps_directory(
+    manager_with_logs, log_capture_real, docker, db
+):
+    """After _fail_init, the directory survives so the operator can inspect."""
+    resp = await manager_with_logs.create_container(
+        CreateContainerRequest(image="test-img")
+    )
+    await _await_init(manager_with_logs, resp.id)
+    await _await_first_log_line(log_capture_real, resp.id)
+
+    # Trigger _fail_init manually (the watchdog would do this for init_timeout).
+    docker_row = await db.fetchone(
+        "SELECT docker_id FROM containers WHERE id = ?", (resp.id,)
+    )
+    await manager_with_logs._fail_init(
+        resp.id, "init_timeout", docker_row["docker_id"]
+    )
+    # Directory still present (preserved for post-mortem); .cursor written.
+    assert log_capture_real.container_dir(resp.id).exists()
+    assert (log_capture_real.container_dir(resp.id) / ".cursor").exists()
+
+
+async def test_resume_passes_cursor_to_log_capture(
+    manager_with_logs, log_capture_real, streamer, db
+):
+    resp = await _create_running(manager_with_logs, db, image="test-img")
+    await _await_first_log_line(log_capture_real, resp.id)
+    await manager_with_logs.stop_container(resp.id)
+    initial_calls = len(streamer.calls)
+
+    await manager_with_logs.resume_container(resp.id)
+    # Resume should issue exactly one new streamer call carrying the
+    # parsed cursor (Docker takes integer unix seconds).
+    assert len(streamer.calls) == initial_calls + 1
+    assert isinstance(streamer.calls[-1]["since"], int)
+    await log_capture_real.shutdown()
+
+
+async def test_resume_after_stop_appends_to_existing_log_file(
+    manager_with_logs, log_capture_real, streamer, db, tmp_path
+):
+    resp = await _create_running(manager_with_logs, db, image="test-img")
+    await _await_first_log_line(log_capture_real, resp.id)
+    await manager_with_logs.stop_container(resp.id)
+    first_size = (
+        log_capture_real.container_dir(resp.id) / "0.log"
+    ).stat().st_size
+
+    # On resume the streamer yields the same frame again; the writer
+    # appends to 0.log (file is small, no rotation).
+    await manager_with_logs.resume_container(resp.id)
+    log_path = log_capture_real.container_dir(resp.id) / "0.log"
+    deadline = asyncio.get_event_loop().time() + 2
+    while asyncio.get_event_loop().time() < deadline:
+        if log_path.stat().st_size > first_size:
+            break
+        await asyncio.sleep(0.01)
+    assert log_path.stat().st_size > first_size
+    assert not (log_capture_real.container_dir(resp.id) / "1.log").exists()
+    await log_capture_real.shutdown()
+
+
+async def test_destroy_running_container_discards_logs(
+    manager_with_logs, log_capture_real, db
+):
+    resp = await _create_running(manager_with_logs, db, image="test-img")
+    await _await_first_log_line(log_capture_real, resp.id)
+    await manager_with_logs.destroy_container(resp.id)
+    assert not log_capture_real.container_dir(resp.id).exists()
+
+
+async def test_destroy_error_container_discards_logs(
+    manager_with_logs, log_capture_real, docker, db
+):
+    """A container that errored during init still gets its directory removed."""
+    docker.start_container.side_effect = RuntimeError("boom")
+    resp = await manager_with_logs.create_container(
+        CreateContainerRequest(image="test-img")
+    )
+    await _await_init(manager_with_logs, resp.id)
+    # No capture directory exists (Docker never started), but destroy must
+    # still complete cleanly.
+    await manager_with_logs.destroy_container(resp.id)
+    assert not log_capture_real.container_dir(resp.id).exists()
+
+
+async def test_sync_running_container_restarts_log_capture(
+    manager_with_logs, log_capture_real, docker, sockets, streamer, db
+):
+    resp = await _create_running(manager_with_logs, db, image="test-img")
+    await _await_first_log_line(log_capture_real, resp.id)
+    # Tear the in-memory capture down without removing the on-disk dir;
+    # this mimics an orchestrator restart where the previous process's
+    # task is gone but .cursor was persisted.
+    await log_capture_real.shutdown()
+    streamer.calls.clear()
+
+    docker.inspect_container.return_value = {"State": {"Status": "running"}}
+    await manager_with_logs.sync_containers()
+    # sync_containers issues exactly one start with the persisted cursor.
+    assert len(streamer.calls) == 1
+    assert isinstance(streamer.calls[-1]["since"], int)
+    await log_capture_real.shutdown()
