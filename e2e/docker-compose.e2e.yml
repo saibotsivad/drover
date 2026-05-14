@@ -32,6 +32,9 @@ services:
       SOCKET_DIR: /tmp/drover-sockets
       PRIVILEGED_IMAGE: drover-builder:e2e
       LOG_LEVEL: INFO
+      # Capture container stdout/stderr to disk so the e2e suite's
+      # /logs/files assertions exercise the real on-disk path.
+      DROVER_LOG_DIR: /var/lib/orchestrator/logs
       DROVER_API_KEY: 78bb43a35e23d69a38ec1b64886b858607ec407fa916f7e0390e0a015a0ba031
     volumes:
       - drover-data:/var/lib/orchestrator

@@ -1,6 +1,7 @@
 from fastapi import APIRouter, HTTPException, Request
 
-from orchestrator.docker_client import DockerClient, ImageNotFoundError
+from orchestrator.docker_client import DockerClient
+from orchestrator.errors import ImageNotFoundError
 from orchestrator.models import ImageDetail, ImageSummary
 
 router = APIRouter(prefix="/images", tags=["images"])

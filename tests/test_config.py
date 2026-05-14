@@ -12,6 +12,8 @@ def test_load_config_defaults(monkeypatch):
     monkeypatch.delenv("DROVER_INIT_TIMEOUT_SECONDS", raising=False)
     monkeypatch.delenv("LOG_LEVEL", raising=False)
     monkeypatch.delenv("DROVER_API_KEY", raising=False)
+    monkeypatch.delenv("DROVER_LOG_DIR", raising=False)
+    monkeypatch.delenv("DROVER_LOG_MAX_FILE_BYTES", raising=False)
 
     config = load_config()
 
@@ -23,6 +25,8 @@ def test_load_config_defaults(monkeypatch):
     assert config.init_timeout_seconds == 20
     assert config.log_level == "INFO"
     assert config.api_key_hash is None
+    assert config.log_dir is None
+    assert config.log_max_file_bytes == 10 * 1024 * 1024
 
 
 def test_load_config_from_env(monkeypatch):
@@ -34,6 +38,8 @@ def test_load_config_from_env(monkeypatch):
     monkeypatch.setenv("DROVER_INIT_TIMEOUT_SECONDS", "45")
     monkeypatch.setenv("LOG_LEVEL", "debug")
     monkeypatch.setenv("DROVER_API_KEY", "abc123hash")
+    monkeypatch.setenv("DROVER_LOG_DIR", "/var/lib/orchestrator/logs")
+    monkeypatch.setenv("DROVER_LOG_MAX_FILE_BYTES", "2048")
 
     config = load_config()
 
@@ -45,6 +51,8 @@ def test_load_config_from_env(monkeypatch):
     assert config.init_timeout_seconds == 45
     assert config.log_level == "DEBUG"
     assert config.api_key_hash == "abc123hash"
+    assert config.log_dir == "/var/lib/orchestrator/logs"
+    assert config.log_max_file_bytes == 2048
 
 
 def test_config_is_frozen():
@@ -57,6 +65,8 @@ def test_config_is_frozen():
         init_timeout_seconds=20,
         log_level="INFO",
         api_key_hash=None,
+        log_dir=None,
+        log_max_file_bytes=10 * 1024 * 1024,
     )
     try:
         config.db_path = "/other"  # type: ignore

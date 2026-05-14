@@ -1,5 +1,11 @@
-published: 0.0.8
+published: 0.0.9
 changes:
+- version: 0.0.9
+  date: '2026-05-13'
+  entries:
+  - bump: patch
+    description: |
+      Validating release and container issues.
 - version: 0.0.8
   date: '2026-05-11'
   entries:

@@ -18,6 +18,8 @@ def config(tmp_path):
         init_timeout_seconds=20,
         log_level="DEBUG",
         api_key_hash=None,
+        log_dir=None,
+        log_max_file_bytes=10 * 1024 * 1024,
     )
 
 
