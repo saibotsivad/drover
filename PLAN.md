@@ -110,8 +110,9 @@ section.
 - [ ] **Fetch the selected log content** based on the resolved `log_source`.
   - Default to `"live"` when no param or an unrecognised value is provided.
   - When `log_source` is `"file:{filename}"` and the filename is **not** in the
-    file list returned above, fall back to `"live"` silently (guards against
-    stale URLs after log rotation).
+    file list returned above, set `logContent = null` and `logError = "log file
+    not found"` — do **not** fall back to live logs. The URL reflects what the
+    user asked for; showing different content silently would be confusing.
   - Capture the raw text string as `logContent`.
   - On **409** or **503** from any log endpoint: set `logContent = null` and
     `logUnavailable: true` (so the viewer can show an appropriate message).
@@ -187,9 +188,11 @@ section.
   colons in ISO timestamps) round-trip cleanly.
 
 - [ ] **Destroying/destroyed containers:** Live Docker logs (`/logs`) return
-  404 after the container is removed from Docker. The route falls back to
+  404 after the container is removed from Docker. The route treats this as
   empty content (see 404 handling above). The captured files remain on disk
-  until explicitly discarded, so file options still work.
+  until explicitly discarded, so file options still work. If a previously
+  valid file URL is revisited after log discard, the file won't be in the
+  `/logs/files` list and the viewer will show "log file not found" explicitly.
 
 - [ ] **Security — path traversal:** The filename in `log_source=file:{…}`
   must be validated against the list returned by `/logs/files` on the server
