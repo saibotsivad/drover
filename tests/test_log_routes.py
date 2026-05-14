@@ -39,6 +39,8 @@ def _build_app(
     *,
     container_exists: bool = True,
     docker_id: str | None = "docker_xyz",
+    orchestrator_docker_id: str | None = "orch_dock_id",
+    orchestrator_logs: str = "hello\nworld\n",
 ) -> FastAPI:
     app = FastAPI()
     app.include_router(containers_router.router)
@@ -62,12 +64,19 @@ def _build_app(
     db.fetchone = fetchone
 
     docker = MagicMock()
-    docker.get_container_logs = AsyncMock(return_value="hello\nworld\n")
+
+    async def get_logs(cid, tail="all"):
+        if cid == orchestrator_docker_id:
+            return orchestrator_logs
+        return "hello\nworld\n"
+
+    docker.get_container_logs = AsyncMock(side_effect=get_logs)
 
     app.state.container_manager = cm
     app.state.log_capture = log_capture
     app.state.db = db
     app.state.docker = docker
+    app.state.orchestrator_docker_id = orchestrator_docker_id
     return app
 
 
@@ -219,4 +228,54 @@ async def test_live_logs_404_when_container_missing(tmp_path):
         transport=httpx.ASGITransport(app=app), base_url="http://t"
     ) as ac:
         r = await ac.get("/containers/missing/logs")
+    assert r.status_code == 404
+
+
+# --- /logs/orchestrator ---------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_logs_filters_by_container_id(tmp_path):
+    config = _config(tmp_path, log_dir=tmp_path / "logs")
+    log_capture = LogCaptureManager(config, docker=None)
+    body = (
+        "2026-05-14T00:00:00 starting up\n"
+        "2026-05-14T00:00:01 container cnt_abc created\n"
+        "2026-05-14T00:00:02 container cnt_other created\n"
+        "2026-05-14T00:00:03 cnt_abc ready\n"
+    )
+    app = _build_app(config, log_capture, orchestrator_logs=body)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://t"
+    ) as ac:
+        r = await ac.get("/containers/cnt_abc/logs/orchestrator")
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("text/plain")
+    assert "cnt_abc created" in r.text
+    assert "cnt_abc ready" in r.text
+    assert "cnt_other" not in r.text
+    assert "starting up" not in r.text
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_logs_503_when_id_not_detected(tmp_path):
+    config = _config(tmp_path, log_dir=tmp_path / "logs")
+    log_capture = LogCaptureManager(config, docker=None)
+    app = _build_app(config, log_capture, orchestrator_docker_id=None)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://t"
+    ) as ac:
+        r = await ac.get("/containers/cnt_abc/logs/orchestrator")
+    assert r.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_logs_404_when_container_missing(tmp_path):
+    config = _config(tmp_path, log_dir=tmp_path / "logs")
+    log_capture = LogCaptureManager(config, docker=None)
+    app = _build_app(config, log_capture, container_exists=False)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://t"
+    ) as ac:
+        r = await ac.get("/containers/missing/logs/orchestrator")
     assert r.status_code == 404
