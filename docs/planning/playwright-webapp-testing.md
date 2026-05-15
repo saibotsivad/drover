@@ -66,6 +66,25 @@ e2e/playwright/
     privileged-launch.spec.ts # tests 2–5
 ```
 
+### Selector conventions
+
+All element selectors follow `docs/test-selector-conventions.md` — stable `id` and
+`class` attributes on the HTML, no `data-testid`. The quick reference used in these
+tests:
+
+| What | Selector |
+|------|----------|
+| Page section root | `#images-list`, `#containers-list`, `#container-detail`, `#launch-form` |
+| Images table body | `tbody#image-rows` |
+| One image row | `#image-{drover.name}` |
+| Containers table body | `tbody#container-rows` |
+| One container row | `#container-{id}` |
+| Status badge | `.status-{slug}` (e.g. `.status-running`) |
+| Log source picker | `select.log-source-select` |
+| Log content pane | `pre#log-viewer` |
+| Stop button | `.btn-stop` |
+| Destroy button | `.btn-destroy` |
+
 ### `e2e/run-playwright.sh`
 
 A thin wrapper that:
@@ -85,15 +104,14 @@ captures `e2e/logs/`.
 
 **Steps:**
 
-1. Call `GET http://orchestrator:8000/images` with the test API key and collect the
-   `drover.name` values from the JSON response.
-2. Navigate to `http://webapp:9091/views/images`.
-3. Assert that every `drover.name` value from step 1 appears in the rendered table
-   (match on the name column text).
-4. Assert the row count in the table equals the number of images returned by the API.
+1. Call `GET /images` on the orchestrator (via `page.request`) and collect the
+   `name` values from the JSON response.
+2. Navigate to `/views/images`.
+3. For each name from step 1, assert that `#image-{name}` exists within `#images-list`.
+4. Assert that `tbody#image-rows tr` count equals the number of images from the API.
 
-In the e2e stack the only image with `drover.managed=true` is `builder`, so the
-table should have exactly one row.
+In the e2e stack the only image with `drover.managed=true` is `builder`, so
+`#image-builder` should exist and the row count should be exactly 1.
 
 ---
 
@@ -117,11 +135,11 @@ logs feature.
 7. Extract the container ID from the URL — this is shared across Tests 3 and 4.
 8. Poll the orchestrator API via Playwright's `request` context until the container
    status is `running` (up to 30 s).
-9. Reload the detail page (or navigate to it fresh after the poll resolves).
-10. Assert that `select.log-source-select` is present.
-11. Assert that `pre#log-viewer` is present and its text content is non-empty. The
-    executor logs `Connecting to /run/orchestrator.sock` on startup; that line is a
-    reliable signal that live logs are flowing.
+9. Navigate to `/views/containers/{id}` (fresh load after the poll resolves).
+10. Within `#container-detail`, assert `select.log-source-select` is present.
+11. Within `#container-detail`, assert `pre#log-viewer` is present and its text
+    contains `Connecting to /run/orchestrator.sock` — the executor logs this on
+    startup and it is a reliable signal that live logs are flowing.
 
 > Note: step 8 uses `page.request.get(...)` against the orchestrator URL (exposed
 > at `ORCHESTRATOR_URL` env var) so the test does not busy-loop by reloading the
@@ -144,13 +162,15 @@ file should be present.
 
 **Steps:**
 
-1. Still on the container detail page from Test 2.
-2. Poll `GET /containers/{id}/logs/files` via `page.request` until the response
+1. Poll `GET /containers/{id}/logs/files` via `page.request` until the response
    includes `0.log` (up to 15 s).
-3. Select the `0.log` option from `select.log-source-select`.
-4. Assert the page URL includes `log_source=file%3A0.log` (or the equivalent
-   `encodeURIComponent` form) after the `onchange` navigation.
-5. Assert `pre#log-viewer` is present and contains `Connecting to`.
+2. Navigate to `/views/containers/{id}` so the fresh page includes `0.log` as an
+   option in the select (the select is populated server-side on each page load).
+3. Within `#container-detail`, call `select.log-source-select.selectOption('file:0.log')`.
+4. Assert the page URL includes `log_source=file%3A0.log` after the `onchange`
+   navigation fires.
+5. Assert `#container-detail pre#log-viewer` is present and its text contains
+   `Connecting to`.
 
 ---
 
@@ -163,10 +183,12 @@ This test also reuses the container from Test 2.
 
 **Steps:**
 
-1. On the container detail page, select "Orchestrator logs" from
-   `select.log-source-select`.
-2. Assert the page URL includes `log_source=orchestrator`.
-3. Assert `pre#log-viewer` is present and its text contains the container ID.
+1. Navigate to `/views/containers/{id}` (or continue from Test 3's landed URL).
+2. Within `#container-detail`, call `select.log-source-select.selectOption('orchestrator')`.
+3. Assert the page URL includes `log_source=orchestrator` after the `onchange`
+   navigation fires.
+4. Assert `#container-detail pre#log-viewer` is present and its text contains the
+   container ID.
 
 ---
 
@@ -180,8 +202,10 @@ This test also reuses the container from Test 2.
 **Steps:**
 
 1. Navigate to `/views/containers`.
-2. Assert that a row containing the container ID from Test 2 exists in the table.
-3. Assert that the status badge for that row shows an active status.
+2. Assert that `#container-{id}` exists within `#containers-list tbody#container-rows`.
+3. Assert that `#container-{id} .status-running` (or `.status-initializing`) exists —
+   the containers list only shows active statuses, so any of the active `status-*`
+   classes is sufficient.
 
 ---
 
