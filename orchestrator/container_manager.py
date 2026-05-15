@@ -346,7 +346,8 @@ class ContainerManager:
             env_list = [f"{k}={v}" for k, v in req.env.items()]
             env_list.append(f"DROVER_CONTAINER_ID={container_id}")
 
-            binds: list[str] = [f"{socket_path}:/run/orchestrator.sock"]
+            host_socket_path = f"{self._config.socket_host_dir}/{container_id}.sock"
+            binds: list[str] = [f"{host_socket_path}:/run/orchestrator.sock"]
             if req.privileged:
                 binds.append(f"{self._config.docker_sock}:/run/docker.sock")
 

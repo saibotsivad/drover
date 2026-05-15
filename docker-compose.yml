@@ -16,14 +16,16 @@
 # entrypoint detects the socket's GID at runtime, so no further setup
 # is needed.
 #
-# Socket directory: SOCKET_DIR must be a bind-mount at the *same path* on the
-# host and inside the orchestrator container. When the orchestrator launches a
-# micro-container it passes the socket path to the Docker daemon, which
-# resolves it against the host filesystem. A named volume won't work here
-# because the daemon-visible host path differs from the in-container path.
-# Create the directory before the first `docker compose up`:
+# Socket directory: when the orchestrator launches a micro-container it passes
+# the socket path to the Docker daemon, which resolves it against the *host*
+# filesystem. A named volume won't work here because the daemon-visible host
+# path differs from the in-container path. Instead a bind-mount is used and
+# SOCKET_HOST_DIR tells the orchestrator which host path to use in the Docker
+# API call; SOCKET_DIR is the in-container path.
 #
-#     mkdir -p /tmp/drover-sockets
+# Create the host directory before the first `docker compose up`:
+#
+#     mkdir -p /tmp/drover-sockets   # or set SOCKET_HOST_DIR to your preferred path
 #     docker compose up
 
 services:
@@ -34,11 +36,12 @@ services:
     networks: [drover]
     volumes:
       - drover-data:/var/lib/orchestrator
-      - /tmp/drover-sockets:/tmp/drover-sockets
+      - ${SOCKET_HOST_DIR:-/tmp/drover-sockets}:/var/run/microcontainers
       - ${DOCKER_SOCK:-/var/run/docker.sock}:/var/run/docker.sock
     environment:
       DB_PATH: /var/lib/orchestrator/db.sqlite
-      SOCKET_DIR: /tmp/drover-sockets
+      SOCKET_DIR: /var/run/microcontainers
+      SOCKET_HOST_DIR: ${SOCKET_HOST_DIR:-/tmp/drover-sockets}
       LOG_LEVEL: INFO
       # Capture each micro-container's stdout/stderr to disk so the full
       # history survives stop/restart and is reachable through
