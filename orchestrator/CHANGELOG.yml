@@ -1,5 +1,22 @@
-published: 0.0.9
+published: 0.0.10
 changes:
+- version: 0.0.10
+  date: '2026-05-14'
+  entries:
+  - bump: patch
+    description: |
+      New `GET /containers/{id}/logs/orchestrator` endpoint returns the
+      orchestrator's own structured log lines filtered to a single container,
+      making it easy to see lifecycle events for one container without reading
+      the full orchestrator log.
+  - bump: patch
+    description: |
+      Captured micro-container stdout/stderr is now retained on disk
+      under `DROVER_LOG_DIR` and reachable through
+      `GET /containers/{id}/logs/files` (and `/logs/files/{filename}`)
+      until the container is destroyed. See
+      [`docs/observability.md`](../docs/observability.md) for the full
+      retention model, on-disk format, and log-shipper recipes.
 - version: 0.0.9
   date: '2026-05-13'
   entries:
