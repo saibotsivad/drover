@@ -16,14 +16,14 @@ function actionBar(container) {
 	return html`<div class="action-bar">
 		${isStoppable ? html`<button
 			type="button"
-			class="btn btn-secondary"
+			class="btn btn-secondary btn-stop"
 			hx-post="/actions/containers/${id}/stop"
 			hx-target="#container-meta"
 			hx-swap="outerHTML"
 		>Stop</button>` : null}
 		${isDestroyable ? html`<button
 			type="button"
-			class="btn btn-danger"
+			class="btn btn-danger btn-destroy"
 			hx-delete="/actions/containers/${id}"
 			hx-target="#container-meta"
 			hx-swap="outerHTML"
@@ -79,7 +79,7 @@ function logsSection(id, opts) {
 }
 
 export function containerDetailPage(container, logOpts = null) {
-	return html`<section>
+	return html`<section id="container-detail">
 		<div class="page-header">
 			<h2>Container <code>${container.id}</code></h2>
 			<a class="btn btn-secondary" href="/views/containers">Back to list</a>

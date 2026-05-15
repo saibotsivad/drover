@@ -26,7 +26,7 @@ export function launchFormPage({ images = [], values = {}, error = null } = {}) 
 			required
 		/>`;
 
-	return html`<section>
+	return html`<section id="launch-form">
 		<div class="page-header">
 			<h2>Launch container</h2>
 			<a class="btn btn-secondary" href="/views/containers">Cancel</a>

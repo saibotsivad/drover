@@ -12,14 +12,14 @@ function actionButtons(container) {
 	return html`<div class="row-actions">
 		${isStoppable ? html`<button
 			type="button"
-			class="btn btn-secondary"
+			class="btn btn-secondary btn-stop"
 			hx-post="/actions/containers/${id}/stop"
 			hx-target="#container-${id}"
 			hx-swap="outerHTML"
 		>Stop</button>` : null}
 		${isDestroyable ? html`<button
 			type="button"
-			class="btn btn-danger"
+			class="btn btn-danger btn-destroy"
 			hx-delete="/actions/containers/${id}"
 			hx-target="#container-${id}"
 			hx-swap="outerHTML"
@@ -47,7 +47,7 @@ export function containerRows(containers) {
 }
 
 export function containerListPage(containers) {
-	return html`<section>
+	return html`<section id="containers-list">
 		<div class="page-header">
 			<h2>Containers</h2>
 			<a class="btn btn-primary" href="/views/launch">Launch container</a>
