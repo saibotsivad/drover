@@ -92,6 +92,7 @@ POST   /containers/{id}/stop                    Stop (resumable)
 POST   /containers/{id}/resume                  Resume a stopped container
 DELETE /containers/{id}                         Stop and permanently destroy
 POST   /containers/{id}/execs                   Send a shell command
+GET    /containers/{id}/execs                   List all commands for a container (newest first)
 GET    /containers/{id}/execs/{cmd_id}          Poll command output
 GET    /containers/{id}/logs                    Live container log tail (text/plain)
 GET    /containers/{id}/logs/files              List on-disk captured log files; 409 if DROVER_LOG_DIR unset

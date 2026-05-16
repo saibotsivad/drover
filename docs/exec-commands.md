@@ -78,9 +78,13 @@ Both the command metadata and every output message are written to the database a
 - Each micro-container can have **multiple commands in flight** simultaneously. They are independent, each with their own command ID and message stream.
 - Messages are ordered by `seq` (auto-incrementing), preserving the interleaved stdout/stderr order as it happened.
 
+### Listing commands
+
+`GET /containers/{id}/execs` returns all commands submitted against a container, newest first. Each entry includes `command_id`, `command`, `status`, `exit_code`, and `created_at`. Commands that are still running appear in the list with `status: running`; the list is a snapshot, not a stream.
+
 ### Polling
 
-The caller gets a command ID back immediately and polls `GET /containers/{id}/execs/{cmd_id}` to check progress. The response includes:
+The caller gets a command ID back immediately and polls `GET /containers/{id}/execs/{cmd_id}` to check progress. The response also includes the original `command` string. The response includes:
 
 | Field | Type | Description |
 |---|---|---|
