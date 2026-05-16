@@ -63,10 +63,35 @@ function commandRow(containerId, command) {
 	</tr>`;
 }
 
-function execSection(containerId, commands) {
-	const rows = commands.length === 0
+export function commandRows(containerId, commands) {
+	return commands.length === 0
 		? html`<tr class="empty"><td colspan="4">No exec commands yet</td></tr>`
 		: commands.map((c) => commandRow(containerId, c));
+}
+
+function execInputSection(containerId) {
+	return html`<section class="exec-input-section">
+		<form
+			class="exec-input-form"
+			hx-post="/actions/containers/${containerId}/execs"
+			hx-target="#command-rows"
+			hx-swap="innerHTML"
+			hx-on::after-request="if(event.detail.successful){this.reset();this.querySelector('[data-replicated-value]').dataset.replicatedValue=''}"
+		>
+			<div class="grow-wrap" data-replicated-value="">
+				<textarea
+					name="command"
+					placeholder="e.g. ls -la /etc"
+					rows="1"
+					oninput="this.parentNode.dataset.replicatedValue = this.value"
+				></textarea>
+			</div>
+			<button type="submit" class="btn btn-primary">Run</button>
+		</form>
+	</section>`;
+}
+
+function execSection(containerId, commands) {
 	return html`<section class="exec-section">
 		<h3>Exec Commands</h3>
 		<table class="data-table">
@@ -78,7 +103,7 @@ function execSection(containerId, commands) {
 					<th>Started</th>
 				</tr>
 			</thead>
-			<tbody id="command-rows">${rows}</tbody>
+			<tbody id="command-rows">${commandRows(containerId, commands)}</tbody>
 		</table>
 	</section>`;
 }
@@ -147,6 +172,7 @@ export function containerDetailPage(container, logOpts = null, commands = null) 
 			${container.error_code ? metadataRow('Error code', html`<code>${container.error_code}</code>`) : null}
 		</dl>
 		${actionBar(container)}
+		${commands ? execInputSection(container.id) : null}
 		${commands ? execSection(container.id, commands) : null}
 		${logOpts ? logsSection(container.id, logOpts) : null}
 	</section>`;
