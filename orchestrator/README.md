@@ -91,8 +91,8 @@ GET    /containers/{id}                         Get container state
 POST   /containers/{id}/stop                    Stop (resumable)
 POST   /containers/{id}/resume                  Resume a stopped container
 DELETE /containers/{id}                         Stop and permanently destroy
-POST   /containers/{id}/exec                    Send a shell command
-GET    /containers/{id}/exec/{cmd_id}           Poll command output
+POST   /containers/{id}/execs                   Send a shell command
+GET    /containers/{id}/execs/{cmd_id}          Poll command output
 GET    /containers/{id}/logs                    Live container log tail (text/plain)
 GET    /containers/{id}/logs/files              List on-disk captured log files; 409 if DROVER_LOG_DIR unset
 GET    /containers/{id}/logs/files/{filename}   Fetch a captured log file; 409 if DROVER_LOG_DIR unset
@@ -123,7 +123,7 @@ GET    /containers/{id}/logs/orchestrator       Orchestrator logs filtered to th
 
 **Exec request/response:**
 
-`POST /containers/{id}/exec` accepts `{"command": "git clone ..."}` and returns `{"command_id": "<id>"}` immediately. Poll `GET /containers/{id}/exec/{cmd_id}` for output:
+`POST /containers/{id}/execs` accepts `{"command": "git clone ..."}` and returns `{"command_id": "<id>"}` immediately. Poll `GET /containers/{id}/execs/{cmd_id}` for output:
 
 ```json
 {

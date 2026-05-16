@@ -16,7 +16,7 @@ sequenceDiagram
     participant Orchestrator
     participant GuestAgent as Guest Agent
 
-    Caller->>Orchestrator: POST /containers/{id}/exec<br/>{"command": "git clone ..."}
+    Caller->>Orchestrator: POST /containers/{id}/execs<br/>{"command": "git clone ..."}
     Note over Orchestrator: generate command_id<br/>INSERT into commands table
     Orchestrator-->>Caller: {"command_id": "abc123"}
 
@@ -32,7 +32,7 @@ sequenceDiagram
     GuestAgent->>Orchestrator: {"type":"result","id":"abc123","exit_code":0}
     Note over Orchestrator: UPDATE commands SET<br/>status='complete', exit_code=0
 
-    Caller->>Orchestrator: GET /containers/{id}/exec/abc123
+    Caller->>Orchestrator: GET /containers/{id}/execs/abc123
     Orchestrator-->>Caller: {"command_id":"abc123","status":"complete","exit_code":0,<br/>"messages":[{"seq":1,"stream":"stdout","data":"Cloning..."},<br/>{"seq":2,"stream":"stderr","data":"Receiving..."}]}
 ```
 
@@ -80,7 +80,7 @@ Both the command metadata and every output message are written to the database a
 
 ### Polling
 
-The caller gets a command ID back immediately and polls `GET /containers/{id}/exec/{cmd_id}` to check progress. The response includes:
+The caller gets a command ID back immediately and polls `GET /containers/{id}/execs/{cmd_id}` to check progress. The response includes:
 
 | Field | Type | Description |
 |---|---|---|

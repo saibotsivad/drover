@@ -39,7 +39,7 @@ Add `list_commands(container_id: str) -> list[CommandSummary]`. Query the `comma
 ### New route (`orchestrator/routers/containers.py`)
 
 ```
-GET /containers/{container_id}/exec  →  list[CommandSummary]
+GET /containers/{container_id}/execs  →  list[CommandSummary]
 ```
 
 Returns an empty list if the container exists but has no commands. Returns 404 if the container does not exist.
@@ -105,7 +105,7 @@ const [container, filesResult, commands] = await Promise.all([
 ]);
 ```
 
-`fetchCommands` is a small helper that calls `GET /containers/{encodedId}/exec` and returns the array (empty array on 404, so a missing container falls through to the existing error path from the first `getJson` call).
+`fetchCommands` is a small helper that calls `GET /containers/{encodedId}/execs` and returns the array (empty array on 404, so a missing container falls through to the existing error path from the first `getJson` call).
 
 Pass `commands` into `containerDetailPage()` as a new parameter (alongside `logOpts`).
 
@@ -127,7 +127,7 @@ Register in `webapp/src/routes/views.js` below the existing `GET /containers/:id
 
 The handler fetches:
 1. `GET /containers/{encodedId}` — to get the container (for the page title and a "back" link)
-2. `GET /containers/{encodedId}/exec/{encodedCommandId}` — to get the `ExecStatusResponse`
+2. `GET /containers/{encodedId}/execs/{encodedCommandId}` — to get the `ExecStatusResponse`
 
 Both calls run in parallel. Render `execOutputPage()` from a new partial.
 
@@ -271,7 +271,7 @@ If `messages` is empty, render the empty-state paragraph instead of the `<pre>`.
 |------|--------|
 | `orchestrator/models.py` | Add `CommandSummary` model |
 | `orchestrator/container_manager.py` | Add `list_commands()` method |
-| `orchestrator/routers/containers.py` | Add `GET /{container_id}/exec` route |
+| `orchestrator/routers/containers.py` | Add `GET /{container_id}/execs` route |
 
 ### Webapp (Node/JS)
 

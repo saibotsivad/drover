@@ -4,7 +4,7 @@
 # Steps:
 #   1. POST /containers (image=builder, privileged=true, env DROVER_TEST_VAR)
 #   2. Poll until status == running
-#   3. POST /containers/{id}/exec with `echo $DROVER_TEST_VAR`
+#   3. POST /containers/{id}/execs with `echo $DROVER_TEST_VAR`
 #   4. Poll exec status until complete; assert exit_code 0 and stdout
 #      contains "hello_drover"
 #   5. POST /containers/{id}/stop
@@ -41,7 +41,7 @@ step_end
 step_begin "exec-command"
 step_set_wait "complete" 30
 EXEC_BODY='{"command": "echo $DROVER_TEST_VAR"}'
-api_post "${ORCHESTRATOR_URL}/containers/${CONTAINER_ID}/exec" "$EXEC_BODY"
+api_post "${ORCHESTRATOR_URL}/containers/${CONTAINER_ID}/execs" "$EXEC_BODY"
 assert_equals "201" "$E2E_RESPONSE_STATUS" "POST exec status"
 COMMAND_ID=$(printf '%s' "$E2E_RESPONSE_BODY" | jq -r '.command_id')
 assert_not_empty "$COMMAND_ID" "command id returned"

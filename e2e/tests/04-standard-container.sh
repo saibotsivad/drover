@@ -57,7 +57,7 @@ step_end
 step_begin "exec-command"
 step_set_wait "complete" 30
 EXEC_BODY='{"command": "echo $DROVER_TEST_VAR"}'
-api_post "${ORCHESTRATOR_URL}/containers/${CONTAINER_ID}/exec" "$EXEC_BODY"
+api_post "${ORCHESTRATOR_URL}/containers/${CONTAINER_ID}/execs" "$EXEC_BODY"
 assert_equals "201" "$E2E_RESPONSE_STATUS" "POST exec status"
 COMMAND_ID=$(printf '%s' "$E2E_RESPONSE_BODY" | jq -r '.command_id')
 assert_not_empty "$COMMAND_ID" "command id returned"
