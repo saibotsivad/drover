@@ -295,3 +295,14 @@ If `messages` is empty, render the empty-state paragraph instead of the `<pre>`.
 - Auto-refresh of the exec list or output view. The WebSocket streaming plan covers real-time updates; this UI requires a manual page refresh to see new output or status changes.
 - A form for submitting new exec commands from the web UI. That would be a separate feature.
 - Pagination of the command list or output messages. Not needed at this scale.
+
+---
+
+## Implementation notes (decisions made during the build)
+
+- **`ExecStatusResponse` gained a `command` field.** The plan's `<h2>Exec: <code>{command}</code></h2>` header implies the command text is available on the exec-output page, but the existing `ExecStatusResponse` only exposed `command_id`. Adding `command: str` is a backwards-compatible extension (existing JSON clients ignore unknown fields) and lets the view render the header without a second lookup against `/execs`. `ContainerManager.get_command_status` populates it from the already-fetched `commands` row.
+- **`Started` column uses `formatRelative()`** (e.g. `5m ago`) for consistency with the containers-list table, rather than the raw ISO timestamp shown in the plan's sample markup. The full ISO value is still in the `<time datetime="…">` attribute for tooltip / accessibility.
+- **Command status pills got explicit colors.** Added `--status-pending` (amber, matching `initializing`) and `--status-complete` (accent blue) so the three command statuses are visually distinct. `--status-running` reuses the existing container-running green.
+- **Selector convention.** The exec table follows the established `{resource}-rows` / `{resource}-{key}` pattern with `command-rows` and `command-{command_id}`.
+- **404 swallowing in `fetchCommands`.** Mirrors `fetchLogFiles`: a 404 from `/containers/{id}/execs` is treated as an empty list. If the container itself is missing, the parallel `getJson` for `/containers/{id}` is the one that raises and drives the page into the existing 404 error path; the empty commands array is harmless in that case.
+- **Command meta row dropped from the exec-output page.** The command text is already rendered prominently in the page title (`Exec: <code>{command}</code>`), so a duplicate row in the meta-grid was omitted to reduce noise. The meta-grid keeps `Status`, `Exit code` (when complete), and `Command ID`.

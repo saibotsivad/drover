@@ -4,6 +4,7 @@ import { layout } from '../views/layout.js';
 import { containerDetailPage } from '../views/partials/container-detail.js';
 import { containerListPage, containerRows } from '../views/partials/containers-list.js';
 import { describeOrchestratorError, errorPanel, renderOrchestratorError } from '../views/partials/errors.js';
+import { execOutputPage } from '../views/partials/exec-output.js';
 import { imagesListPage } from '../views/partials/images-list.js';
 import { launchFormPage } from '../views/partials/launch-form.js';
 import { html } from '../views/render.js';
@@ -20,6 +21,18 @@ function sendPage(res, page) {
 
 function sendFragment(res, fragment, status = 200) {
 	res.status(status).type('html').send(fragment.toString());
+}
+
+async function fetchCommands(orchestrator, encodedId) {
+	try {
+		const commands = await orchestrator.getJson(`/containers/${encodedId}/execs`);
+		return Array.isArray(commands) ? commands : [];
+	} catch (err) {
+		if (err instanceof OrchestratorHttpError && err.status === 404) {
+			return [];
+		}
+		throw err;
+	}
 }
 
 async function fetchLogFiles(orchestrator, encodedId) {
@@ -117,9 +130,10 @@ export function createViewsRouter({ orchestrator }) {
 		const id = req.params.id;
 		const encodedId = encodeURIComponent(id);
 		try {
-			const [container, filesResult] = await Promise.all([
+			const [container, filesResult, commands] = await Promise.all([
 				orchestrator.getJson(`/containers/${encodedId}`),
 				fetchLogFiles(orchestrator, encodedId),
+				fetchCommands(orchestrator, encodedId),
 			]);
 			const { logFiles, filesUnavailable } = filesResult;
 			const { logSource, logContent, logUnavailable } = await fetchLogContent(
@@ -137,12 +151,37 @@ export function createViewsRouter({ orchestrator }) {
 					logSource,
 					logContent,
 					logUnavailable,
-				}),
+				}, commands),
 			}));
 		} catch (err) {
 			const { status } = describeOrchestratorError(err);
 			res.status(status).type('html').send(layout({
 				title: 'Container',
+				activePath: '/views/containers',
+				body: renderOrchestratorError(err),
+			}).toString());
+		}
+	});
+
+	router.get('/containers/:id/execs/:commandId', async (req, res) => {
+		const id = req.params.id;
+		const commandId = req.params.commandId;
+		const encodedId = encodeURIComponent(id);
+		const encodedCommandId = encodeURIComponent(commandId);
+		try {
+			const [container, exec] = await Promise.all([
+				orchestrator.getJson(`/containers/${encodedId}`),
+				orchestrator.getJson(`/containers/${encodedId}/execs/${encodedCommandId}`),
+			]);
+			sendPage(res, layout({
+				title: `Exec ${exec.command_id}`,
+				activePath: '/views/containers',
+				body: execOutputPage(container, exec),
+			}));
+		} catch (err) {
+			const { status } = describeOrchestratorError(err);
+			res.status(status).type('html').send(layout({
+				title: 'Exec',
 				activePath: '/views/containers',
 				body: renderOrchestratorError(err),
 			}).toString());

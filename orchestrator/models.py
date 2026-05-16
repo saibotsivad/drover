@@ -129,9 +129,18 @@ class CommandMessage(BaseModel):
 
 class ExecStatusResponse(BaseModel):
     command_id: str
+    command: str
     status: CommandStatus
     exit_code: int | None = None
     messages: list[CommandMessage] = Field(default_factory=list)
+
+
+class CommandSummary(BaseModel):
+    command_id: str
+    command: str
+    status: CommandStatus
+    exit_code: int | None = None
+    created_at: str
 
 
 # --- Image models ---

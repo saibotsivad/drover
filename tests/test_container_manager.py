@@ -443,8 +443,39 @@ async def test_get_command_status(manager, db):
     cmd_id = await manager.exec_command(resp.id, "echo hello")
     status = await manager.get_command_status(resp.id, cmd_id)
     assert status.command_id == cmd_id
+    assert status.command == "echo hello"
     assert status.status.value == "pending"
     assert status.messages == []
+
+
+# -- list commands ----------------------------------------------------------
+
+
+async def test_list_commands_empty(manager, db):
+    resp = await _create_running(manager, db, image="test-img")
+    assert await manager.list_commands(resp.id) == []
+
+
+async def test_list_commands_newest_first(manager, db):
+    resp = await _create_running(manager, db, image="test-img")
+    first = await manager.exec_command(resp.id, "echo one")
+    # Force distinct created_at so the ordering test isn't flaky on machines
+    # where back-to-back inserts can land in the same microsecond.
+    await db.execute_insert(
+        "UPDATE commands SET created_at = '2026-01-01T00:00:00+00:00' WHERE id = ?",
+        (first,),
+    )
+    second = await manager.exec_command(resp.id, "echo two")
+    summaries = await manager.list_commands(resp.id)
+    assert [s.command_id for s in summaries] == [second, first]
+    assert summaries[0].command == "echo two"
+    assert summaries[0].status.value == "pending"
+    assert summaries[0].exit_code is None
+
+
+async def test_list_commands_unknown_container(manager):
+    with pytest.raises(ContainerNotFound):
+        await manager.list_commands("does-not-exist")
 
 
 # -- sync_containers (startup reconciliation) ------------------------------

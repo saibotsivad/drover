@@ -32,6 +32,57 @@ function actionBar(container) {
 	</div>`;
 }
 
+function commandStatusPill(status) {
+	const slug = String(status || 'unknown').toLowerCase();
+	return html`<span class="status status-${safe(slug)}">${status}</span>`;
+}
+
+function formatRelative(iso) {
+	if (!iso) return '';
+	const then = Date.parse(iso);
+	if (Number.isNaN(then)) return iso;
+	const diff = Math.max(0, Date.now() - then) / 1000;
+	if (diff < 60) return 'just now';
+	if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+	if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
+	return `${Math.floor(diff / 86400)}d ago`;
+}
+
+function commandRow(containerId, command) {
+	const encodedContainer = encodeURIComponent(containerId);
+	const encodedCommand = encodeURIComponent(command.command_id);
+	const href = `/views/containers/${encodedContainer}/execs/${encodedCommand}`;
+	const exitCode = command.exit_code === null || command.exit_code === undefined
+		? html`<span class="muted">—</span>`
+		: command.exit_code;
+	return html`<tr id="command-${command.command_id}">
+		<td><a href="${href}"><code>${command.command}</code></a></td>
+		<td>${commandStatusPill(command.status)}</td>
+		<td>${exitCode}</td>
+		<td><time datetime="${command.created_at}">${formatRelative(command.created_at)}</time></td>
+	</tr>`;
+}
+
+function execSection(containerId, commands) {
+	const rows = commands.length === 0
+		? html`<tr class="empty"><td colspan="4">No exec commands yet</td></tr>`
+		: commands.map((c) => commandRow(containerId, c));
+	return html`<section class="exec-section">
+		<h3>Exec Commands</h3>
+		<table class="data-table">
+			<thead>
+				<tr>
+					<th>Command</th>
+					<th>Status</th>
+					<th>Exit code</th>
+					<th>Started</th>
+				</tr>
+			</thead>
+			<tbody id="command-rows">${rows}</tbody>
+		</table>
+	</section>`;
+}
+
 function logSourceOption(value, label, selectedValue) {
 	const selected = value === selectedValue ? safe(' selected') : null;
 	return html`<option value="${value}"${selected}>${label}</option>`;
@@ -78,8 +129,8 @@ function logsSection(id, opts) {
 	</section>`;
 }
 
-export function containerDetailPage(container, logOpts = null) {
-	return html`<section>
+export function containerDetailPage(container, logOpts = null, commands = null) {
+	return html`<section id="container-detail">
 		<div class="page-header">
 			<h2>Container <code>${container.id}</code></h2>
 			<a class="btn btn-secondary" href="/views/containers">Back to list</a>
@@ -96,6 +147,7 @@ export function containerDetailPage(container, logOpts = null) {
 			${container.error_code ? metadataRow('Error code', html`<code>${container.error_code}</code>`) : null}
 		</dl>
 		${actionBar(container)}
+		${commands ? execSection(container.id, commands) : null}
 		${logOpts ? logsSection(container.id, logOpts) : null}
 	</section>`;
 }

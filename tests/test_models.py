@@ -294,7 +294,9 @@ class TestExecStatusResponse:
     def test_defaults(self):
         resp = ExecStatusResponse(
             command_id="CMD01",
+            command="echo hi",
             status=CommandStatus.pending,
         )
+        assert resp.command == "echo hi"
         assert resp.exit_code is None
         assert resp.messages == []

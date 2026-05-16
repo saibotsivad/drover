@@ -138,6 +138,7 @@ test('GET /views/containers/:id renders metadata', async () => {
 		getJson: async (path) => {
 			if (path === '/containers/c-aaa') return SAMPLE_CONTAINERS[0];
 			if (path === '/containers/c-aaa/logs/files') return [];
+			if (path === '/containers/c-aaa/execs') return [];
 			throw new Error(`unexpected getJson: ${path}`);
 		},
 		getText: async (path) => {
@@ -154,10 +155,13 @@ test('GET /views/containers/:id renders metadata', async () => {
 		assert.match(text, /python-runner/);
 		assert.match(text, /experiment-1/);
 		assert.match(text, /id="container-meta"/);
+		assert.match(text, /id="container-detail"/);
 		assert.match(text, /<select[^>]*class="log-source-select"/);
 		assert.match(text, /Live container logs/);
 		assert.match(text, /Orchestrator logs/);
 		assert.match(text, /<pre id="log-viewer"[^>]*>log line\n<\/pre>/);
+		assert.match(text, /Exec Commands/);
+		assert.match(text, /No exec commands yet/);
 	} finally {
 		await close();
 	}
@@ -184,6 +188,7 @@ test('GET /views/containers/:id lists log files in the source dropdown', async (
 		getJson: async (path) => {
 			if (path === '/containers/c-aaa') return SAMPLE_CONTAINERS[0];
 			if (path === '/containers/c-aaa/logs/files') return ['0.log', '1.log'];
+			if (path === '/containers/c-aaa/execs') return [];
 			throw new Error(`unexpected getJson: ${path}`);
 		},
 		getText: async () => '',
@@ -206,6 +211,7 @@ test('GET /views/containers/:id shows note when log files endpoint returns 409',
 		getJson: async (path) => {
 			if (path === '/containers/c-aaa') return SAMPLE_CONTAINERS[0];
 			if (path === '/containers/c-aaa/logs/files') throw new OrchestratorHttpError(409, { detail: 'disabled' });
+			if (path === '/containers/c-aaa/execs') return [];
 			throw new Error(`unexpected getJson: ${path}`);
 		},
 		getText: async () => 'live logs',
@@ -227,6 +233,7 @@ test('GET /views/containers/:id?log_source=orchestrator fetches orchestrator log
 		getJson: async (path) => {
 			if (path === '/containers/c-aaa') return SAMPLE_CONTAINERS[0];
 			if (path === '/containers/c-aaa/logs/files') return [];
+			if (path === '/containers/c-aaa/execs') return [];
 			throw new Error(`unexpected getJson: ${path}`);
 		},
 		getText: async (path) => {
@@ -253,6 +260,7 @@ test('GET /views/containers/:id?log_source=file:X fetches the file when listed',
 		getJson: async (path) => {
 			if (path === '/containers/c-aaa') return SAMPLE_CONTAINERS[0];
 			if (path === '/containers/c-aaa/logs/files') return ['0.log'];
+			if (path === '/containers/c-aaa/execs') return [];
 			throw new Error(`unexpected getJson: ${path}`);
 		},
 		getText: async (path) => {
@@ -278,6 +286,7 @@ test('GET /views/containers/:id?log_source=file:missing shows log file not found
 		getJson: async (path) => {
 			if (path === '/containers/c-aaa') return SAMPLE_CONTAINERS[0];
 			if (path === '/containers/c-aaa/logs/files') return ['0.log'];
+			if (path === '/containers/c-aaa/execs') return [];
 			throw new Error(`unexpected getJson: ${path}`);
 		},
 		getText: async () => { textCalled = true; return ''; },
@@ -299,6 +308,7 @@ test('GET /views/containers/:id treats live 404 as empty log output', async () =
 		getJson: async (path) => {
 			if (path === '/containers/c-aaa') return SAMPLE_CONTAINERS[0];
 			if (path === '/containers/c-aaa/logs/files') return [];
+			if (path === '/containers/c-aaa/execs') return [];
 			throw new Error(`unexpected getJson: ${path}`);
 		},
 		getText: async () => { throw new OrchestratorHttpError(404, { detail: 'no docker' }); },
@@ -319,6 +329,7 @@ test('GET /views/containers/:id?log_source=orchestrator handles 503', async () =
 		getJson: async (path) => {
 			if (path === '/containers/c-aaa') return SAMPLE_CONTAINERS[0];
 			if (path === '/containers/c-aaa/logs/files') return [];
+			if (path === '/containers/c-aaa/execs') return [];
 			throw new Error(`unexpected getJson: ${path}`);
 		},
 		getText: async () => { throw new OrchestratorHttpError(503, { detail: 'cannot detect' }); },
@@ -329,6 +340,159 @@ test('GET /views/containers/:id?log_source=orchestrator handles 503', async () =
 		assert.equal(res.status, 200);
 		const text = await res.text();
 		assert.match(text, /Container logging not configured/);
+	} finally {
+		await close();
+	}
+});
+
+// --- exec commands panel + exec output view ------------------------------
+
+const SAMPLE_COMMANDS = [
+	{
+		command_id: 'cmd-001',
+		command: 'echo hello',
+		status: 'complete',
+		exit_code: 0,
+		created_at: '2026-05-15T10:00:00Z',
+	},
+	{
+		command_id: 'cmd-002',
+		command: 'sleep 5',
+		status: 'running',
+		exit_code: null,
+		created_at: '2026-05-15T10:05:00Z',
+	},
+];
+
+test('GET /views/containers/:id renders the exec commands table when commands exist', async () => {
+	const orchestrator = makeFakeOrchestrator({
+		getJson: async (path) => {
+			if (path === '/containers/c-aaa') return SAMPLE_CONTAINERS[0];
+			if (path === '/containers/c-aaa/logs/files') return [];
+			if (path === '/containers/c-aaa/execs') return SAMPLE_COMMANDS;
+			throw new Error(`unexpected getJson: ${path}`);
+		},
+		getText: async () => '',
+	});
+	const { url, close } = await startApp(orchestrator);
+	try {
+		const res = await fetch(`${url}/views/containers/c-aaa`);
+		assert.equal(res.status, 200);
+		const text = await res.text();
+		assert.match(text, /id="command-rows"/);
+		assert.match(text, /id="command-cmd-001"/);
+		assert.match(text, /id="command-cmd-002"/);
+		assert.match(text, /echo hello/);
+		assert.match(text, /sleep 5/);
+		assert.match(text, /href="\/views\/containers\/c-aaa\/execs\/cmd-001"/);
+		assert.match(text, /status-complete/);
+		assert.match(text, /status-running/);
+		assert.equal(text.includes('No exec commands yet'), false);
+	} finally {
+		await close();
+	}
+});
+
+test('GET /views/containers/:id swallows 404 from /execs (matches missing-container path)', async () => {
+	const orchestrator = makeFakeOrchestrator({
+		getJson: async (path) => {
+			if (path === '/containers/c-aaa') return SAMPLE_CONTAINERS[0];
+			if (path === '/containers/c-aaa/logs/files') return [];
+			if (path === '/containers/c-aaa/execs') throw new OrchestratorHttpError(404, { detail: 'gone' });
+			throw new Error(`unexpected getJson: ${path}`);
+		},
+		getText: async () => '',
+	});
+	const { url, close } = await startApp(orchestrator);
+	try {
+		const res = await fetch(`${url}/views/containers/c-aaa`);
+		assert.equal(res.status, 200);
+		const text = await res.text();
+		assert.match(text, /No exec commands yet/);
+	} finally {
+		await close();
+	}
+});
+
+test('GET /views/containers/:id/execs/:commandId renders the exec output page', async () => {
+	const exec = {
+		command_id: 'cmd-001',
+		command: 'echo hello',
+		status: 'complete',
+		exit_code: 0,
+		messages: [
+			{ seq: 1, stream: 'stdout', data: 'hello\n' },
+			{ seq: 2, stream: 'stderr', data: 'warn: something\n' },
+		],
+	};
+	const orchestrator = makeFakeOrchestrator({
+		getJson: async (path) => {
+			if (path === '/containers/c-aaa') return SAMPLE_CONTAINERS[0];
+			if (path === '/containers/c-aaa/execs/cmd-001') return exec;
+			throw new Error(`unexpected getJson: ${path}`);
+		},
+	});
+	const { url, close } = await startApp(orchestrator);
+	try {
+		const res = await fetch(`${url}/views/containers/c-aaa/execs/cmd-001`);
+		assert.equal(res.status, 200);
+		const text = await res.text();
+		assert.match(text, /id="exec-detail"/);
+		assert.match(text, /id="exec-meta"/);
+		assert.match(text, /id="exec-output"/);
+		assert.match(text, /Exec: <code>echo hello<\/code>/);
+		assert.match(text, /Exit code/);
+		assert.match(text, /<span class="output-chunk">hello\n<\/span>/);
+		assert.match(text, /<span class="output-chunk output-stderr">warn: something\n<\/span>/);
+		assert.match(text, /href="\/views\/containers\/c-aaa"/);
+	} finally {
+		await close();
+	}
+});
+
+test('GET /views/containers/:id/execs/:commandId renders empty output state', async () => {
+	const exec = {
+		command_id: 'cmd-002',
+		command: 'sleep 5',
+		status: 'running',
+		exit_code: null,
+		messages: [],
+	};
+	const orchestrator = makeFakeOrchestrator({
+		getJson: async (path) => {
+			if (path === '/containers/c-aaa') return SAMPLE_CONTAINERS[0];
+			if (path === '/containers/c-aaa/execs/cmd-002') return exec;
+			throw new Error(`unexpected getJson: ${path}`);
+		},
+	});
+	const { url, close } = await startApp(orchestrator);
+	try {
+		const res = await fetch(`${url}/views/containers/c-aaa/execs/cmd-002`);
+		assert.equal(res.status, 200);
+		const text = await res.text();
+		assert.match(text, /\(no output yet\)/);
+		assert.equal(text.includes('Exit code'), false, 'exit code row should be hidden when not complete');
+	} finally {
+		await close();
+	}
+});
+
+test('GET /views/containers/:id/execs/:commandId returns 404 when the command is missing', async () => {
+	const orchestrator = makeFakeOrchestrator({
+		getJson: async (path) => {
+			if (path === '/containers/c-aaa') return SAMPLE_CONTAINERS[0];
+			if (path === '/containers/c-aaa/execs/missing') {
+				throw new OrchestratorHttpError(404, { detail: 'not found' });
+			}
+			throw new Error(`unexpected getJson: ${path}`);
+		},
+	});
+	const { url, close } = await startApp(orchestrator);
+	try {
+		const res = await fetch(`${url}/views/containers/c-aaa/execs/missing`);
+		assert.equal(res.status, 404);
+		const text = await res.text();
+		assert.match(text, /Not found/);
 	} finally {
 		await close();
 	}
@@ -423,6 +587,7 @@ test('GET /views/containers/:id escapes attacker-controlled fields', async () =>
 	const orchestrator = makeFakeOrchestrator({
 		getJson: async (path) => {
 			if (path.endsWith('/logs/files')) return [];
+			if (path.endsWith('/execs')) return [];
 			return evilContainer;
 		},
 		getText: async () => '',
