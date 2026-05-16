@@ -90,7 +90,7 @@ output in one pass:
 1. `POST /containers` with the builder image, `privileged: true`, and the
    env var `DROVER_TEST_VAR=hello_drover`.
 2. Poll `GET /containers/{id}` until `status == running`.
-3. `POST /containers/{id}/exec` with `echo $DROVER_TEST_VAR`.
+3. `POST /containers/{id}/execs` with `echo $DROVER_TEST_VAR`.
 4. Poll the exec endpoint until `status == complete`; assert `exit_code == 0`
    and that the joined stdout messages contain `hello_drover`.
 5. `POST /containers/{id}/stop`.

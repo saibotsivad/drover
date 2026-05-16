@@ -1,5 +1,6 @@
 import { Router, urlencoded } from 'express';
 import { containerRow } from '../views/partials/containers-list.js';
+import { commandRows } from '../views/partials/container-detail.js';
 import { describeOrchestratorError, renderOrchestratorError } from '../views/partials/errors.js';
 import { launchFormPage } from '../views/partials/launch-form.js';
 import { html } from '../views/render.js';
@@ -77,6 +78,20 @@ export function createActionsRouter({ orchestrator }) {
 			sendFragment(res, html`<tr id="container-${req.params.id}" class="error-row">
 				<td colspan="6">${renderOrchestratorError(err)}</td>
 			</tr>`, status);
+		}
+	});
+
+	router.post('/containers/:id/execs', async (req, res) => {
+		const encodedId = encodeURIComponent(req.params.id);
+		const body = req.body || {};
+		const command = typeof body.command === 'string' ? body.command.trim() : '';
+		try {
+			await orchestrator.postJson(`/containers/${encodedId}/execs`, { command });
+			const commands = await orchestrator.getJson(`/containers/${encodedId}/execs`);
+			sendFragment(res, html`${commandRows(req.params.id, Array.isArray(commands) ? commands : [])}`);
+		} catch (err) {
+			const { status } = describeOrchestratorError(err);
+			sendFragment(res, html`<tr class="error-row"><td colspan="4">${renderOrchestratorError(err)}</td></tr>`, status);
 		}
 	});
 

@@ -6,7 +6,7 @@
 
 ## Overview
 
-The current exec API uses polling (`GET /containers/{id}/exec/{cmd_id}`). We will add WebSocket endpoints for real-time streaming of:
+The current exec API uses polling (`GET /containers/{id}/execs/{cmd_id}`). We will add WebSocket endpoints for real-time streaming of:
 
 1. **Command output** - Stream stdout/stderr from commands executed via the guest agent
 2. **Container logs** - Stream Docker container logs (stdout/stderr from the container itself)
@@ -28,13 +28,13 @@ The current exec API uses polling (`GET /containers/{id}/exec/{cmd_id}`). We wil
 ### WebSocket URL Design
 
 ```
-/ws/containers/{container_id}/exec   - Stream all command output for a container
+/ws/containers/{container_id}/execs   - Stream all command output for a container
 /ws/containers/{container_id}/logs   - Stream container logs (Docker stdout/stderr)
 ```
 
 **Key change:** The command output endpoint is per-container, not per-command. This allows:
 1. Client connects WebSocket first
-2. Client issues command via `POST /containers/{id}/exec`
+2. Client issues command via `POST /containers/{id}/execs`
 3. Client subscribes to receive output for specific commands via WebSocket
 4. Client can issue multiple commands and receive all output through one connection
 
@@ -47,7 +47,7 @@ The current exec API uses polling (`GET /containers/{id}/exec/{cmd_id}`). We wil
 New router handling WebSocket upgrade requests:
 
 ```python
-@router.websocket("/ws/containers/{container_id}/exec")
+@router.websocket("/ws/containers/{container_id}/execs")
 async def exec_stream(ws: WebSocket, container_id: str):
     """Stream all command output for a container in real-time.
     
@@ -141,7 +141,7 @@ class ConnectionManager:
         
     async def subscribe_command(self, ws: WebSocket, command_id: str) -> None:
         """Subscribe a connection to receive output for a specific command."""
-        # Note: No replay. Client uses GET /containers/{id}/exec/{cmd_id} for history.
+        # Note: No replay. Client uses GET /containers/{id}/execs/{cmd_id} for history.
         
     async def disconnect(self, ws: WebSocket) -> None:
         """Clean up a disconnected WebSocket."""
@@ -163,21 +163,21 @@ class ConnectionManager:
 │             │  (new output only) │              │                      │  (in box)   │
 └──────┬──────┘                    └──────────────┘                      └─────────────┘
        │                                    │
-       │ POST /exec                         │ INSERT INTO command_messages
+       │ POST /execs                        │ INSERT INTO command_messages
        │ (issue commands)                   ▼
        │                             ┌──────────────┐
        └────────────────────────────►│   SQLite     │
                                      └──────────────┘
        │                                    ▲
-       │ GET /exec/{cmd_id}                 │
+       │ GET /execs/{cmd_id}                │
        │ (fetch history)                    │
 ```
 
-1. **Client connects** to `/ws/containers/{id}/exec`
-2. **Client issues command** via `POST /containers/{id}/exec` → gets `command_id`
+1. **Client connects** to `/ws/containers/{id}/execs`
+2. **Client issues command** via `POST /containers/{id}/execs` → gets `command_id`
 3. **Client subscribes** to that command via WebSocket message: `{"type": "subscribe", "command_id": "..."}`
 4. **Server streams** only new output as it arrives from the guest agent
-5. **Client fetches history** (if needed) via existing `GET /containers/{id}/exec/{command_id}` endpoint
+5. **Client fetches history** (if needed) via existing `GET /containers/{id}/execs/{command_id}` endpoint
 6. **Client can repeat** steps 2-5 for multiple commands over the same WebSocket
 
 **Key point:** The WebSocket only streams new output. Historical data is fetched via the existing REST API, which already supports pagination and is better suited for retrieving potentially large amounts of data.
@@ -220,7 +220,7 @@ class ConnectionManager:
 
 - [ ] **WebSocket router**
   - [ ] Create `routers/websockets.py`
-  - [ ] Implement `/ws/containers/{id}/exec` endpoint (per-container)
+  - [ ] Implement `/ws/containers/{id}/execs` endpoint (per-container)
   - [ ] Handle subscription messages from client
   - [ ] Handle connection lifecycle
 
@@ -279,18 +279,18 @@ class ConnectionManager:
 
 ### WebSocket: Command Output Stream (Per-Container)
 
-**Endpoint:** `GET /ws/containers/{container_id}/exec`
+**Endpoint:** `GET /ws/containers/{container_id}/execs`
 
 **Authentication:** Same as REST API (API key in header during upgrade)
 
 **Connection Flow:**
 1. Client opens WebSocket connection
-2. Client issues command via REST API: `POST /containers/{id}/exec`
+2. Client issues command via REST API: `POST /containers/{id}/execs`
 3. Client receives `command_id` in response
 4. Client sends subscription message via WebSocket
 5. Server acknowledges subscription
 6. Server streams only **new** output as it arrives
-7. (Optional) Client fetches historical output via `GET /containers/{id}/exec/{command_id}`
+7. (Optional) Client fetches historical output via `GET /containers/{id}/execs/{command_id}`
 
 **Messages (Client → Server):**
 
@@ -350,7 +350,7 @@ class ConnectionManager:
 **Example JavaScript Client:**
 
 ```javascript
-const ws = new WebSocket('wss://api.example.com/ws/containers/cnt_xyz/exec', [], {
+const ws = new WebSocket('wss://api.example.com/ws/containers/cnt_xyz/execs', [], {
   headers: { 'X-API-Key': 'secret_key_here' }
 });
 
@@ -369,7 +369,7 @@ ws.onmessage = (event) => {
 };
 
 // Issue a command via REST API
-const response = await fetch('/containers/cnt_xyz/exec', {
+const response = await fetch('/containers/cnt_xyz/execs', {
   method: 'POST',
   headers: { 'Content-Type': 'application/json', 'X-API-Key': 'secret_key_here' },
   body: JSON.stringify({ command: 'echo hello' })
@@ -380,7 +380,7 @@ const { command_id } = await response.json();
 ws.send(JSON.stringify({ type: 'subscribe', command_id }));
 
 // (Optional) Fetch historical output via REST API
-const history = await fetch(`/containers/cnt_xyz/exec/${command_id}`, {
+const history = await fetch(`/containers/cnt_xyz/execs/${command_id}`, {
   headers: { 'X-API-Key': 'secret_key_here' }
 });
 const { messages } = await history.json();
@@ -520,7 +520,7 @@ This design leaves room for future enhancements without breaking changes:
    - **Decision:** No, explicit subscription is cleaner. Client can subscribe immediately after receiving command_id.
    
 2. Should historical command output be replayed on WebSocket connect or subscribe?
-   - **Decision:** No. The WebSocket only streams new output. Clients use the existing `GET /containers/{id}/exec/{command_id}` REST endpoint to fetch historical output. This avoids overwhelming the connection with potentially large amounts of data and keeps concerns separated: WebSocket for real-time, REST for history.
+   - **Decision:** No. The WebSocket only streams new output. Clients use the existing `GET /containers/{id}/execs/{command_id}` REST endpoint to fetch historical output. This avoids overwhelming the connection with potentially large amounts of data and keeps concerns separated: WebSocket for real-time, REST for history.
    
 3. Should container logs be persisted like command output?
    - **Decision:** No, for now they are ephemeral. Can add persistence later if needed.

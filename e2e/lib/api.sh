@@ -107,7 +107,7 @@ wait_container_status() {
 	return 1
 }
 
-# Poll GET /containers/$cid/exec/$cmd_id until status == "complete". Echoes
+# Poll GET /containers/$cid/execs/$cmd_id until status == "complete". Echoes
 # the final exec JSON to stdout (so callers can pipe to jq) and also leaves
 # it in $E2E_RESPONSE_BODY.
 wait_exec_complete() {
@@ -118,7 +118,7 @@ wait_exec_complete() {
 	local i=0
 	while [ "$i" -lt "$timeout" ]; do
 		polls=$((polls + 1))
-		if api_get "${ORCHESTRATOR_URL}/containers/${container_id}/exec/${command_id}"; then
+		if api_get "${ORCHESTRATOR_URL}/containers/${container_id}/execs/${command_id}"; then
 			local status
 			status=$(printf '%s' "$E2E_RESPONSE_BODY" | jq -r '.status' 2>/dev/null || echo "")
 			if [ "$status" = "complete" ]; then

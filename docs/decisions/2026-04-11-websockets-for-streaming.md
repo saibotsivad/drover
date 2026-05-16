@@ -5,7 +5,7 @@
 
 ## Context
 
-The current exec API uses polling (`GET /containers/{id}/exec/{cmd_id}`) to retrieve command output. For long-running commands this creates unnecessary latency and load. The natural replacement is a push-based streaming approach.
+The current exec API uses polling (`GET /containers/{id}/execs/{cmd_id}`) to retrieve command output. For long-running commands this creates unnecessary latency and load. The natural replacement is a push-based streaming approach.
 
 Two standard options exist:
 

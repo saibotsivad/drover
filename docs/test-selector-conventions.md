@@ -28,6 +28,7 @@ elements.
 |------|------|
 | `/views/containers` | `containers-list` |
 | `/views/containers/:id` | `container-detail` |
+| `/views/containers/:id/execs/:commandId` | `exec-detail` |
 | `/views/images` | `images-list` |
 | `/views/launch` | `launch-form` |
 
