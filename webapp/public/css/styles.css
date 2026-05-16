@@ -335,6 +335,54 @@ main { padding: 1.5rem; }
 	color: var(--color-fg-muted);
 }
 
+/* --- Exec command input --- */
+
+.exec-input-section {
+	margin-top: 1.5rem;
+}
+
+.exec-input-form {
+	display: flex;
+	gap: 0.5rem;
+	align-items: flex-start;
+}
+
+.grow-wrap {
+	display: grid;
+	flex: 1;
+}
+
+.grow-wrap > textarea,
+.grow-wrap::after {
+	font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+	font-size: 0.9rem;
+	line-height: 1.5;
+	padding: 0.45rem 0.6rem;
+	border: 1px solid var(--color-border);
+	border-radius: var(--radius);
+	background: var(--color-bg);
+	color: var(--color-fg);
+	grid-area: 1 / 1 / 2 / 2;
+}
+
+.grow-wrap::after {
+	content: attr(data-replicated-value) " ";
+	white-space: pre-wrap;
+	visibility: hidden;
+	word-break: break-all;
+}
+
+.grow-wrap > textarea {
+	resize: none;
+	overflow: hidden;
+}
+
+.grow-wrap > textarea:focus-visible {
+	outline: none;
+	border-color: var(--color-accent);
+	box-shadow: var(--shadow-focus);
+}
+
 /* --- Exec commands section (container detail) --- */
 
 .exec-section {

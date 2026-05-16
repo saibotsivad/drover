@@ -1,0 +1,8 @@
+- project: webapp
+  bump: patch
+  description: |
+    Container detail page now has an inline exec command input between the
+    status details panel and the exec commands list. The textarea uses a
+    monospace font, starts at one line tall, and auto-expands as the command
+    grows. Submitting the form posts the command to the orchestrator and
+    refreshes the exec commands list in place without a full page reload.
