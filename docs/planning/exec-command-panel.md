@@ -9,9 +9,9 @@ This document describes the planned UI additions for viewing exec commands on th
 Two interface additions are needed:
 
 1. **Exec commands list** — a new section on `/views/containers/{container_id}`, placed between the action bar and the logs section, showing all commands that have been run against the container.
-2. **Exec output view** — a new route `/views/containers/{container_id}/exec/{command_id}` showing the interleaved stdout/stderr output for a single command.
+2. **Exec output view** — a new route `/views/containers/{container_id}/execs/{command_id}` showing the interleaved stdout/stderr output for a single command.
 
-Exec commands are stateless (each is an independent subprocess — no shared shell state between commands), so there is no "session" concept to surface. The list is a historical record.
+Exec commands are stateless (each is an independent subprocess — no shared shell state between commands), so there is no "session" concept to surface. Commands in the list may still be running — the list shows all submitted commands regardless of whether they have completed.
 
 ---
 
@@ -71,7 +71,7 @@ The section renders a table of all commands run against the container. If no com
     <tbody id="command-rows">
       <!-- one tr per command -->
       <tr id="command-{command_id}">
-        <td><a href="/views/containers/{container_id}/exec/{command_id}"><code>{command}</code></a></td>
+        <td><a href="/views/containers/{container_id}/execs/{command_id}"><code>{command}</code></a></td>
         <td><span class="status status-{status}">{status}</span></td>
         <td>{exit_code ?? '—'}</td>
         <td><time datetime="{created_at}">{created_at}</time></td>
@@ -120,7 +120,7 @@ The current `containerDetailPage` returns `<section>` with no `id`. Per the test
 ### Route
 
 ```
-GET /views/containers/:id/exec/:commandId
+GET /views/containers/:id/execs/:commandId
 ```
 
 Register in `webapp/src/routes/views.js` below the existing `GET /containers/:id` handler.
@@ -180,7 +180,7 @@ The new view should be added to the conventions table in `docs/test-selector-con
 
 | View | `id` |
 |------|------|
-| `/views/containers/:id/exec/:commandId` | `exec-detail` |
+| `/views/containers/:id/execs/:commandId` | `exec-detail` |
 
 ### Rendering the interleaved output
 
@@ -277,7 +277,7 @@ If `messages` is empty, render the empty-state paragraph instead of the `<pre>`.
 
 | File | Change |
 |------|--------|
-| `webapp/src/routes/views.js` | Add `GET /containers/:id/exec/:commandId` route; extend `GET /containers/:id` to also fetch commands |
+| `webapp/src/routes/views.js` | Add `GET /containers/:id/execs/:commandId` route; extend `GET /containers/:id` to also fetch commands |
 | `webapp/src/views/partials/container-detail.js` | Add exec commands section; add `id="container-detail"` to outer section; accept `commands` param |
 | `webapp/src/views/partials/exec-output.js` | **New file** — exec output page partial |
 | `webapp/public/css/styles.css` | Add `.exec-section`, `.exec-output`, `.output-stderr`, and related rules |
@@ -286,12 +286,12 @@ If `messages` is empty, render the empty-state paragraph instead of the `<pre>`.
 
 | File | Change |
 |------|--------|
-| `docs/test-selector-conventions.md` | Add `exec-detail` to the page sections table |
+| `docs/test-selector-conventions.md` | Add `exec-detail` to the page sections table, if the conventions doc is still the right place for it at time of implementation |
 
 ---
 
 ## Out of Scope
 
-- Auto-refresh of the exec list or output view (polling). The WebSocket streaming plan covers real-time updates; this UI targets the polling-only baseline.
+- Auto-refresh of the exec list or output view. The WebSocket streaming plan covers real-time updates; this UI requires a manual page refresh to see new output or status changes.
 - A form for submitting new exec commands from the web UI. That would be a separate feature.
 - Pagination of the command list or output messages. Not needed at this scale.
