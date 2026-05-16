@@ -10,7 +10,7 @@ function formatSize(bytes) {
 
 function imageRow(image) {
 	const labelEntries = image.labels ? Object.entries(image.labels) : [];
-	return html`<tr>
+	return html`<tr id="image-${image.name}">
 		<td><code>${image.name}</code></td>
 		<td>${image.tags && image.tags.length
 			? image.tags.map((t) => html`<code class="tag">${t}</code>`)
@@ -24,7 +24,7 @@ function imageRow(image) {
 }
 
 export function imagesListPage(images) {
-	return html`<section>
+	return html`<section id="images-list">
 		<div class="page-header">
 			<h2>Images</h2>
 		</div>
@@ -38,7 +38,7 @@ export function imagesListPage(images) {
 					<th>Created</th>
 				</tr>
 			</thead>
-			<tbody>${images.length === 0
+			<tbody id="image-rows">${images.length === 0
 				? html`<tr class="empty"><td colspan="5">No Drover-managed images. Add the <code>drover.managed=true</code> and <code>drover.name=&lt;name&gt;</code> labels to an image to make it visible here.</td></tr>`
 				: images.map(imageRow)}</tbody>
 		</table>

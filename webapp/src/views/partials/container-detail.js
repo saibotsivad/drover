@@ -16,14 +16,14 @@ function actionBar(container) {
 	return html`<div class="action-bar">
 		${isStoppable ? html`<button
 			type="button"
-			class="btn btn-secondary"
+			class="btn btn-secondary btn-stop"
 			hx-post="/actions/containers/${id}/stop"
 			hx-target="#container-meta"
 			hx-swap="outerHTML"
 		>Stop</button>` : null}
 		${isDestroyable ? html`<button
 			type="button"
-			class="btn btn-danger"
+			class="btn btn-danger btn-destroy"
 			hx-delete="/actions/containers/${id}"
 			hx-target="#container-meta"
 			hx-swap="outerHTML"
