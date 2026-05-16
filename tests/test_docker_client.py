@@ -19,8 +19,9 @@ from orchestrator.docker_client import (
 def _make_client(handler) -> DockerClient:
     config = Config(
         privileged_image=None,
-        db_path="/tmp/x.db",
+        data_dir="/tmp",
         socket_dir="/tmp/s",
+        socket_host_dir="/tmp/s",
         docker_sock="/dev/null",
         reaper_interval_seconds=5,
         init_timeout_seconds=20,

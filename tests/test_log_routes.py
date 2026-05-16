@@ -21,8 +21,9 @@ from orchestrator.routers import containers as containers_router
 def _config(tmp_path, log_dir=None) -> Config:
     return Config(
         privileged_image=None,
-        db_path=str(tmp_path / "x.db"),
+        data_dir=str(tmp_path),
         socket_dir=str(tmp_path / "s"),
+        socket_host_dir=str(tmp_path / "s"),
         docker_sock="/dev/null",
         reaper_interval_seconds=5,
         init_timeout_seconds=20,

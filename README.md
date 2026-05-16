@@ -29,24 +29,56 @@ This is conceptually similar to AWS Lambda: a caller creates an image and sends 
 
 To run this system, the host requires:
 
-1. **Docker in rootless mode** running as the operator user
+1. **Docker** (rootful or rootless) running as the operator user
 2. **The orchestrator container** started with the mounts described below
 3. **At least one micro-container image** built with the required Drover labels (`drover.managed=true` and `drover.name=<name>`) so the orchestrator has something to launch (see [Image Management](#image-management))
 4. (Optional) **A privileged container image** built and available on the host (required only if privileged micro-containers will be used)
 
-The orchestrator is configured via environment variables at startup:
+### Host Mounts
+
+#### Docker Sockets (required)
+
+Drover needs access to the host Docker **socket** in order to launch micro-containers.
+
+```mermaid
+flowchart LR
+    Orchestrator -->|"Docker socket"| Host["Host Docker daemon"]
+```
+
+Drover also needs to communicate with each micro-container it launches. It does this by creating a per-container socket file in a **folder** on the host, which is then bind-mounted into the micro-container.
+
+```mermaid
+flowchart LR
+    Orchestrator -->|"socket"| Host["Host socket folder"] -->|"socket"| MicroContainer["Micro-container"]
+```
+
+The environment variables for these are:
+
+| Variable | Required | Rootful default | Rootless default | Description |
+|---|---|---|---|---|
+| `DROVER_DOCKER_SOCK` | Yes | `/var/run/docker.sock` | `$XDG_RUNTIME_DIR/docker.sock` | Host path to the Docker daemon socket. |
+| `DROVER_SOCKET_DIR` | Yes | `/var/run/drover/sockets` | `$XDG_RUNTIME_DIR/drover/sockets` | Host path to the per-container socket folder. |
+
+The host folder must exist before starting. `/var/run` is a tmpfs on most distros, so the rootful default needs `mkdir -p` (as root) on every boot — a `systemd-tmpfiles.d` rule is a clean way to automate it. The rootless default under `$XDG_RUNTIME_DIR` is private to the user, ephemeral, and recreated automatically by the user session.
+
+> The orchestrator entrypoint detects the Docker socket's GID at runtime, so no extra group setup is needed for either mode.
+
+#### Drover Files (optional)
+
+| Variable | Default | Description |
+|---|---|---|
+| `DROVER_DATA_DIR` | named volume `drover-data` (in the sample compose) | Bind this to a host path to persist the SQLite database (and any future config files) across orchestrator restarts. Without it, state is lost when the orchestrator container is removed. |
+| `DROVER_LOG_DIR` | _(unset)_ | When set, Drover captures each micro-container's stdout/stderr to disk at this in-container path. The sample compose sets it to `/var/lib/orchestrator/logs` (inside the data volume — no separate mount needed). See [docs/observability.md](docs/observability.md) for the retention model. |
+
+### Other configuration
 
 | Variable | Required | Default | Description |
 |---|---|---|---|
 | `DROVER_API_KEY` | No | _(unset)_ | SHA-256 hash of the API key. When set, all API requests (except `GET /health`) require a valid `Authorization: Bearer <key>` header. See [Authentication](#authentication). |
-| `PRIVILEGED_IMAGE` | No | _(unset)_ | Docker image for privileged micro-containers. If unset, privileged container requests are rejected. |
-| `DB_PATH` | No | `/var/lib/orchestrator/db.sqlite` | Path to the SQLite database file. |
-| `SOCKET_DIR` | No | `/var/run/microcontainers` | Directory for per-container Unix socket files. |
-| `DOCKER_SOCK` | No | `/var/run/docker.sock` | Path to the Docker daemon Unix socket. |
-| `REAPER_INTERVAL_SECONDS` | No | `5` | How often (in seconds) the idle-timeout reaper runs. |
+| `DROVER_PRIVILEGED_IMAGE` | No | _(unset)_ | Docker image for privileged micro-containers. If unset, privileged container requests are rejected. |
+| `DROVER_REAPER_INTERVAL_SECONDS` | No | `5` | How often (in seconds) the idle-timeout reaper runs. |
 | `DROVER_INIT_TIMEOUT_SECONDS` | No | `20` | Maximum time a container may spend in `initializing` before the watchdog transitions it to `error`. |
-| `LOG_LEVEL` | No | `INFO` | Python log level (`DEBUG`, `INFO`, `WARNING`, `ERROR`). |
-| `DROVER_LOG_DIR` | No | _(unset; sample compose sets it)_ | Root directory for captured micro-container stdout/stderr. When set, each container's full log history is kept on disk until the container is destroyed and is reachable through `GET /containers/{id}/logs/files`. When unset, Drover writes nothing and historical queries fall through to Docker's own log driver. See [docs/observability.md](docs/observability.md). |
+| `DROVER_LOG_LEVEL` | No | `INFO` | Python log level (`DEBUG`, `INFO`, `WARNING`, `ERROR`). |
 | `DROVER_LOG_MAX_FILE_BYTES` | No | `10485760` (10 MiB) | Per-file size threshold for log rotation under `DROVER_LOG_DIR`. Ignored when `DROVER_LOG_DIR` is unset. |
 
 ### Container log retention
@@ -64,14 +96,6 @@ the disk-usage trade-off vs. Docker's own log driver.
 ---
 
 ## Orchestrator Container
-
-### Host Mounts
-
-| Host Path | Container Path | Purpose |
-|---|---|---|
-| `/run/user/1000/docker.sock` | `/var/run/docker.sock` | Docker-out-of-Docker: talks to the host Docker daemon |
-| `/var/run/microcontainers/` | `/var/run/microcontainers/` | Shared directory for per-micro-container Unix sockets |
-| `/var/lib/orchestrator/db.sqlite` | `/var/lib/orchestrator/db.sqlite` | Persistent state database |
 
 ### Dependencies
 
@@ -159,7 +183,7 @@ Both standard and privileged micro-containers share the same lifecycle, socket p
 | `/run/docker.sock` | No | Passes through host Docker socket |
 | gVisor runtime | Yes | No |
 
-A privileged micro-container uses the image named by `PRIVILEGED_IMAGE` directly and is not subject to the `drover.managed` label requirement. It also bypasses gVisor, allowing for more system interop as needed.
+A privileged micro-container uses the image named by `DROVER_PRIVILEGED_IMAGE` directly and is not subject to the `drover.managed` label requirement. It also bypasses gVisor, allowing for more system interop as needed.
 
 ### Socket Protocol
 
@@ -222,7 +246,7 @@ Because labels are baked into the image and survive re-tagging, the same image c
 
 List and validation operations use `docker image ls --filter label=drover.managed=true`.
 
-The privileged image is operator-supplied, named by the `PRIVILEGED_IMAGE` env var, and is not managed through the image or container API.
+The privileged image is operator-supplied, named by the `DROVER_PRIVILEGED_IMAGE` env var, and is not managed through the image or container API.
 
 ### Image Build
 
@@ -297,7 +321,7 @@ Compose has no way to attach labels to an image it merely pulls — it can only 
 }
 ```
 
-- If `privileged` is `true` and `PRIVILEGED_IMAGE` is not set, the request is rejected.
+- If `privileged` is `true` and `DROVER_PRIVILEGED_IMAGE` is not set, the request is rejected.
 - If `privileged` is `false` or omitted, the orchestrator validates that a Drover-managed image with a matching `drover.name` label is installed.
 
 ### Request Validation

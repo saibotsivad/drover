@@ -47,14 +47,17 @@ Everything the stack needs is in `e2e/docker-compose.e2e.yml`:
   `drover.managed=true` / `drover.name=builder` labels visible to the
   orchestrator's image discovery.
 
-### Same-path socket bind-mount
+### Socket bind-mount
 
 The orchestrator creates per-container Unix sockets and asks the host Docker
 daemon to bind-mount them into child containers. Docker resolves bind-mount
-sources against the host filesystem, so the host path and the in-container
-path must match. The compose file uses `/tmp/drover-sockets` for both ends.
-`run.sh up` creates this directory with mode `0777` so the orchestrator user
-(`uid 1000` inside its container) can write to it.
+sources against the host filesystem, so the orchestrator needs to know the
+host-side path of its socket directory (via `DROVER_SOCKET_DIR`). The compose
+file mounts the host's `/tmp/drover-sockets` to the orchestrator's
+`/var/run/microcontainers` and sets `DROVER_SOCKET_DIR=/tmp/drover-sockets`
+on the orchestrator's environment so its bind-mount specs are host-resolvable.
+`run.sh up` creates the host directory with mode `0777` so the orchestrator
+user (`uid 1000` inside its container) can write to it.
 
 ### API key
 

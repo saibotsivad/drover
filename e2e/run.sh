@@ -18,8 +18,8 @@ E2E_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 REPO_DIR=$(cd -- "$E2E_DIR/.." && pwd)
 COMPOSE_FILE="$E2E_DIR/docker-compose.e2e.yml"
 
-# Load deterministic test env into this shell for `up` (so SOCKET_DIR is
-# created with the right path) and for `test` (so the helpers know which
+# Load deterministic test env into this shell for `up` (so DROVER_SOCKET_DIR
+# is created with the right path) and for `test` (so the helpers know which
 # endpoints to hit).
 set -a
 # shellcheck disable=SC1091
@@ -32,13 +32,13 @@ compose() {
 }
 
 cmd_up() {
-	echo "==> Preparing host bind-mount $SOCKET_DIR"
-	mkdir -p "$SOCKET_DIR"
-	# SOCKET_DIR is the parent that the orchestrator chowns/creates
+	echo "==> Preparing host bind-mount $DROVER_SOCKET_DIR"
+	mkdir -p "$DROVER_SOCKET_DIR"
+	# DROVER_SOCKET_DIR is the parent that the orchestrator chowns/creates
 	# per-container sockets into. The orchestrator runs as a non-root
 	# user inside its container but reaches the host filesystem directly
 	# via the bind-mount, so the host directory needs to be world-rwx.
-	chmod 777 "$SOCKET_DIR" || true
+	chmod 777 "$DROVER_SOCKET_DIR" || true
 
 	echo "==> Building images from source"
 	compose build
@@ -95,11 +95,11 @@ cmd_down() {
 
 	# The bind-mount directory is owned by root after the orchestrator's
 	# socket activity. Clean it up so the next `up` starts fresh.
-	if [ -d "$SOCKET_DIR" ]; then
-		echo "==> Cleaning $SOCKET_DIR"
+	if [ -d "$DROVER_SOCKET_DIR" ]; then
+		echo "==> Cleaning $DROVER_SOCKET_DIR"
 		# `sudo` may not be available; ignore failures, the next `up`
 		# will chmod 777 over the top.
-		rm -rf "${SOCKET_DIR:?}/"* 2>/dev/null || true
+		rm -rf "${DROVER_SOCKET_DIR:?}/"* 2>/dev/null || true
 	fi
 }
 

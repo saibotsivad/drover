@@ -1,6 +1,3 @@
-import os
-import tempfile
-
 import pytest
 
 from orchestrator.config import Config
@@ -11,8 +8,9 @@ from orchestrator.database import Database
 def config(tmp_path):
     return Config(
         privileged_image=None,
-        db_path=str(tmp_path / "test.db"),
+        data_dir=str(tmp_path),
         socket_dir=str(tmp_path / "sockets"),
+        socket_host_dir=str(tmp_path / "sockets"),
         docker_sock="/dev/null",
         reaper_interval_seconds=5,
         init_timeout_seconds=20,

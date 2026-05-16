@@ -3,7 +3,7 @@ import { ConfigError, loadConfig } from './config.js';
 import { createLogger } from './logger.js';
 
 function main() {
-	const bootstrapLogger = createLogger({ level: process.env.LOG_LEVEL });
+	const bootstrapLogger = createLogger({ level: process.env.DROVER_LOG_LEVEL });
 
 	let config;
 	try {

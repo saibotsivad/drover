@@ -1,6 +1,6 @@
 """Per-container Unix socket lifecycle and message routing.
 
-Each running container gets a Unix socket at {SOCKET_DIR}/{container_id}.sock.
+Each running container gets a Unix socket at {socket_dir}/{container_id}.sock.
 The guest agent inside the container connects to this socket and communicates
 using newline-delimited JSON messages.
 

@@ -54,7 +54,7 @@ class PrivilegedNotConfigured(ContainerError):
     def __init__(self) -> None:
         super().__init__(
             400,
-            "Privileged containers are not configured (PRIVILEGED_IMAGE is unset)",
+            "Privileged containers are not configured (DROVER_PRIVILEGED_IMAGE is unset)",
         )
 
 

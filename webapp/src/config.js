@@ -19,7 +19,7 @@ export function loadConfig(env = process.env) {
 		throw new ConfigError(`PORT is not a valid port number: ${portRaw}`);
 	}
 
-	const logLevel = (env.LOG_LEVEL || 'info').trim().toLowerCase();
+	const logLevel = (env.DROVER_LOG_LEVEL || 'info').trim().toLowerCase();
 
 	return { orchestratorUrl, apiKey, port, logLevel };
 }

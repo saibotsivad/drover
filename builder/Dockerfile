@@ -3,7 +3,7 @@
 # Drover builder image.
 #
 # A privileged micro-container template: the operator points the
-# orchestrator at this image via PRIVILEGED_IMAGE and it gets launched
+# orchestrator at this image via DROVER_PRIVILEGED_IMAGE and it gets launched
 # with the host Docker socket bind-mounted at /run/docker.sock, so
 # commands sent over the orchestrator socket can build, pull, tag, and
 # push images on the host daemon.

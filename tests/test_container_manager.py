@@ -146,8 +146,9 @@ async def test_create_privileged_with_config(config, db, docker, sockets):
 
     priv_config = Config(
         privileged_image="my-priv-image",
-        db_path=config.db_path,
+        data_dir=config.data_dir,
         socket_dir=config.socket_dir,
+        socket_host_dir=config.socket_host_dir,
         docker_sock=config.docker_sock,
         reaper_interval_seconds=config.reaper_interval_seconds,
         init_timeout_seconds=config.init_timeout_seconds,
@@ -635,8 +636,9 @@ def log_config(config, tmp_path):
 
     return Config(
         privileged_image=config.privileged_image,
-        db_path=config.db_path,
+        data_dir=config.data_dir,
         socket_dir=config.socket_dir,
+        socket_host_dir=config.socket_host_dir,
         docker_sock=config.docker_sock,
         reaper_interval_seconds=config.reaper_interval_seconds,
         init_timeout_seconds=config.init_timeout_seconds,

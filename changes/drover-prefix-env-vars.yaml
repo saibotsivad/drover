@@ -1,0 +1,39 @@
+- project: orchestrator
+  bump: major
+  description: |
+    Renamed all orchestrator environment variables to use a consistent
+    `DROVER_*` prefix and reworked how the per-container socket directory is
+    configured.
+
+    **Breaking environment variable renames:**
+
+    | Old | New |
+    |---|---|
+    | `DOCKER_SOCK` | `DROVER_DOCKER_SOCK` |
+    | `SOCKET_HOST_DIR` | `DROVER_SOCKET_DIR` |
+    | `SOCKET_DIR` | _(removed — hardcoded to `/var/run/microcontainers`)_ |
+    | `DB_PATH` | _(removed — derived from `DROVER_DATA_DIR`)_ |
+    | `PRIVILEGED_IMAGE` | `DROVER_PRIVILEGED_IMAGE` |
+    | `REAPER_INTERVAL_SECONDS` | `DROVER_REAPER_INTERVAL_SECONDS` |
+    | `LOG_LEVEL` | `DROVER_LOG_LEVEL` |
+
+    **New environment variable:**
+
+    `DROVER_DATA_DIR` (defaults to `/var/lib/orchestrator`) is the in-container
+    data directory. The SQLite database is now always at
+    `{DROVER_DATA_DIR}/db.sqlite`.
+
+    **Default host paths changed in sample `docker-compose.yml`:**
+
+    The socket folder default moved from `/tmp/drover-sockets` to
+    `/var/run/drover/sockets` for rootful Docker (better access control;
+    `/tmp` is world-listable). For rootless Docker, set
+    `DROVER_SOCKET_DIR=$XDG_RUNTIME_DIR/drover/sockets`. The host folder must
+    exist before `docker compose up` (`mkdir -p` it; a `systemd-tmpfiles.d`
+    rule is the cleanest way to handle the tmpfs reset).
+
+- project: webapp
+  bump: major
+  description: |
+    Renamed `LOG_LEVEL` to `DROVER_LOG_LEVEL` for consistency with the
+    orchestrator's `DROVER_*` env var prefix.

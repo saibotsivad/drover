@@ -15,7 +15,7 @@ Optional management UI for [Drover](../README.md). Runs as its own container, ta
 | `DROVER_ORCHESTRATOR_URL` | yes | — | Base URL of the orchestrator, e.g. `http://orchestrator:8000`. |
 | `DROVER_API_KEY` | no | _(unset)_ | Bearer token. When set, the proxy injects `Authorization: Bearer ${DROVER_API_KEY}` on every forwarded request. When unset, no auth header is added. |
 | `PORT` | no | `8080` | Port the webapp listens on. |
-| `LOG_LEVEL` | no | `info` | One of `debug` / `info` / `warn` / `error`. |
+| `DROVER_LOG_LEVEL` | no | `info` | One of `debug` / `info` / `warn` / `error`. |
 
 If `DROVER_ORCHESTRATOR_URL` is unset the server logs a structured error and exits.
 

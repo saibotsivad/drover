@@ -33,8 +33,9 @@ from orchestrator.log_capture import (
 def _make_config(tmp_path, max_bytes: int = 10 * 1024 * 1024) -> Config:
     return Config(
         privileged_image=None,
-        db_path=str(tmp_path / "db.sqlite"),
+        data_dir=str(tmp_path),
         socket_dir=str(tmp_path / "sockets"),
+        socket_host_dir=str(tmp_path / "sockets"),
         docker_sock="/dev/null",
         reaper_interval_seconds=5,
         init_timeout_seconds=20,
@@ -392,8 +393,9 @@ async def test_discard_removes_directory_and_is_idempotent(tmp_path):
 async def test_discard_is_noop_when_log_dir_unset(tmp_path):
     config = Config(
         privileged_image=None,
-        db_path=str(tmp_path / "db.sqlite"),
+        data_dir=str(tmp_path),
         socket_dir=str(tmp_path / "sockets"),
+        socket_host_dir=str(tmp_path / "sockets"),
         docker_sock="/dev/null",
         reaper_interval_seconds=5,
         init_timeout_seconds=20,
@@ -438,8 +440,9 @@ def test_list_files_missing_directory(tmp_path):
 def test_list_files_raises_when_disabled(tmp_path):
     config = Config(
         privileged_image=None,
-        db_path=str(tmp_path / "db.sqlite"),
+        data_dir=str(tmp_path),
         socket_dir=str(tmp_path / "sockets"),
+        socket_host_dir=str(tmp_path / "sockets"),
         docker_sock="/dev/null",
         reaper_interval_seconds=5,
         init_timeout_seconds=20,
@@ -474,8 +477,9 @@ def test_file_path_rejects_traversal_and_bad_names(tmp_path):
 def test_file_path_raises_when_disabled(tmp_path):
     config = Config(
         privileged_image=None,
-        db_path=str(tmp_path / "db.sqlite"),
+        data_dir=str(tmp_path),
         socket_dir=str(tmp_path / "sockets"),
+        socket_host_dir=str(tmp_path / "sockets"),
         docker_sock="/dev/null",
         reaper_interval_seconds=5,
         init_timeout_seconds=20,

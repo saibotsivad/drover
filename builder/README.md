@@ -7,7 +7,7 @@ standard socket protocol to build, pull, tag, and push container images
 on the host Docker daemon.
 
 This image is the operator's "build slave": it's the thing you point
-`PRIVILEGED_IMAGE` at when you want Drover to be able to construct new
+`DROVER_PRIVILEGED_IMAGE` at when you want Drover to be able to construct new
 micro-container images for itself.
 
 Published as `ghcr.io/saibotsivad/drover-builder`.
@@ -40,7 +40,7 @@ drover.name=builder
 
 That means the same image can be used in two ways:
 
-- **As a privileged image.** Set `PRIVILEGED_IMAGE=ghcr.io/saibotsivad/drover-builder:latest` on the orchestrator and request privileged containers via the API. Privileged containers bypass gVisor and get the host Docker socket bind-mounted at `/run/docker.sock`.
+- **As a privileged image.** Set `DROVER_PRIVILEGED_IMAGE=ghcr.io/saibotsivad/drover-builder:latest` on the orchestrator and request privileged containers via the API. Privileged containers bypass gVisor and get the host Docker socket bind-mounted at `/run/docker.sock`.
 - **As an ordinary managed image.** It shows up in `GET /images` as `builder` and can be launched the normal way (no Docker socket, gVisor enforced) — useful for read-only inspection or experimenting with the executor protocol.
 
 The privileged path is what makes it a *builder* — without
@@ -85,14 +85,14 @@ it on demand. To make it available:
    fetch this image. It runs `command: ["true"]` and exits — the
    orchestrator launches real instances later.
 
-2. **Point the orchestrator at it.** Set `PRIVILEGED_IMAGE` in the
+2. **Point the orchestrator at it.** Set `DROVER_PRIVILEGED_IMAGE` in the
    orchestrator's environment:
 
    ```yaml
    services:
      orchestrator:
        environment:
-         PRIVILEGED_IMAGE: ghcr.io/saibotsivad/drover-builder:latest
+         DROVER_PRIVILEGED_IMAGE: ghcr.io/saibotsivad/drover-builder:latest
    ```
 
 3. **Request a privileged container.** Send a `POST /containers` with

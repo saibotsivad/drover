@@ -6,27 +6,20 @@
 # proxy). Set DROVER_API_KEY (in both services) before exposing the webapp
 # beyond a trusted LAN.
 #
-# Rootless Docker: the host socket lives at /run/user/$UID/docker.sock, not
-# /var/run/docker.sock. Either export DOCKER_SOCK before running compose:
+# The defaults below assume rootful Docker. For rootless Docker, set in your
+# shell or .env file:
 #
-#     export DOCKER_SOCK=$XDG_RUNTIME_DIR/docker.sock   # or /run/user/$(id -u)/docker.sock
+#     export DROVER_DOCKER_SOCK="$XDG_RUNTIME_DIR/docker.sock"
+#     export DROVER_SOCKET_DIR="$XDG_RUNTIME_DIR/drover/sockets"
+#     mkdir -p "$DROVER_SOCKET_DIR"
 #     docker compose up
 #
-# or put it in a .env file next to this compose.yml. The orchestrator
-# entrypoint detects the socket's GID at runtime, so no further setup
-# is needed.
+# The orchestrator entrypoint detects the Docker socket's GID at runtime,
+# so no extra group setup is needed for rootless or rootful.
 #
-# Socket directory: when the orchestrator launches a micro-container it passes
-# the socket path to the Docker daemon, which resolves it against the *host*
-# filesystem. A named volume won't work here because the daemon-visible host
-# path differs from the in-container path. Instead a bind-mount is used and
-# SOCKET_HOST_DIR tells the orchestrator which host path to use in the Docker
-# API call; SOCKET_DIR is the in-container path.
-#
-# Create the host directory before the first `docker compose up`:
-#
-#     mkdir -p /tmp/drover-sockets   # or set SOCKET_HOST_DIR to your preferred path
-#     docker compose up
+# The DROVER_SOCKET_DIR host folder must exist before `up`. /var/run is a
+# tmpfs on most distros, so the rootful default needs `mkdir -p` (as root)
+# on every boot — a systemd-tmpfiles.d rule is a clean way to automate it.
 
 services:
   orchestrator:
@@ -35,23 +28,25 @@ services:
     # build: ./orchestrator
     networks: [drover]
     volumes:
-      - drover-data:/var/lib/orchestrator
-      - ${SOCKET_HOST_DIR:-/tmp/drover-sockets}:/var/run/microcontainers
-      - ${DOCKER_SOCK:-/var/run/docker.sock}:/var/run/docker.sock
+      - ${DROVER_DATA_DIR:-drover-data}:/var/lib/orchestrator
+      - ${DROVER_SOCKET_DIR:-/var/run/drover/sockets}:/var/run/microcontainers
+      - ${DROVER_DOCKER_SOCK:-/var/run/docker.sock}:/var/run/docker.sock
     environment:
-      DB_PATH: /var/lib/orchestrator/db.sqlite
-      SOCKET_DIR: /var/run/microcontainers
-      SOCKET_HOST_DIR: ${SOCKET_HOST_DIR:-/tmp/drover-sockets}
-      LOG_LEVEL: INFO
+      # Host-side socket folder path; the orchestrator passes this to the
+      # Docker daemon when it bind-mounts a per-container socket into a
+      # micro-container. Must match the host side of the volume above.
+      DROVER_SOCKET_DIR: ${DROVER_SOCKET_DIR:-/var/run/drover/sockets}
+      DROVER_LOG_LEVEL: INFO
       # Capture each micro-container's stdout/stderr to disk so the full
       # history survives stop/restart and is reachable through
       # /containers/{id}/logs/files. This roughly doubles per-container
       # disk usage because Docker's own log driver also keeps a copy;
       # docs/observability.md walks through how to disable one or the
-      # other if disk is tight. Logs live inside the existing
-      # drover-data volume — no second volume to manage.
+      # other if disk is tight. Logs live inside the existing data
+      # directory — no second volume to manage.
       DROVER_LOG_DIR: /var/lib/orchestrator/logs
       # DROVER_API_KEY: change-me
+      # DROVER_PRIVILEGED_IMAGE: ghcr.io/saibotsivad/drover-builder:latest
 
   webapp:
     image: ghcr.io/saibotsivad/drover-webapp:latest
@@ -63,7 +58,7 @@ services:
       - "9091:8080"
     environment:
       DROVER_ORCHESTRATOR_URL: http://orchestrator:8000
-      LOG_LEVEL: info
+      DROVER_LOG_LEVEL: info
       # DROVER_API_KEY: change-me
 
   # Template image — not a long-running service. The orchestrator discovers

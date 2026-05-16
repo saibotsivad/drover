@@ -15,7 +15,7 @@ test('loadConfig reads optional values', () => {
 		DROVER_ORCHESTRATOR_URL: 'http://orchestrator:8000',
 		DROVER_API_KEY: 'secret-token',
 		PORT: '9999',
-		LOG_LEVEL: 'DEBUG',
+		DROVER_LOG_LEVEL: 'DEBUG',
 	});
 	assert.equal(config.apiKey, 'secret-token');
 	assert.equal(config.port, 9999);

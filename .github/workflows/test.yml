@@ -73,8 +73,6 @@ jobs:
         run: |
           docker run -d --name drover-smoke \
             -p 8000:8000 \
-            -e DB_PATH=/tmp/db.sqlite \
-            -e SOCKET_DIR=/tmp/sockets \
             drover:test
 
           # Wait for server to be ready (up to 10s)

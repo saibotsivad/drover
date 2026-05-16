@@ -34,18 +34,22 @@ The optional [webapp](../webapp/README.md) is a management UI that sits in front
 
 ## Configuration
 
-All configuration is via environment variables.
+All configuration is via environment variables. See the top-level [Host
+Mounts](../README.md#host-mounts) section for the host-side mount paths
+and the rationale for the socket / data-directory split.
 
 | Variable | Default | Description |
 |---|---|---|
 | `DROVER_API_KEY` | _(unset)_ | SHA-256 hash of the bearer token. When unset, authentication is disabled. |
-| `PRIVILEGED_IMAGE` | _(unset)_ | Docker image name for privileged micro-containers. Required to use `"privileged": true` on container create. |
-| `DB_PATH` | `/var/lib/orchestrator/db.sqlite` | Path to the SQLite database file. |
-| `SOCKET_DIR` | `/var/run/microcontainers` | Directory where per-container Unix sockets are created. |
-| `DOCKER_SOCK` | `/var/run/docker.sock` | Path to the Docker daemon socket. |
-| `REAPER_INTERVAL_SECONDS` | `5` | How often (in seconds) the idle-timeout reaper runs. |
+| `DROVER_PRIVILEGED_IMAGE` | _(unset)_ | Docker image name for privileged micro-containers. Required to use `"privileged": true` on container create. |
+| `DROVER_DATA_DIR` | `/var/lib/orchestrator` | In-container directory holding the SQLite database (`db.sqlite`) and any other persistent state. |
+| `DROVER_SOCKET_DIR` | `/var/run/drover/sockets` | Host-side path to the per-container socket folder. The orchestrator passes this to the Docker daemon when bind-mounting sockets into micro-containers; it must match the host side of the volume mount. |
+| `DROVER_DOCKER_SOCK` | `/var/run/docker.sock` | In-container path to the Docker daemon socket. |
+| `DROVER_REAPER_INTERVAL_SECONDS` | `5` | How often (in seconds) the idle-timeout reaper runs. |
 | `DROVER_INIT_TIMEOUT_SECONDS` | `20` | Seconds a container has to send `ready` before being marked `error`. |
-| `LOG_LEVEL` | `INFO` | Log verbosity (`DEBUG`, `INFO`, `WARNING`, `ERROR`). |
+| `DROVER_LOG_LEVEL` | `INFO` | Log verbosity (`DEBUG`, `INFO`, `WARNING`, `ERROR`). |
+| `DROVER_LOG_DIR` | _(unset)_ | When set, capture per-container stdout/stderr to disk under this path. See [observability](../docs/observability.md). |
+| `DROVER_LOG_MAX_FILE_BYTES` | `10485760` | Per-file rotation threshold for `DROVER_LOG_DIR`. |
 
 To enable authentication, generate a random token and store its SHA-256 hash:
 
@@ -59,13 +63,16 @@ See [Authentication](#authentication) for details on how tokens are verified.
 
 ## Mounts
 
-Three mounts are required for the orchestrator to function:
+Two host paths are required, plus the data directory if you want state to
+persist across restarts. The container-side targets are fixed; the host-side
+paths come from env vars (defaults below assume rootful Docker — see the
+[top-level Host Mounts](../README.md#host-mounts) for rootless defaults).
 
-| Host path | Container path | Purpose |
-|---|---|---|
-| `/run/user/1000/docker.sock` | `/var/run/docker.sock` | Docker-out-of-Docker (rootless). Adjust the host path to match your UID. |
-| `/var/run/microcontainers/` | `/var/run/microcontainers/` | Shared directory for per-container Unix sockets. Must also be mounted into each micro-container image. |
-| `/var/lib/orchestrator/db.sqlite` | `/var/lib/orchestrator/db.sqlite` | Persistent SQLite database. The file must exist on the host before starting. |
+| Host path (default) | Container path | Required | Source env var |
+|---|---|---|---|
+| `/var/run/docker.sock` | `/var/run/docker.sock` | yes | `DROVER_DOCKER_SOCK` |
+| `/var/run/drover/sockets` | `/var/run/microcontainers` | yes | `DROVER_SOCKET_DIR` |
+| _(named volume)_ | `/var/lib/orchestrator` | no | `DROVER_DATA_DIR` |
 
 The container entrypoint runs as root just long enough to detect the GID of the mounted `docker.sock`, add the `orchestrator` user to a group with that GID, and then drops privileges via `gosu`. This works for both rootful Docker (socket owned by `root:docker`) and rootless Docker (socket owned by the invoking user) without baking a GID into the image.
 
@@ -114,7 +121,7 @@ GET    /containers/{id}/logs/orchestrator       Orchestrator logs filtered to th
 | Field | Type | Default | Constraints |
 |---|---|---|---|
 | `image` | string | required | Alphanumeric, dots, hyphens, underscores, slashes; max 256 chars. Unless `privileged: true`, the value must match the `drover.name` label of an installed image (see [Images](#images)). |
-| `privileged` | bool | `false` | Requires `PRIVILEGED_IMAGE` to be configured. |
+| `privileged` | bool | `false` | Requires `DROVER_PRIVILEGED_IMAGE` to be configured. |
 | `env` | object | `{}` | Keys: POSIX identifiers, max 256 chars. Values: max 32 KB. |
 | `label` | string | `null` | Printable chars; max 1024 chars. |
 | `timeout_seconds` | int | `300` | Range 1–86400 (1 second to 24 hours). |
@@ -186,7 +193,7 @@ Error codes (set when status is `error`):
 | `init_timeout` | Guest did not send `ready` within `DROVER_INIT_TIMEOUT_SECONDS`. |
 | `orchestrator_crash` | Orchestrator restarted while container was initializing. |
 
-A background reaper task runs every `REAPER_INTERVAL_SECONDS` and stops any running container whose `last_seen` timestamp is older than its `timeout_seconds`. Heartbeats from the guest agent update `last_seen`. A guest can also send `done` to request an immediate stop without waiting for the timeout.
+A background reaper task runs every `DROVER_REAPER_INTERVAL_SECONDS` and stops any running container whose `last_seen` timestamp is older than its `timeout_seconds`. Heartbeats from the guest agent update `last_seen`. A guest can also send `done` to request an immediate stop without waiting for the timeout.
 
 See [container initialization](../docs/container-initialization.md) and [exec commands](../docs/exec-commands.md) for deeper detail.
 
@@ -206,7 +213,7 @@ The [webapp](../webapp/README.md) can hold the token and inject it into proxied 
 
 ## Socket protocol
 
-The orchestrator and guest agents communicate over a per-container Unix socket using newline-delimited JSON. The socket is created in `SOCKET_DIR` before the container starts and passed to the container via a mount.
+The orchestrator and guest agents communicate over a per-container Unix socket using newline-delimited JSON. The socket is created in the host-side `DROVER_SOCKET_DIR` (mounted into the orchestrator at `/var/run/microcontainers`) before the container starts and passed to the micro-container via a bind-mount.
 
 **Guest → Orchestrator:**
 
@@ -228,7 +235,7 @@ The [executor](../executor/README.md) library implements this protocol for Pytho
 
 ## Database
 
-The orchestrator uses SQLite (via aiosqlite) in WAL mode. The database is created automatically on first start if the file exists at `DB_PATH`.
+The orchestrator uses SQLite (via aiosqlite) in WAL mode. The database lives at `{DROVER_DATA_DIR}/db.sqlite` and is created automatically on first start.
 
 **`containers`** — one row per container, retained after destruction for audit purposes.
 
@@ -246,7 +253,7 @@ The orchestrator logs structured JSON to stdout, one object per line:
 {"timestamp": "2026-05-09T12:00:00Z", "level": "INFO", "logger": "orchestrator", "message": "..."}
 ```
 
-Noisy third-party loggers (`uvicorn.access`, `httpx`, `httpcore`) are suppressed. Set `LOG_LEVEL=DEBUG` to see Docker API calls and socket traffic.
+Noisy third-party loggers (`uvicorn.access`, `httpx`, `httpcore`) are suppressed. Set `DROVER_LOG_LEVEL=DEBUG` to see Docker API calls and socket traffic.
 
 ## Testing
 
