@@ -74,12 +74,18 @@ tests:
 
 | What | Selector |
 |------|----------|
-| Page section root | `#images-list`, `#containers-list`, `#container-detail`, `#launch-form` |
+| Page section root | `#images-list`, `#containers-list`, `#container-detail`, `#launch-form`, `#exec-detail` |
 | Images table body | `tbody#image-rows` |
 | One image row | `#image-{drover.name}` |
 | Containers table body | `tbody#container-rows` |
 | One container row | `#container-{id}` |
-| Status badge | `.status-{slug}` (e.g. `.status-running`) |
+| Status badge | `.status-{slug}` (e.g. `.status-running`, `.status-complete`) |
+| Exec input form | `.exec-input-form` |
+| Exec command textarea | `textarea[name="command"]` within `.exec-input-form` |
+| Exec submit button | `button[type="submit"]` within `.exec-input-form` |
+| Command rows tbody | `tbody#command-rows` |
+| One command row | `#command-{commandId}` |
+| Exec output content | `pre#exec-output` |
 | Log source picker | `select.log-source-select` |
 | Log content pane | `pre#log-viewer` |
 | Stop button | `.btn-stop` |
@@ -115,14 +121,10 @@ In the e2e stack the only image with `drover.managed=true` is `builder`, so
 
 ---
 
-### Test 2 — Launch privileged container and verify live log viewer (`privileged-launch.spec.ts`)
+### Test 2 — Launch privileged container, exec echo, verify output (`privileged-launch.spec.ts`)
 
-**What it covers:** The launch form submits correctly, the container detail page
-loads, and the live log viewer shows the executor's startup output.
-
-There is no exec form in the webapp UI — exec is API-only and is fully covered by
-the bash tests. The Playwright tests focus on the log viewer that landed with the
-logs feature.
+**What it covers:** The launch form submits correctly, the exec input form runs a
+command, and the exec output page shows the expected result.
 
 **Steps:**
 
@@ -131,81 +133,78 @@ logs feature.
 3. Check the `privileged` checkbox.
 4. Enter `DROVER_TEST_VAR=hello_playwright` in the environment variables textarea.
 5. Click **Launch**.
-6. Assert the browser redirects to `/views/containers/<id>` (detail page).
-7. Extract the container ID from the URL — this is shared across Tests 3 and 4.
-8. Poll the orchestrator API via Playwright's `request` context until the container
-   status is `running` (up to 30 s).
-9. Navigate to `/views/containers/{id}` (fresh load after the poll resolves).
-10. Within `#container-detail`, assert `select.log-source-select` is present.
-11. Within `#container-detail`, assert `pre#log-viewer` is present and its text
-    contains `Connecting to /run/orchestrator.sock` — the executor logs this on
-    startup and it is a reliable signal that live logs are flowing.
-
-> Note: step 8 uses `page.request.get(...)` against the orchestrator URL (exposed
-> at `ORCHESTRATOR_URL` env var) so the test does not busy-loop by reloading the
-> page. The live log endpoint is a plain text GET with no streaming; a single page
-> load after the poll resolves is sufficient.
+6. Assert the browser redirects to `/views/containers/<id>`.
+7. Extract the container ID from the URL — shared across all remaining tests.
+8. Poll `GET /containers/{id}` via `page.request` until status is `running` (up to
+   30 s), then reload the detail page.
+9. Fill `textarea[name="command"]` within `.exec-input-form` with
+   `echo $DROVER_TEST_VAR`.
+10. Click `button[type="submit"]` within `.exec-input-form`.
+11. Wait for htmx to replace `#command-rows` — a non-empty `tr` appears.
+12. Extract the command ID from the first `tr` in `#command-rows` (its `id` attribute
+    is `command-{commandId}`), then click its link to navigate to
+    `/views/containers/{id}/execs/{commandId}`.
+13. On the exec output page, reload until `#exec-detail .status-complete` is present
+    (up to 15 s — `echo` is near-instant, usually complete on first load).
+14. Assert `pre#exec-output` contains `hello_playwright`.
+15. Assert the exit code shown in `#exec-meta` is `0`.
 
 ---
 
-### Test 3 — Switch to file-based log source (`privileged-launch.spec.ts`)
+### Test 3 — Exec `docker container ls`, verify privileged access (`privileged-launch.spec.ts`)
 
-**What it covers:** The log source `<select>` navigates to the correct URL and the
-file log viewer renders captured content.
+**What it covers:** A privileged container has access to the Docker socket.
 
-This test reuses the container from Test 2 via the shared `beforeAll` fixture.
-
-The e2e stack sets `DROVER_LOG_DIR=/var/lib/orchestrator/logs`, so file capture is
-active. The orchestrator starts writing `0.log` as soon as the executor connects,
-which happens before the container reaches `running`. By the time Test 3 runs, the
-file should be present.
+Reuses the container from Test 2.
 
 **Steps:**
 
-1. Poll `GET /containers/{id}/logs/files` via `page.request` until the response
-   includes `0.log` (up to 15 s).
-2. Navigate to `/views/containers/{id}` so the fresh page includes `0.log` as an
-   option in the select (the select is populated server-side on each page load).
-3. Within `#container-detail`, call `select.log-source-select.selectOption('file:0.log')`.
-4. Assert the page URL includes `log_source=file%3A0.log` after the `onchange`
-   navigation fires.
-5. Assert `#container-detail pre#log-viewer` is present and its text contains
-   `Connecting to`.
+1. Navigate back to `/views/containers/{id}`.
+2. Fill `.exec-input-form textarea[name="command"]` with `docker container ls`.
+3. Click the submit button.
+4. Wait for the new command row in `#command-rows`, extract the command ID, navigate
+   to its exec output page.
+5. Reload until `#exec-detail .status-complete` (up to 30 s — Docker CLI startup is
+   slower than a shell built-in).
+6. Assert `pre#exec-output` contains `CONTAINER ID` (the column header of
+   `docker container ls`).
+7. Assert exit code in `#exec-meta` is `0`.
 
 ---
 
-### Test 4 — Switch to orchestrator log source (`privileged-launch.spec.ts`)
-
-**What it covers:** Selecting "Orchestrator logs" from the dropdown navigates
-correctly and renders content that is scoped to this container.
-
-This test also reuses the container from Test 2.
-
-**Steps:**
-
-1. Navigate to `/views/containers/{id}` (or continue from Test 3's landed URL).
-2. Within `#container-detail`, call `select.log-source-select.selectOption('orchestrator')`.
-3. Assert the page URL includes `log_source=orchestrator` after the `onchange`
-   navigation fires.
-4. Assert `#container-detail pre#log-viewer` is present and its text contains the
-   container ID.
-
----
-
-### Test 5 — Launched container appears in containers list (`privileged-launch.spec.ts`)
+### Test 4 — Launched container appears in containers list (`privileged-launch.spec.ts`)
 
 **What it covers:** The `/views/containers` list reflects containers created through
 the UI.
 
-This test also reuses the container from Test 2.
+Reuses the container from Test 2.
 
 **Steps:**
 
 1. Navigate to `/views/containers`.
-2. Assert that `#container-{id}` exists within `#containers-list tbody#container-rows`.
-3. Assert that `#container-{id} .status-running` (or `.status-initializing`) exists —
-   the containers list only shows active statuses, so any of the active `status-*`
-   classes is sufficient.
+2. Assert `#container-{id}` exists within `#containers-list tbody#container-rows`.
+3. Assert `#container-{id} .status-running` (or `.status-initializing`) exists.
+
+---
+
+### Test 5 — Log viewer sources on container detail page (`privileged-launch.spec.ts`)
+
+**What it covers:** The log source `<select>` renders content for each source type.
+
+Reuses the container from Test 2.
+
+**Steps:**
+
+1. Navigate to `/views/containers/{id}` (default `log_source=live`).
+2. Assert `pre#log-viewer` is present and contains `Connecting to /run/orchestrator.sock`.
+3. Poll `GET /containers/{id}/logs/files` via `page.request` until the response
+   includes `0.log` (up to 15 s), then reload the detail page.
+4. Call `select.log-source-select.selectOption('file:0.log')` — triggers `onchange`
+   navigation to `?log_source=file%3A0.log`.
+5. Assert `pre#log-viewer` contains `Connecting to`.
+6. Call `select.log-source-select.selectOption('orchestrator')` — triggers navigation
+   to `?log_source=orchestrator`.
+7. Assert `pre#log-viewer` contains the container ID.
 
 ---
 
@@ -218,7 +217,8 @@ This test also reuses the container from Test 2.
       `baseURL`, output to `results/`).
 - [ ] Write `e2e/playwright/tests/images-list.spec.ts` (Test 1).
 - [ ] Write `e2e/playwright/tests/privileged-launch.spec.ts` (Tests 2–5, shared
-      container fixture).
+      container fixture; covers exec form, exec output page, containers list, and
+      log viewer).
 - [ ] Write `e2e/run-playwright.sh` (health check → compose run → exit-code passthrough).
 - [ ] Update `run.sh ci` to call `run-playwright.sh` after `cmd_test`.
 - [ ] Verify Playwright HTML report lands in `e2e/logs/playwright/` and is included
@@ -239,7 +239,7 @@ This test also reuses the container from Test 2.
   step already cleans up all `drover.managed=true` containers, so no `afterAll` stop
   hook is needed.
 
-- **No exec UI, no exec tests in Playwright:** The container detail page has no exec
-  form. Exec is API-only; it is fully covered by the bash tests (03- and 05-). The
-  Playwright tests focus on the log viewer instead, which is the only UI surface that
-  overlaps with container runtime behavior.
+- **Exec UI is fully implemented:** The container detail page has an exec input form
+  (`.exec-input-form`) and a command list (`tbody#command-rows`). Each command links
+  to a dedicated exec output page (`#exec-detail` / `pre#exec-output`). Tests 2 and
+  3 exercise these flows end-to-end, restoring the original test intent.
