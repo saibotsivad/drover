@@ -1,0 +1,7 @@
+- project: orchestrator
+  bump: minor
+  description: |
+    Renamed exec route path segments from `/exec` to `/execs` for consistency
+    with the plural `/containers` convention. Callers must update:
+    - `POST /containers/{id}/exec` → `POST /containers/{id}/execs`
+    - `GET /containers/{id}/exec/{cmd_id}` → `GET /containers/{id}/execs/{cmd_id}`
