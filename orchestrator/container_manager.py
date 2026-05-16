@@ -32,6 +32,8 @@ from orchestrator.id_gen import generate_id
 from orchestrator.log_capture import LogCaptureManager
 from orchestrator.models import (
     CommandMessage,
+    CommandStatus,
+    CommandSummary,
     ContainerResponse,
     ContainerStatus,
     CreateContainerRequest,
@@ -723,6 +725,30 @@ class ContainerManager:
         )
         return command_id
 
+    async def list_commands(self, container_id: str) -> list[CommandSummary]:
+        """Return all commands for a container, newest first."""
+        container = await self._db.fetchone(
+            "SELECT id FROM containers WHERE id = ?", (container_id,)
+        )
+        if not container:
+            raise ContainerNotFound(container_id)
+
+        rows = await self._db.fetchall(
+            "SELECT id, command, status, exit_code, created_at FROM commands "
+            "WHERE container_id = ? ORDER BY created_at DESC",
+            (container_id,),
+        )
+        return [
+            CommandSummary(
+                command_id=row["id"],
+                command=row["command"],
+                status=CommandStatus(row["status"]),
+                exit_code=row["exit_code"],
+                created_at=row["created_at"],
+            )
+            for row in rows
+        ]
+
     async def get_command_status(
         self, container_id: str, command_id: str
     ) -> ExecStatusResponse:
@@ -751,6 +777,7 @@ class ContainerManager:
 
         return ExecStatusResponse(
             command_id=command_id,
+            command=cmd_row["command"],
             status=cmd_row["status"],
             exit_code=cmd_row["exit_code"],
             messages=[

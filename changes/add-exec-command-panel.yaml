@@ -5,3 +5,17 @@
     with the plural `/containers` convention. Callers must update:
     - `POST /containers/{id}/exec` → `POST /containers/{id}/execs`
     - `GET /containers/{id}/exec/{cmd_id}` → `GET /containers/{id}/execs/{cmd_id}`
+- project: orchestrator
+  bump: minor
+  description: |
+    New `GET /containers/{id}/execs` endpoint returns a list of every command
+    that has been submitted against a container (newest first), powering the
+    new exec command panel in the webapp. `GET /containers/{id}/execs/{cmd_id}`
+    also now includes the original `command` string in its response.
+- project: webapp
+  bump: minor
+  description: |
+    Container detail page now lists every exec command that has been run
+    against the container, with status, exit code, and a relative start time.
+    Each row links to a new `/views/containers/{id}/execs/{cmd_id}` page that
+    shows the interleaved stdout/stderr output, with stderr chunks highlighted.
