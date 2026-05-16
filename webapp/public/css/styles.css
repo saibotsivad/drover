@@ -27,6 +27,8 @@
 	--status-destroyed: #404040;
 	--status-error: #b91c1c;
 	--status-unknown: #525252;
+	--status-pending: #ca8a04;
+	--status-complete: #2563eb;
 
 	--radius: 6px;
 	--shadow-focus: 0 0 0 3px rgba(37, 99, 235, 0.35);
@@ -227,6 +229,8 @@ main { padding: 1.5rem; }
 .status-stopped     { background: var(--status-stopped); }
 .status-destroyed   { background: var(--status-destroyed); }
 .status-error       { background: var(--status-error); }
+.status-pending     { background: var(--status-pending); }
+.status-complete    { background: var(--status-complete); }
 
 /* --- Container detail metadata --- */
 
@@ -329,4 +333,61 @@ main { padding: 1.5rem; }
 .error-panel p {
 	margin: 0;
 	color: var(--color-fg-muted);
+}
+
+/* --- Exec commands section (container detail) --- */
+
+.exec-section {
+	margin-top: 2rem;
+}
+
+.exec-section h3 {
+	margin: 0 0 0.75rem 0;
+	font-size: 1rem;
+	font-weight: 600;
+}
+
+.exec-section .data-table td:first-child {
+	max-width: 32rem;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+/* --- Exec output view --- */
+
+.exec-output-section {
+	margin-top: 1.5rem;
+}
+
+.exec-output-section h3 {
+	margin: 0 0 0.75rem 0;
+	font-size: 1rem;
+	font-weight: 600;
+}
+
+.exec-output {
+	margin: 0;
+	padding: 0.85rem 1rem;
+	border: 1px solid var(--color-border);
+	border-radius: var(--radius);
+	background: var(--color-bg-subtle);
+	font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+	font-size: 0.88rem;
+	overflow-x: auto;
+	white-space: pre;
+}
+
+.exec-output-empty {
+	margin: 0;
+}
+
+.output-stderr {
+	background: #fde8e8;
+}
+
+@media (prefers-color-scheme: dark) {
+	.output-stderr {
+		background: #3d1515;
+	}
 }

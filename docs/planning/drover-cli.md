@@ -78,7 +78,7 @@ POST to the appropriate stop/destroy endpoint. Print status on completion.
 
 This is the interesting one — see Open Questions below.
 
-**Non-interactive** (`drover exec <id> git clone ...`): Posts to `POST /containers/{id}/exec` with the joined command string, then streams output to the terminal as it arrives. Exits with the command's exit code.
+**Non-interactive** (`drover exec <id> git clone ...`): Posts to `POST /containers/{id}/execs` with the joined command string, then streams output to the terminal as it arrives. Exits with the command's exit code.
 
 **Interactive** (`drover exec <id>` with no command): Would drop the user into an interactive shell inside the container. This requires PTY support in the orchestrator, which doesn't exist yet.
 

@@ -11,6 +11,7 @@ from orchestrator.errors import (
 )
 from orchestrator.log_capture import LogCaptureManager
 from orchestrator.models import (
+    CommandSummary,
     ContainerResponse,
     CreateContainerRequest,
     ExecRequest,
@@ -92,7 +93,17 @@ async def destroy_container(container_id: str, request: Request) -> ContainerRes
         raise HTTPException(status_code=e.status_code, detail=e.detail)
 
 
-@router.post("/{container_id}/exec", status_code=201)
+@router.get("/{container_id}/execs")
+async def list_commands(
+    container_id: str, request: Request
+) -> list[CommandSummary]:
+    try:
+        return await _manager(request).list_commands(container_id)
+    except ContainerError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.detail)
+
+
+@router.post("/{container_id}/execs", status_code=201)
 async def exec_command(
     container_id: str, req: ExecRequest, request: Request
 ) -> ExecResponse:
@@ -103,7 +114,7 @@ async def exec_command(
         raise HTTPException(status_code=e.status_code, detail=e.detail)
 
 
-@router.get("/{container_id}/exec/{command_id}")
+@router.get("/{container_id}/execs/{command_id}")
 async def get_exec_status(
     container_id: str, command_id: str, request: Request
 ) -> ExecStatusResponse:
