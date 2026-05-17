@@ -34,8 +34,8 @@ playwright-runner:
   image: mcr.microsoft.com/playwright:v1.52.0-noble
   working_dir: /tests
   volumes:
-    - ./playwright:/tests          # test source
-    - ./logs:/tests/results        # HTML report + traces go here
+    - ./playwright:/tests                  # test source
+    - ./playwright-results:/tests/results  # HTML report + traces go here
   environment:
     WEBAPP_URL: http://webapp:9091
     ORCHESTRATOR_URL: http://orchestrator:8000
@@ -91,6 +91,33 @@ tests:
 | Stop button | `.btn-stop` |
 | Destroy button | `.btn-destroy` |
 
+### Async behavior to handle in tests
+
+The webapp uses htmx, and several elements are conditionally rendered. A few
+patterns recur across the tests below and are easier to get right with a shared
+convention than to re-derive in each test:
+
+- **htmx redirects.** A form submission that returns an `HX-Redirect` header
+  (the launch form is the main one) does not produce a 30x — htmx triggers a
+  `window.location` change after the response. Always wait for the navigation
+  explicitly:
+  ```ts
+  await Promise.all([
+      page.waitForURL(/\/views\/containers\//),
+      page.click('button[type="submit"]'),
+  ]);
+  ```
+- **htmx swaps over empty-state placeholders.** Tables like `#command-rows`
+  render `<tr class="empty">…</tr>` when there are no real rows. After an
+  htmx swap there is a brief window where the placeholder is still in the DOM
+  before the new rows arrive. Select real rows with the keyed-id pattern
+  (`tr[id^="command-"]`, `tr[id^="container-"]`), never with a bare `tr`.
+- **`pre#log-viewer` is only rendered when log content is non-empty.** When
+  the orchestrator's log endpoint returns `null` or `''`, the container detail
+  page renders `<p class="muted log-viewer-empty">…</p>` and the
+  `#log-viewer` element does not exist at all. Log-viewer assertions need to
+  poll until `#log-viewer` is attached, not assume it is there on first render.
+
 ### `e2e/run-playwright.sh`
 
 A thin wrapper that:
@@ -98,9 +125,12 @@ A thin wrapper that:
 2. Runs `docker compose -f e2e/docker-compose.e2e.yml --profile playwright run --rm playwright-runner`.
 3. Exits with the container's exit code so CI can pick it up.
 
-Playwright's HTML report and trace archives land in `e2e/logs/playwright/` (via the
-volume mount) and get picked up by the same CI artifact upload step that already
-captures `e2e/logs/`.
+Playwright's HTML report and trace archives land in `e2e/playwright-results/`
+(via the volume mount). They sit alongside `e2e/logs/` rather than inside it so
+the Drover service logs (which describe what the stack did) stay clearly
+separated from the test-runner artifacts (which describe what the tests saw).
+The CI artifact upload step needs to include `e2e/playwright-results/` in
+addition to the existing `e2e/logs/` upload.
 
 ## Tests to implement
 
@@ -132,17 +162,22 @@ command, and the exec output page shows the expected result.
 2. Select `builder` from the image dropdown.
 3. Check the `privileged` checkbox.
 4. Enter `DROVER_TEST_VAR=hello_playwright` in the environment variables textarea.
-5. Click **Launch**.
-6. Assert the browser redirects to `/views/containers/<id>`.
+5. Click **Launch** inside a `Promise.all([page.waitForURL(...), page.click(...)])`
+   so the htmx-triggered navigation is awaited (see "Async behavior" above —
+   `HX-Redirect` is not a 30x).
+6. Assert the resulting URL matches `/views/containers/<id>`.
 7. Extract the container ID from the URL — shared across all remaining tests.
 8. Poll `GET /containers/{id}` via `page.request` until status is `running` (up to
    30 s), then reload the detail page.
 9. Fill `textarea[name="command"]` within `.exec-input-form` with
    `echo $DROVER_TEST_VAR`.
 10. Click `button[type="submit"]` within `.exec-input-form`.
-11. Wait for htmx to replace `#command-rows` — a non-empty `tr` appears.
-12. Extract the command ID from the first `tr` in `#command-rows` (its `id` attribute
-    is `command-{commandId}`), then click its link to navigate to
+11. Wait for `#command-rows tr[id^="command-"]` to attach. The keyed-id pattern
+    filters out the `<tr class="empty">` placeholder that lives in the DOM
+    until htmx finishes the swap.
+12. Extract the command ID from the first `#command-rows tr[id^="command-"]`
+    (the orchestrator returns execs newest-first, so the first matching row
+    is the one just submitted). Click its link to navigate to
     `/views/containers/{id}/execs/{commandId}`.
 13. On the exec output page, reload until `#exec-detail .status-complete` is present
     (up to 15 s — `echo` is near-instant, usually complete on first load).
@@ -162,8 +197,10 @@ Reuses the container from Test 2.
 1. Navigate back to `/views/containers/{id}`.
 2. Fill `.exec-input-form textarea[name="command"]` with `docker container ls`.
 3. Click the submit button.
-4. Wait for the new command row in `#command-rows`, extract the command ID, navigate
-   to its exec output page.
+4. Wait for a new `#command-rows tr[id^="command-"]` row to appear at the top
+   of the table (execs are newest-first, so the new `docker container ls` row
+   is the first matching `tr`). Extract its command ID and navigate to the
+   exec output page.
 5. Reload until `#exec-detail .status-complete` (up to 30 s — Docker CLI startup is
    slower than a shell built-in).
 6. Assert `pre#exec-output` contains `CONTAINER ID` (the column header of
@@ -196,15 +233,24 @@ Reuses the container from Test 2.
 **Steps:**
 
 1. Navigate to `/views/containers/{id}` (default `log_source=live`).
-2. Assert `pre#log-viewer` is present and contains `Connecting to /run/orchestrator.sock`.
+2. Poll up to 10 s for `pre#log-viewer` to attach, reloading the page between
+   checks. The element is only rendered once the live log stream has content,
+   and the executor's first log line is usually written within a second of the
+   container reaching `running` (see "Async behavior" above). Then assert it
+   contains `Connecting to /run/orchestrator.sock`.
 3. Poll `GET /containers/{id}/logs/files` via `page.request` until the response
    includes `0.log` (up to 15 s), then reload the detail page.
 4. Call `select.log-source-select.selectOption('file:0.log')` — triggers `onchange`
    navigation to `?log_source=file%3A0.log`.
-5. Assert `pre#log-viewer` contains `Connecting to`.
+5. Poll up to 10 s for `pre#log-viewer` to attach (same reasoning as step 2),
+   then assert it contains `Connecting to`.
 6. Call `select.log-source-select.selectOption('orchestrator')` — triggers navigation
    to `?log_source=orchestrator`.
-7. Assert `pre#log-viewer` contains the container ID.
+7. Poll up to 10 s for `pre#log-viewer` to attach (same reasoning as step 2),
+   then assert it contains the container ID. The `/logs/orchestrator` endpoint
+   filters orchestrator log lines by substring match on the container ID, so at
+   least one orchestrator log line mentioning the container must have been
+   written for `#log-viewer` to render.
 
 ---
 
@@ -221,8 +267,9 @@ Reuses the container from Test 2.
       log viewer).
 - [ ] Write `e2e/run-playwright.sh` (health check → compose run → exit-code passthrough).
 - [ ] Update `run.sh ci` to call `run-playwright.sh` after `cmd_test`.
-- [ ] Verify Playwright HTML report lands in `e2e/logs/playwright/` and is included
-      in the existing CI log-upload artifact.
+- [ ] Verify Playwright HTML report lands in `e2e/playwright-results/`, and add
+      that path to the CI artifact upload step (alongside the existing
+      `e2e/logs/` upload — the two trees are kept separate on purpose).
 - [ ] Add a note to `e2e/README.md` explaining how to run the Playwright suite
       locally.
 
