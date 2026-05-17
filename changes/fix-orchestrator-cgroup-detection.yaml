@@ -1,0 +1,10 @@
+- project: orchestrator
+  bump: patch
+  description: |
+    Detection of the orchestrator's own Docker container id now handles
+    the systemd cgroup driver layout (`/system.slice/docker-<id>.scope`)
+    in addition to the cgroupfs layout. The previous regex only matched
+    `/<id>` style cgroup paths, so on hosts using the systemd driver —
+    the default on modern Ubuntu, including GitHub Actions runners —
+    detection silently returned `None` and `GET /containers/{id}/logs/orchestrator`
+    returned 503.

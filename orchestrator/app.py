@@ -60,15 +60,25 @@ logger = logging.getLogger(__name__)
 def _detect_own_container_id() -> str | None:
     """Return this process's Docker container ID by inspecting cgroup membership.
 
-    Works for both cgroupv1 and cgroupv2 in standard Docker deployments.
-    Returns ``None`` if detection fails (non-Docker runtime or unusual setup).
+    Handles the common Docker / cgroup layouts:
+
+    * cgroupfs driver (cgroupv1 or v2): ``/docker/<hex>`` or just ``/<hex>``.
+    * systemd driver: ``/system.slice/docker-<hex>.scope`` (this is the
+      default on modern Ubuntu, including GitHub Actions runners).
+
+    Returns ``None`` when no 64-hex container id is found at the end of any
+    cgroup line (non-Docker runtime, rootless setups, kubernetes layouts
+    with different naming conventions, etc.).
     """
     try:
         text = Path("/proc/self/cgroup").read_text()
     except OSError:
         return None
     for line in text.splitlines():
-        m = re.search(r"/([a-f0-9]{64})(?:\.scope)?$", line)
+        # Accept either `/` (cgroupfs) or `-` (systemd `docker-<id>`) as
+        # the delimiter immediately before the 64-hex container id, and
+        # tolerate an optional `.scope` suffix.
+        m = re.search(r"[/-]([a-f0-9]{64})(?:\.scope)?$", line)
         if m:
             return m.group(1)
     return None

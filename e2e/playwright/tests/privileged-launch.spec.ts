@@ -201,13 +201,46 @@ test.describe.serial('privileged container UI flows', () => {
 
 		// 3. Orchestrator source — endpoint substring-matches on the
 		// container ID, so at least one orchestrator log line mentioning
-		// the container must have been written by now.
+		// the container must have been written by now. Verify the API
+		// is healthy first so a 503 (orchestrator could not detect its
+		// own Docker container id — see _detect_own_container_id) fails
+		// with a clearer message than the UI's empty-state placeholder.
+		await waitForOrchestratorLogContent(request, containerId, 15_000);
 		await page.locator('select.log-source-select').selectOption('orchestrator');
 		await page.waitForURL(/log_source=orchestrator/);
 		await waitForLogViewerAttached(page, 10_000);
 		await expect(page.locator('pre#log-viewer')).toContainText(containerId);
 	});
 });
+
+async function waitForOrchestratorLogContent(
+	request: APIRequestContext,
+	id: string,
+	timeoutMs: number,
+): Promise<void> {
+	const deadline = Date.now() + timeoutMs;
+	let lastStatus = 0;
+	while (Date.now() < deadline) {
+		const res = await request.get(`${ORCHESTRATOR_URL}/containers/${id}/logs/orchestrator`, {
+			headers: AUTH_HEADERS,
+		});
+		lastStatus = res.status();
+		if (res.status() === 503) {
+			throw new Error(
+				`GET /containers/${id}/logs/orchestrator returned 503 — the orchestrator could not detect its own Docker container id. ` +
+				'Check orchestrator startup logs for "Could not detect orchestrator\'s own Docker container ID" and verify the cgroup layout.',
+			);
+		}
+		if (res.ok()) {
+			const body = await res.text();
+			if (body.length > 0) return;
+		}
+		await new Promise((resolve) => setTimeout(resolve, 500));
+	}
+	throw new Error(
+		`Orchestrator log endpoint never returned non-empty content for container ${id} within ${timeoutMs}ms (last status ${lastStatus}).`,
+	);
+}
 
 function cssEscape(value: string): string {
 	if (typeof (globalThis as { CSS?: { escape?: (v: string) => string } }).CSS?.escape === 'function') {
