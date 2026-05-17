@@ -290,3 +290,93 @@ Reuses the container from Test 2.
   (`.exec-input-form`) and a command list (`tbody#command-rows`). Each command links
   to a dedicated exec output page (`#exec-detail` / `pre#exec-output`). Tests 2 and
   3 exercise these flows end-to-end, restoring the original test intent.
+
+## Implementation follow-up notes
+
+These are observations made while implementing the plan; they document
+where the shipped code intentionally diverges from the sketch above and
+why.
+
+### Compose networking: dropped `network_mode: service:webapp`
+
+The sketched service used `network_mode: service:webapp` together with
+`WEBAPP_URL: http://webapp:9091` and `ORCHESTRATOR_URL:
+http://orchestrator:8000`. That combination is internally inconsistent:
+
+- `network_mode: service:webapp` makes the playwright container share
+  webapp's network namespace. It does not "share the compose network so
+  WEBAPP_URL resolves" — every service in a compose file already shares
+  the default compose network and can resolve each other by service
+  name without this directive.
+- Port `9091` is the host-side mapping in `ports: "9091:8080"`. On the
+  compose network, webapp listens on `8080`, not `9091`. A request to
+  `http://webapp:9091` from another compose service will be refused.
+
+The shipped compose entry drops `network_mode` entirely and uses
+`WEBAPP_URL: http://webapp:8080` (the in-container port). Service-name
+DNS for both `webapp` and `orchestrator` works naturally over the
+default compose network, and `depends_on` provides start ordering.
+
+### Runner command: install deps before running tests
+
+The sketched `command: ["npx", "playwright", "test", "--reporter=list,html"]`
+assumes `@playwright/test` is resolvable from the bind-mounted `/tests`
+directory. The official `mcr.microsoft.com/playwright` image bakes in
+the browsers under `/ms-playwright/` but does not place
+`@playwright/test` on the project's module resolution path. When the
+tests `import { test } from '@playwright/test'`, Node's resolver looks
+in `/tests/node_modules/`, which is empty in a fresh bind mount.
+
+The shipped command is:
+
+```yaml
+command: ["sh", "-c", "npm install --no-audit --no-fund --loglevel=error && npx playwright test --reporter=list,html"]
+```
+
+This adds a one-time `npm install` on each run. The cost is a few
+seconds; the alternative (a separate Dockerfile baking deps in) was not
+in the plan and seemed heavier than warranted.
+
+### Image-list test asserts `#image-builder` explicitly
+
+In addition to the generic "count and id match the API" assertions
+from the plan, `images-list.spec.ts` also asserts `#image-builder` is
+visible. A stack mis-build that drops the `drover.name=builder` label
+would otherwise be caught only by the launch test (Test 2), where it
+manifests as a confusing "image dropdown is empty" failure.
+
+### Test 2 reload after status flip
+
+Step 8 says "poll until status is `running`, then reload the detail
+page." The shipped test does exactly that, and only after the reload
+does it look for `.exec-input-form` — the launch redirect lands on the
+detail page while status is still `initializing`, at which point the
+container manager has not yet wired up the exec form in some renders.
+The reload keeps the test deterministic.
+
+### Test 3 detects the new exec row by id-change, not row count
+
+The plan suggests "wait for a new row to appear at the top of the
+table." Because Test 2 leaves a command row already in place, just
+waiting for the first matching `tr[id^="command-"]` would return the
+old row immediately. The shipped test reads the existing top row's id
+before submitting, then polls until the first matching row has a
+different id. This is robust to the htmx swap timing without relying
+on row-count arithmetic.
+
+### `select.log-source-select.selectOption(...)` triggers navigation
+
+The select's `onchange` calls `window.location.href = '...'`, which is
+a same-document navigation Playwright can wait on with `waitForURL`.
+The shipped Test 5 awaits both the URL change and the
+`#log-viewer` attach, matching the plan's intent.
+
+### Artifact upload: separate workflow step
+
+The plan calls for adding `e2e/playwright-results/` to the existing
+artifact upload step. The shipped workflow uses a separate
+`Upload Playwright results` step that publishes the directory as its
+own artifact (`e2e-playwright-results`). Keeping the two artifacts
+separate makes it easier to download just the Playwright HTML report
+when triaging a UI failure, without pulling down the full e2e log
+tarball.

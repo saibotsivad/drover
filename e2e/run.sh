@@ -6,8 +6,9 @@
 #   ./e2e/run.sh down                  Stop stack, drop volumes
 #   ./e2e/run.sh restart               Rebuild + restart all services
 #   ./e2e/run.sh restart <service>     Rebuild + restart just one service
-#   ./e2e/run.sh test                  Run tests against an already-up stack
-#   ./e2e/run.sh ci                    up + test + down (one-shot)
+#   ./e2e/run.sh test                  Run bash tests against an already-up stack
+#   ./e2e/run.sh playwright            Run Playwright suite against an already-up stack
+#   ./e2e/run.sh ci                    up + test + playwright + down (one-shot)
 #
 # See docs/full-e2e-suite.md for the lifecycle rationale, and
 # e2e/README.md for a developer-focused quickstart.
@@ -259,9 +260,18 @@ cmd_collect_logs() {
 	done <<< "$micro_ids"
 }
 
+cmd_playwright() {
+	# Thin pass-through to the dedicated wrapper so callers don't have to
+	# learn a second script name. Kept separate from cmd_test because
+	# Playwright runs in its own container with a different reporter and
+	# artifact layout (e2e/playwright-results/ vs. e2e/logs/).
+	"$E2E_DIR/run-playwright.sh"
+}
+
 cmd_ci() {
-	# One-shot run for CI: bring the stack up, run the tests, capture
-	# the container logs to files (so the workflow can print them after
+	# One-shot run for CI: bring the stack up, run the bash tests, run
+	# the Playwright suite against the same live stack, capture the
+	# container logs to files (so the workflow can print them after
 	# tear-down without `docker logs` failing on missing containers),
 	# then tear the stack down. Every phase is best-effort after the
 	# first failure so the artifact ends up populated regardless.
@@ -269,6 +279,9 @@ cmd_ci() {
 	cmd_up || status=$?
 	if [ "$status" -eq 0 ]; then
 		cmd_test || status=$?
+	fi
+	if [ "$status" -eq 0 ]; then
+		cmd_playwright || status=$?
 	fi
 	cmd_collect_logs || true
 	cmd_down || true
@@ -279,11 +292,12 @@ main() {
 	local cmd="${1:-}"
 	shift || true
 	case "$cmd" in
-		up)      cmd_up "$@" ;;
-		down)    cmd_down "$@" ;;
-		restart) cmd_restart "$@" ;;
-		test)    cmd_test "$@" ;;
-		ci)      cmd_ci "$@" ;;
+		up)         cmd_up "$@" ;;
+		down)       cmd_down "$@" ;;
+		restart)    cmd_restart "$@" ;;
+		test)       cmd_test "$@" ;;
+		playwright) cmd_playwright "$@" ;;
+		ci)         cmd_ci "$@" ;;
 		""|-h|--help|help)
 			sed -n '2,15p' "$0"
 			exit 0
