@@ -1,10 +1,20 @@
 - project: orchestrator
   bump: patch
   description: |
-    Detection of the orchestrator's own Docker container id now handles
-    the systemd cgroup driver layout (`/system.slice/docker-<id>.scope`)
-    in addition to the cgroupfs layout. The previous regex only matched
-    `/<id>` style cgroup paths, so on hosts using the systemd driver —
-    the default on modern Ubuntu, including GitHub Actions runners —
-    detection silently returned `None` and `GET /containers/{id}/logs/orchestrator`
-    returned 503.
+    Detection of the orchestrator's own Docker container id is now much
+    more robust. The previous regex only matched cgroupfs-driver paths
+    (`/<hex>` or `/<hex>.scope`), so on every other Docker × cgroup
+    combination — including the systemd driver default on modern Ubuntu
+    and GitHub Actions — detection silently returned `None` and
+    `GET /containers/{id}/logs/orchestrator` returned 503.
+
+    Detection now: (1) tries a strict `[/-]<hex>(.scope)?` match on each
+    cgroup line, (2) falls back to scanning any line for a bare 64-hex
+    sequence (catches nested kubernetes / containerd shim layouts), and
+    (3) falls back to the container hostname when cgroup parsing finds
+    nothing — Docker sets the hostname to the short container id by
+    default and accepts that prefix everywhere the full id is accepted.
+
+    When detection still fails the startup warning now includes the
+    actual hostname and `/proc/self/cgroup` contents so the failure mode
+    can be diagnosed from the orchestrator log alone.

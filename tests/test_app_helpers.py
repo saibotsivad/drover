@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import socket
 from pathlib import Path
 
 import pytest
@@ -10,6 +11,7 @@ from orchestrator import app as orchestrator_app
 
 
 _HEX64 = "a" * 64
+_HEX64_B = "b" * 64
 
 
 @pytest.mark.parametrize(
@@ -64,4 +66,54 @@ def test_detect_own_container_id_returns_none_when_proc_missing(
 		raise OSError("no such file")
 
 	monkeypatch.setattr(Path, "read_text", fake_read_text)
+	# Force the hostname fallback to also fail so the helper's None-path
+	# is exercised in isolation.
+	monkeypatch.setattr(socket, "gethostname", lambda: "not-a-container-id")
 	assert orchestrator_app._detect_own_container_id() is None
+
+
+def test_parse_cgroup_loose_match_catches_unrecognized_delimiter() -> None:
+	# A kubernetes-style nested cgroup with no `/` or `-` directly before
+	# the container id — the strict pass misses it but the loose 64-hex
+	# scan still finds the id.
+	text = f"0::/kubepods.slice/kubepods-pod1234.slice/cri-containerd:{_HEX64_B}.scope\n"
+	assert orchestrator_app._parse_cgroup_for_container_id(text) == _HEX64_B
+
+
+def test_detect_falls_back_to_hostname_when_cgroup_unrecognized(
+	monkeypatch: pytest.MonkeyPatch,
+) -> None:
+	# cgroup file present but no 64-hex id anywhere.
+	monkeypatch.setattr(
+		Path,
+		"read_text",
+		lambda self, *a, **kw: "0::/init.scope\n" if str(self) == "/proc/self/cgroup" else "",
+	)
+	monkeypatch.setattr(socket, "gethostname", lambda: "abcdef012345")  # 12-char short id
+	assert orchestrator_app._detect_own_container_id() == "abcdef012345"
+
+
+def test_detect_ignores_nonhex_hostname(
+	monkeypatch: pytest.MonkeyPatch,
+) -> None:
+	monkeypatch.setattr(
+		Path,
+		"read_text",
+		lambda self, *a, **kw: "0::/init.scope\n" if str(self) == "/proc/self/cgroup" else "",
+	)
+	# Operator overrode --hostname to something arbitrary.
+	monkeypatch.setattr(socket, "gethostname", lambda: "drover-prod-01")
+	assert orchestrator_app._detect_own_container_id() is None
+
+
+def test_detect_prefers_cgroup_over_hostname(
+	monkeypatch: pytest.MonkeyPatch,
+) -> None:
+	monkeypatch.setattr(
+		Path,
+		"read_text",
+		lambda self, *a, **kw: f"0::/docker/{_HEX64}\n" if str(self) == "/proc/self/cgroup" else "",
+	)
+	monkeypatch.setattr(socket, "gethostname", lambda: "ffffffffffff")
+	# cgroup match wins so we get the full 64-hex id, not the short hostname.
+	assert orchestrator_app._detect_own_container_id() == _HEX64
