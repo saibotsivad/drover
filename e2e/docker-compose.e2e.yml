@@ -6,10 +6,12 @@
 # any per-run setup.
 #
 # Notes:
-# - SOCKET_DIR is bind-mounted at the same path inside and outside the
-#   orchestrator container (/tmp/drover-sockets). When the orchestrator asks
-#   the host Docker daemon to mount a per-container socket into a builder,
-#   Docker resolves the path against the host filesystem, so host and
+# - The socket directory is bind-mounted at the same path inside and
+#   outside the orchestrator container (/tmp/drover-sockets — overrides
+#   the fixed default of /var/run/drover/sockets so CI hosts don't need
+#   write access to /var/run). When the orchestrator asks the host
+#   Docker daemon to mount a per-container socket into a builder, Docker
+#   resolves the path against the host filesystem, so host and
 #   in-container paths must match.
 # - DROVER_API_KEY here is the SHA-256 hex digest of the plain-text key
 #   "drover-e2e-test-key" (committed in e2e/.env.test). Both halves are
@@ -28,16 +30,16 @@ services:
     ports:
       - "8000:8000"
     environment:
-      DB_PATH: /var/lib/orchestrator/db.sqlite
-      SOCKET_DIR: /tmp/drover-sockets
+      DROVER_SOCKET_DIR: /tmp/drover-sockets
       PRIVILEGED_IMAGE: drover-builder:e2e
       LOG_LEVEL: INFO
       # Capture container stdout/stderr to disk so the e2e suite's
       # /logs/files assertions exercise the real on-disk path.
-      DROVER_LOG_DIR: /var/lib/orchestrator/logs
+      DROVER_ENABLE_CONTAINER_LOGS: "true"
       DROVER_API_KEY: 78bb43a35e23d69a38ec1b64886b858607ec407fa916f7e0390e0a015a0ba031
     volumes:
-      - drover-data:/var/lib/orchestrator
+      - drover-data:/var/lib/drover/data
+      - drover-logs:/var/lib/drover/logs
       - /tmp/drover-sockets:/tmp/drover-sockets
       - /var/run/docker.sock:/var/run/docker.sock
 
@@ -95,3 +97,4 @@ services:
 
 volumes:
   drover-data:
+  drover-logs:

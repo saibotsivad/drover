@@ -34,32 +34,46 @@ To run this system, the host requires:
 3. **At least one micro-container image** built with the required Drover labels (`drover.managed=true` and `drover.name=<name>`) so the orchestrator has something to launch (see [Image Management](#image-management))
 4. (Optional) **A privileged container image** built and available on the host (required only if privileged micro-containers will be used)
 
-The orchestrator is configured via environment variables at startup:
+### Container paths and host bindings
+
+Paths **inside** the orchestrator container are fixed. The operator binds host paths to those fixed in-container locations. The defaults are sane for rootless Docker, and environment variables exist as overrides for unusual setups.
+
+| In-container path | Purpose | Override env var |
+|---|---|---|
+| `/var/lib/drover/data/` | SQLite database (at `db.sqlite`) and future config files | `DROVER_DB_PATH` (full path to the SQLite file) |
+| `/var/lib/drover/logs/` | Captured micro-container stdout/stderr (only written when `DROVER_ENABLE_CONTAINER_LOGS=true`); also reserved for any future orchestrator-internal log files | _(fixed; not configurable)_ |
+| `/var/run/docker.sock` | Host Docker daemon socket (bind-mounted in from the host) | `DROVER_DOCKER_SOCK` |
+| `/var/run/drover/sockets/` | Per-micro-container Unix sockets. Must be bind-mounted from the host at the **same path**, because Docker resolves nested bind-mount sources against the host filesystem. | `DROVER_SOCKET_DIR` |
+
+The sample [`docker-compose.yml`](docker-compose.yml) shows the recommended host bindings (`./data`, `./logs`, `./sockets` next to the compose file).
+
+### Environment variables
 
 | Variable | Required | Default | Description |
 |---|---|---|---|
 | `DROVER_API_KEY` | No | _(unset)_ | SHA-256 hash of the API key. When set, all API requests (except `GET /health`) require a valid `Authorization: Bearer <key>` header. See [Authentication](#authentication). |
 | `PRIVILEGED_IMAGE` | No | _(unset)_ | Docker image for privileged micro-containers. If unset, privileged container requests are rejected. |
-| `DB_PATH` | No | `/var/lib/orchestrator/db.sqlite` | Path to the SQLite database file. |
-| `SOCKET_DIR` | No | `/var/run/microcontainers` | Directory for per-container Unix socket files. |
-| `DOCKER_SOCK` | No | `/var/run/docker.sock` | Path to the Docker daemon Unix socket. |
+| `DROVER_DB_PATH` | No | `/var/lib/drover/data/db.sqlite` | Path to the SQLite database file (inside the container). |
+| `DROVER_SOCKET_DIR` | No | `/var/run/drover/sockets` | Directory for per-container Unix socket files. Inside-container path must match the host path (see above). |
+| `DROVER_DOCKER_SOCK` | No | `/var/run/docker.sock` | Path to the Docker daemon Unix socket inside the container. |
 | `REAPER_INTERVAL_SECONDS` | No | `5` | How often (in seconds) the idle-timeout reaper runs. |
 | `DROVER_INIT_TIMEOUT_SECONDS` | No | `20` | Maximum time a container may spend in `initializing` before the watchdog transitions it to `error`. |
 | `LOG_LEVEL` | No | `INFO` | Python log level (`DEBUG`, `INFO`, `WARNING`, `ERROR`). |
-| `DROVER_LOG_DIR` | No | _(unset; sample compose sets it)_ | Root directory for captured micro-container stdout/stderr. When set, each container's full log history is kept on disk until the container is destroyed and is reachable through `GET /containers/{id}/logs/files`. When unset, Drover writes nothing and historical queries fall through to Docker's own log driver. See [docs/observability.md](docs/observability.md). |
-| `DROVER_LOG_MAX_FILE_BYTES` | No | `10485760` (10 MiB) | Per-file size threshold for log rotation under `DROVER_LOG_DIR`. Ignored when `DROVER_LOG_DIR` is unset. |
+| `DROVER_ENABLE_CONTAINER_LOGS` | No | _(unset; capture disabled)_ | When set to the exact string `"true"`, Drover captures each micro-container's stdout/stderr to disk under `/var/lib/drover/logs/`. Any other value (or unset) leaves capture off. See [docs/observability.md](docs/observability.md). |
+| `DROVER_LOG_MAX_FILE_BYTES` | No | `10485760` (10 MiB) | Per-file size threshold for log rotation under `/var/lib/drover/logs/`. Ignored when capture is disabled. |
 
 ### Container log retention
 
-When `DROVER_LOG_DIR` is set (the sample `docker-compose.yml` enables
-this by default), Drover captures each micro-container's stdout/stderr
-to disk. The full history survives container stop, orchestrator
-restart, and orchestrator upgrade, and is removed only when the
-container is destroyed. Captured files use Docker's `json-file` line
-format so Promtail, Vector, and Fluent Bit consume them without any
-Drover-specific configuration. See [docs/observability.md](docs/observability.md)
-for the full retention model, on-disk format, log-shipper examples, and
-the disk-usage trade-off vs. Docker's own log driver.
+When `DROVER_ENABLE_CONTAINER_LOGS=true` (the sample `docker-compose.yml`
+enables this), Drover captures each micro-container's stdout/stderr to
+disk under `/var/lib/drover/logs/`. The full history survives container
+stop, orchestrator restart, and orchestrator upgrade, and is removed
+only when the container is destroyed. Captured files use Docker's
+`json-file` line format so Promtail, Vector, and Fluent Bit consume
+them without any Drover-specific configuration. See
+[docs/observability.md](docs/observability.md) for the full retention
+model, on-disk format, log-shipper examples, and the disk-usage
+trade-off vs. Docker's own log driver.
 
 ---
 
@@ -70,8 +84,9 @@ the disk-usage trade-off vs. Docker's own log driver.
 | Host Path | Container Path | Purpose |
 |---|---|---|
 | `/run/user/1000/docker.sock` | `/var/run/docker.sock` | Docker-out-of-Docker: talks to the host Docker daemon |
-| `/var/run/microcontainers/` | `/var/run/microcontainers/` | Shared directory for per-micro-container Unix sockets |
-| `/var/lib/orchestrator/db.sqlite` | `/var/lib/orchestrator/db.sqlite` | Persistent state database |
+| `/var/run/drover/sockets/` | `/var/run/drover/sockets/` | Per-micro-container Unix sockets (must be the same path on both sides) |
+| `./data/` (or anywhere) | `/var/lib/drover/data/` | Persistent state — SQLite database lives here |
+| `./logs/` (or anywhere) | `/var/lib/drover/logs/` | Captured micro-container logs (when `DROVER_ENABLE_CONTAINER_LOGS=true`) |
 
 ### Dependencies
 

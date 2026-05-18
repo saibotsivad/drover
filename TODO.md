@@ -10,7 +10,7 @@ The current exec API uses polling (`GET /containers/{id}/exec/{cmd_id}`). Real-t
 
 ## List-endpoint pagination
 
-Container log retention landed via `DROVER_LOG_DIR` and the
+Container log retention landed via `DROVER_ENABLE_CONTAINER_LOGS` and the
 `/containers/{id}/logs/files` endpoints (see `docs/observability.md`),
 but `GET /containers/{id}/logs` is still the unmodified live-Docker
 proxy and the rest of the list endpoints (`GET /containers`,

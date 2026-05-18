@@ -80,12 +80,13 @@ class CommandNotFound(ContainerError):
 
 
 class LoggingNotEnabled(ContainerError):
-    """Raised when log-file endpoints are hit but DROVER_LOG_DIR is unset."""
+    """Raised when log-file endpoints are hit but capture is disabled."""
 
     def __init__(self) -> None:
         super().__init__(
             409,
-            "Container log retention is disabled (DROVER_LOG_DIR is unset)",
+            "Container log retention is disabled "
+            "(DROVER_ENABLE_CONTAINER_LOGS is not set to \"true\")",
         )
 
 

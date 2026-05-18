@@ -5,21 +5,21 @@ from orchestrator.config import Config, load_config
 
 def test_load_config_defaults(monkeypatch):
     monkeypatch.delenv("PRIVILEGED_IMAGE", raising=False)
-    monkeypatch.delenv("DB_PATH", raising=False)
-    monkeypatch.delenv("SOCKET_DIR", raising=False)
-    monkeypatch.delenv("DOCKER_SOCK", raising=False)
+    monkeypatch.delenv("DROVER_DB_PATH", raising=False)
+    monkeypatch.delenv("DROVER_SOCKET_DIR", raising=False)
+    monkeypatch.delenv("DROVER_DOCKER_SOCK", raising=False)
     monkeypatch.delenv("REAPER_INTERVAL_SECONDS", raising=False)
     monkeypatch.delenv("DROVER_INIT_TIMEOUT_SECONDS", raising=False)
     monkeypatch.delenv("LOG_LEVEL", raising=False)
     monkeypatch.delenv("DROVER_API_KEY", raising=False)
-    monkeypatch.delenv("DROVER_LOG_DIR", raising=False)
+    monkeypatch.delenv("DROVER_ENABLE_CONTAINER_LOGS", raising=False)
     monkeypatch.delenv("DROVER_LOG_MAX_FILE_BYTES", raising=False)
 
     config = load_config()
 
     assert config.privileged_image is None
-    assert config.db_path == "/var/lib/orchestrator/db.sqlite"
-    assert config.socket_dir == "/var/run/microcontainers"
+    assert config.db_path == "/var/lib/drover/data/db.sqlite"
+    assert config.socket_dir == "/var/run/drover/sockets"
     assert config.docker_sock == "/var/run/docker.sock"
     assert config.reaper_interval_seconds == 5
     assert config.init_timeout_seconds == 20
@@ -31,14 +31,14 @@ def test_load_config_defaults(monkeypatch):
 
 def test_load_config_from_env(monkeypatch):
     monkeypatch.setenv("PRIVILEGED_IMAGE", "my-priv-image")
-    monkeypatch.setenv("DB_PATH", "/tmp/test.db")
-    monkeypatch.setenv("SOCKET_DIR", "/tmp/socks")
-    monkeypatch.setenv("DOCKER_SOCK", "/tmp/docker.sock")
+    monkeypatch.setenv("DROVER_DB_PATH", "/tmp/test.db")
+    monkeypatch.setenv("DROVER_SOCKET_DIR", "/tmp/socks")
+    monkeypatch.setenv("DROVER_DOCKER_SOCK", "/tmp/docker.sock")
     monkeypatch.setenv("REAPER_INTERVAL_SECONDS", "30")
     monkeypatch.setenv("DROVER_INIT_TIMEOUT_SECONDS", "45")
     monkeypatch.setenv("LOG_LEVEL", "debug")
     monkeypatch.setenv("DROVER_API_KEY", "abc123hash")
-    monkeypatch.setenv("DROVER_LOG_DIR", "/var/lib/orchestrator/logs")
+    monkeypatch.setenv("DROVER_ENABLE_CONTAINER_LOGS", "true")
     monkeypatch.setenv("DROVER_LOG_MAX_FILE_BYTES", "2048")
 
     config = load_config()
@@ -51,8 +51,18 @@ def test_load_config_from_env(monkeypatch):
     assert config.init_timeout_seconds == 45
     assert config.log_level == "DEBUG"
     assert config.api_key_hash == "abc123hash"
-    assert config.log_dir == "/var/lib/orchestrator/logs"
+    assert config.log_dir == "/var/lib/drover/logs"
     assert config.log_max_file_bytes == 2048
+
+
+def test_enable_container_logs_only_true_string_enables(monkeypatch):
+    """Only the exact string "true" turns capture on."""
+    for value in ("1", "TRUE", "True", "yes", "on", ""):
+        monkeypatch.setenv("DROVER_ENABLE_CONTAINER_LOGS", value)
+        assert load_config().log_dir is None, f"value {value!r} should not enable"
+
+    monkeypatch.setenv("DROVER_ENABLE_CONTAINER_LOGS", "true")
+    assert load_config().log_dir == "/var/lib/drover/logs"
 
 
 def test_config_is_frozen():
