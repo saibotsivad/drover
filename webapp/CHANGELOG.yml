@@ -1,5 +1,30 @@
-published: 0.0.8
+published: 0.0.9
 changes:
+- version: 0.0.9
+  date: '2026-05-18'
+  entries:
+  - bump: patch
+    description: |
+      Container detail page now has an inline exec command input between the
+      status details panel and the exec commands list. The textarea uses a
+      monospace font, starts at one line tall, and auto-expands as the command
+      grows. Submitting the form posts the command to the orchestrator and
+      refreshes the exec commands list in place without a full page reload.
+  - bump: patch
+    description: |
+      Container detail page now lists every exec command that has been run
+      against the container, with status, exit code, and a relative start time.
+      Each row links to a new `/views/containers/{id}/execs/{cmd_id}` page that
+      shows the interleaved stdout/stderr output, with stderr chunks highlighted.
+  - bump: patch
+    description: |
+      Added a Playwright browser-test suite under `e2e/playwright/`,
+      exercised through the new `playwright-runner` compose service and
+      `./e2e/run.sh playwright`. Covers the images list, the launch form,
+      the exec input/output flow, the containers list, and the log viewer
+      source picker. `./e2e/run.sh ci` now runs the bash and Playwright
+      suites against the same stack in one shot, and CI uploads the
+      Playwright HTML report and traces as a separate artifact.
 - version: 0.0.8
   date: '2026-05-14'
   entries:

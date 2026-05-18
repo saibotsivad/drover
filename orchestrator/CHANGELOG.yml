@@ -1,5 +1,44 @@
-published: 0.0.10
+published: 0.0.11
 changes:
+- version: 0.0.11
+  date: '2026-05-18'
+  entries:
+  - bump: patch
+    description: |
+      Renamed exec route path segments from `/exec` to `/execs` for consistency
+      with the plural `/containers` convention. Callers must update:
+      - `POST /containers/{id}/exec` → `POST /containers/{id}/execs`
+      - `GET /containers/{id}/exec/{cmd_id}` → `GET /containers/{id}/execs/{cmd_id}`
+  - bump: patch
+    description: |
+      New `GET /containers/{id}/execs` endpoint returns a list of every command
+      that has been submitted against a container (newest first), powering the
+      new exec command panel in the webapp. `GET /containers/{id}/execs/{cmd_id}`
+      also now includes the original `command` string in its response.
+  - bump: patch
+    description: |
+      Detection of the orchestrator's own Docker container id is now much
+      more robust. The previous regex only matched cgroupfs-driver paths
+      (`/<hex>` or `/<hex>.scope`), so on every other Docker × cgroup
+      combination — including the systemd driver default on modern Ubuntu
+      and GitHub Actions — detection silently returned `None` and
+      `GET /containers/{id}/logs/orchestrator` returned 503.
+
+      Detection now tries three independent signals in order:
+      (1) `/proc/self/cgroup` — strict `[/-]<hex>(.scope)?` match per line,
+      then a loose 64-hex scan for nested kubernetes / containerd layouts;
+      (2) `/proc/self/mountinfo` — every Docker container has
+      `/var/lib/docker/containers/<id>/{hostname,hosts,resolv.conf}`
+      bind-mounted in, leaving an unmistakable `/containers/<id>/`
+      substring that is independent of cgroup driver and hostname config;
+      (3) container hostname — short 12-hex id when nothing else matches,
+      skipped when the operator (or Compose) has overridden hostname to a
+      non-id value such as a service name.
+
+      When detection still fails the startup warning now includes the
+      actual hostname, `/proc/self/cgroup`, and `/proc/self/mountinfo`
+      snapshots so the failure mode can be diagnosed from the orchestrator
+      log alone.
 - version: 0.0.10
   date: '2026-05-14'
   entries:
