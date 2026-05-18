@@ -84,15 +84,31 @@ def _parse_cgroup_for_container_id(text: str) -> str | None:
     return None
 
 
+def _parse_mountinfo_for_container_id(text: str) -> str | None:
+    """Find a Docker container id in `/proc/self/mountinfo`.
+
+    Docker bind-mounts ``/etc/hostname``, ``/etc/hosts``, and
+    ``/etc/resolv.conf`` from ``/var/lib/docker/containers/<id>/`` into
+    every container, which leaves an unmistakable ``/containers/<id>/``
+    substring in the mountinfo regardless of cgroup driver, cgroup
+    version, or hostname configuration. This is the same signal used by
+    cAdvisor, the AWS ECS agent, and similar self-introspecting tools.
+    """
+    m = re.search(r"/containers/([a-f0-9]{64})/", text)
+    if m:
+        return m.group(1)
+    return None
+
+
 def _hostname_as_container_id() -> str | None:
     """Return the hostname when it looks like a Docker short/long container id.
 
     Docker sets the container hostname to the first 12 chars of the
     container id by default, and accepts that prefix as a valid container
-    reference in every API call. So when cgroup parsing fails (rootless
-    Docker, unusual cgroup layouts, containerd shims, etc.), the
-    hostname is a reliable fallback as long as the operator hasn't
-    overridden `--hostname`.
+    reference in every API call. Useful when neither `/proc/self/cgroup`
+    nor `/proc/self/mountinfo` yields a match (rootless setups, exotic
+    runtimes) AND the operator hasn't overridden `--hostname` to a
+    non-id value such as a Compose service name.
 
     Returns ``None`` when the hostname doesn't match the expected
     container-id shape so we don't accidentally pass an arbitrary
@@ -110,23 +126,36 @@ def _hostname_as_container_id() -> str | None:
 def _detect_own_container_id() -> str | None:
     """Return this process's Docker container ID.
 
-    Primary signal is `/proc/self/cgroup`, which carries the full 64-hex
-    id on standard Docker / containerd layouts. Falls back to the
-    container hostname when the cgroup file is missing or its format
-    doesn't match anything recognizable — Docker accepts the short
-    hostname id everywhere the full id is accepted.
+    Tries three independent signals, in order of authoritativeness:
 
-    Returns ``None`` when both strategies fail; the caller logs a warning
+    1. `/proc/self/cgroup` — full 64-hex id on standard Docker layouts.
+    2. `/proc/self/mountinfo` — full 64-hex id via the always-present
+       ``/var/lib/docker/containers/<id>/`` bind mounts.
+    3. Container hostname — short 12-hex id when neither cgroup nor
+       mountinfo yields a match.
+
+    Returns ``None`` when all three strategies fail; the caller logs a
+    warning (including the cgroup, mountinfo, and hostname snapshots)
     and the ``/logs/orchestrator`` endpoint then returns 503.
     """
     try:
-        text = Path("/proc/self/cgroup").read_text()
+        cgroup_text = Path("/proc/self/cgroup").read_text()
     except OSError:
-        text = None
-    if text is not None:
-        cid = _parse_cgroup_for_container_id(text)
+        cgroup_text = None
+    if cgroup_text is not None:
+        cid = _parse_cgroup_for_container_id(cgroup_text)
         if cid is not None:
             return cid
+
+    try:
+        mountinfo_text = Path("/proc/self/mountinfo").read_text()
+    except OSError:
+        mountinfo_text = None
+    if mountinfo_text is not None:
+        cid = _parse_mountinfo_for_container_id(mountinfo_text)
+        if cid is not None:
+            return cid
+
     return _hostname_as_container_id()
 
 
@@ -215,15 +244,20 @@ async def lifespan(app: FastAPI):
         except OSError as e:
             cgroup_dump = f"<unreadable: {e}>"
         try:
+            mountinfo_dump = Path("/proc/self/mountinfo").read_text()
+        except OSError as e:
+            mountinfo_dump = f"<unreadable: {e}>"
+        try:
             hostname_dump = socket.gethostname()
         except OSError as e:
             hostname_dump = f"<unreadable: {e}>"
         logger.warning(
             "Could not detect orchestrator's own Docker container ID; "
             "/logs/orchestrator endpoint will return 503. "
-            "hostname=%r, /proc/self/cgroup=%r",
+            "hostname=%r, /proc/self/cgroup=%r, /proc/self/mountinfo=%r",
             hostname_dump,
             cgroup_dump,
+            mountinfo_dump,
         )
     else:
         logger.info("Detected orchestrator container ID: %s", own_id)

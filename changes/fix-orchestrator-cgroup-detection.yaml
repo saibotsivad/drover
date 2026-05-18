@@ -8,13 +8,18 @@
     and GitHub Actions — detection silently returned `None` and
     `GET /containers/{id}/logs/orchestrator` returned 503.
 
-    Detection now: (1) tries a strict `[/-]<hex>(.scope)?` match on each
-    cgroup line, (2) falls back to scanning any line for a bare 64-hex
-    sequence (catches nested kubernetes / containerd shim layouts), and
-    (3) falls back to the container hostname when cgroup parsing finds
-    nothing — Docker sets the hostname to the short container id by
-    default and accepts that prefix everywhere the full id is accepted.
+    Detection now tries three independent signals in order:
+    (1) `/proc/self/cgroup` — strict `[/-]<hex>(.scope)?` match per line,
+    then a loose 64-hex scan for nested kubernetes / containerd layouts;
+    (2) `/proc/self/mountinfo` — every Docker container has
+    `/var/lib/docker/containers/<id>/{hostname,hosts,resolv.conf}`
+    bind-mounted in, leaving an unmistakable `/containers/<id>/`
+    substring that is independent of cgroup driver and hostname config;
+    (3) container hostname — short 12-hex id when nothing else matches,
+    skipped when the operator (or Compose) has overridden hostname to a
+    non-id value such as a service name.
 
     When detection still fails the startup warning now includes the
-    actual hostname and `/proc/self/cgroup` contents so the failure mode
-    can be diagnosed from the orchestrator log alone.
+    actual hostname, `/proc/self/cgroup`, and `/proc/self/mountinfo`
+    snapshots so the failure mode can be diagnosed from the orchestrator
+    log alone.
