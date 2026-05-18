@@ -49,25 +49,36 @@ jobs:
         run: ./e2e/run.sh ci
 
       # `./e2e/run.sh ci` captures every container's full logs to disk
-      # before it tears the stack down (see docs/full-e2e-suite.md). This
-      # step prints every file under e2e/logs/ in its own collapsible
-      # group so the workflow view mirrors the contents of the uploaded
-      # artifact below — anything you'd download from the artifact is
-      # also viewable inline.
+      # before it tears the stack down (see docs/full-e2e-suite.md), and
+      # `e2e/run-playwright.sh` tees the Playwright runner's stdout to
+      # `e2e/playwright-results/playwright.log`. This step prints both
+      # in collapsible groups so the workflow view mirrors the contents
+      # of the uploaded artifacts below.
+      #
+      # `e2e/playwright-results/` is filtered to text outputs (`*.log`,
+      # `*.txt`) — the HTML report assets and per-test trace zips live
+      # there too but aren't useful to dump into the CI log; download
+      # the `e2e-playwright-results` artifact for those.
       - name: Print e2e logs
         if: always()
         run: |
-          if [ ! -d e2e/logs ]; then
-            echo "(no e2e/logs directory present)"
-            exit 0
-          fi
           found=0
-          while IFS= read -r -d '' f; do
-            found=1
-            echo "::group::$f"
-            cat -- "$f"
-            echo "::endgroup::"
-          done < <(find e2e/logs -type f -print0 | sort -z)
+          if [ -d e2e/logs ]; then
+            while IFS= read -r -d '' f; do
+              found=1
+              echo "::group::$f"
+              cat -- "$f"
+              echo "::endgroup::"
+            done < <(find e2e/logs -type f -print0 | sort -z)
+          fi
+          if [ -d e2e/playwright-results ]; then
+            while IFS= read -r -d '' f; do
+              found=1
+              echo "::group::$f"
+              cat -- "$f"
+              echo "::endgroup::"
+            done < <(find e2e/playwright-results -type f \( -name '*.log' -o -name '*.txt' \) -print0 | sort -z)
+          fi
           if [ "$found" -eq 0 ]; then
             echo "(no e2e log files captured)"
           fi
@@ -78,4 +89,16 @@ jobs:
         with:
           name: e2e-logs
           path: e2e/logs/
+          if-no-files-found: warn
+
+      # Playwright HTML report and traces live under a separate path
+      # (e2e/playwright-results/) so the Drover service logs and the
+      # test-runner artifacts stay clearly separated. See
+      # docs/planning/playwright-webapp-testing.md.
+      - name: Upload Playwright results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-playwright-results
+          path: e2e/playwright-results/
           if-no-files-found: warn

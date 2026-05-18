@@ -68,5 +68,30 @@ services:
     command: ["true"]
     restart: "no"
 
+  # Playwright browser-test runner. Lives behind the `playwright` profile so
+  # `compose up`/`compose down` ignore it; `e2e/run-playwright.sh` brings it
+  # up explicitly with `compose --profile playwright run --rm`.
+  #
+  # The container shares the default compose network with orchestrator and
+  # webapp, so it can reach them by service name. We deliberately use the
+  # in-container ports (webapp:8080, orchestrator:8000) here — the 9091
+  # host-side port mapping does not apply on the compose network.
+  playwright-runner:
+    image: mcr.microsoft.com/playwright:v1.52.0-noble
+    working_dir: /tests
+    volumes:
+      - ./playwright:/tests
+      - ./playwright-results:/tests/results
+    environment:
+      WEBAPP_URL: http://webapp:8080
+      ORCHESTRATOR_URL: http://orchestrator:8000
+      DROVER_API_KEY: drover-e2e-test-key
+      CI: "1"
+    depends_on:
+      - webapp
+      - orchestrator
+    command: ["sh", "-c", "npm install --no-audit --no-fund --loglevel=error && npx playwright test --reporter=list,html"]
+    profiles: ["playwright"]
+
 volumes:
   drover-data:

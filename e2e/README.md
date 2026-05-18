@@ -35,12 +35,28 @@ rebuild + retest just that piece:
 ```bash
 ./e2e/run.sh up                        # one-time: build + start everything
 ./e2e/run.sh restart orchestrator      # after editing orchestrator code
-./e2e/run.sh test                      # re-run tests against the live stack
+./e2e/run.sh test                      # re-run bash tests against the live stack
+./e2e/run.sh playwright                # re-run Playwright suite against the live stack
 ./e2e/run.sh down                      # when you're done
 ```
 
 `restart` accepts `orchestrator`, `webapp`, or `builder`. With no
 argument it rebuilds and restarts all services.
+
+## Browser tests (Playwright)
+
+`./e2e/run.sh playwright` runs a browser-level suite against the same
+already-up stack the bash tests use. Tests live under
+[`e2e/playwright/`](./playwright/) and execute inside the
+`playwright-runner` service from `docker-compose.e2e.yml`, behind the
+`playwright` compose profile so they never start during a normal
+`compose up`.
+
+`./e2e/run.sh ci` runs the bash suite, then the Playwright suite, then
+tears the stack down in one shot. The Playwright HTML report and any
+trace archives land in `e2e/playwright-results/`. See
+[`docs/planning/playwright-webapp-testing.md`](../docs/planning/playwright-webapp-testing.md)
+for the design.
 
 ## Where logs go
 

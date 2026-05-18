@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import re
+import socket
 import time
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -57,21 +58,105 @@ def setup_logging(level: str = "INFO") -> None:
 logger = logging.getLogger(__name__)
 
 
-def _detect_own_container_id() -> str | None:
-    """Return this process's Docker container ID by inspecting cgroup membership.
+def _parse_cgroup_for_container_id(text: str) -> str | None:
+    """Scan a `/proc/self/cgroup` payload for a 64-hex Docker container id.
 
-    Works for both cgroupv1 and cgroupv2 in standard Docker deployments.
-    Returns ``None`` if detection fails (non-Docker runtime or unusual setup).
+    Returns the first match found. Two passes:
+
+    1. Strict: a `/` or `-` delimiter immediately before the 64-hex id,
+       optionally followed by `.scope`. Covers the well-known layouts
+       (``/docker/<hex>``, ``/<hex>``, ``/system.slice/docker-<hex>.scope``,
+       etc.) without picking up unrelated 64-hex strings.
+    2. Loose: any 64-hex sequence on any line. Catches unusual nested
+       layouts (kubernetes pod cgroups, custom runtimes) where the
+       delimiter is something we haven't anticipated. False positives
+       here would require an unrelated 64-hex string to appear inside a
+       cgroup path, which is extremely unlikely in practice.
     """
-    try:
-        text = Path("/proc/self/cgroup").read_text()
-    except OSError:
-        return None
     for line in text.splitlines():
-        m = re.search(r"/([a-f0-9]{64})(?:\.scope)?$", line)
+        m = re.search(r"[/-]([a-f0-9]{64})(?:\.scope)?$", line)
+        if m:
+            return m.group(1)
+    for line in text.splitlines():
+        m = re.search(r"([a-f0-9]{64})", line)
         if m:
             return m.group(1)
     return None
+
+
+def _parse_mountinfo_for_container_id(text: str) -> str | None:
+    """Find a Docker container id in `/proc/self/mountinfo`.
+
+    Docker bind-mounts ``/etc/hostname``, ``/etc/hosts``, and
+    ``/etc/resolv.conf`` from ``/var/lib/docker/containers/<id>/`` into
+    every container, which leaves an unmistakable ``/containers/<id>/``
+    substring in the mountinfo regardless of cgroup driver, cgroup
+    version, or hostname configuration. This is the same signal used by
+    cAdvisor, the AWS ECS agent, and similar self-introspecting tools.
+    """
+    m = re.search(r"/containers/([a-f0-9]{64})/", text)
+    if m:
+        return m.group(1)
+    return None
+
+
+def _hostname_as_container_id() -> str | None:
+    """Return the hostname when it looks like a Docker short/long container id.
+
+    Docker sets the container hostname to the first 12 chars of the
+    container id by default, and accepts that prefix as a valid container
+    reference in every API call. Useful when neither `/proc/self/cgroup`
+    nor `/proc/self/mountinfo` yields a match (rootless setups, exotic
+    runtimes) AND the operator hasn't overridden `--hostname` to a
+    non-id value such as a Compose service name.
+
+    Returns ``None`` when the hostname doesn't match the expected
+    container-id shape so we don't accidentally pass an arbitrary
+    operator-chosen hostname to the Docker API.
+    """
+    try:
+        host = socket.gethostname()
+    except OSError:
+        return None
+    if re.fullmatch(r"[a-f0-9]{12,64}", host):
+        return host
+    return None
+
+
+def _detect_own_container_id() -> str | None:
+    """Return this process's Docker container ID.
+
+    Tries three independent signals, in order of authoritativeness:
+
+    1. `/proc/self/cgroup` — full 64-hex id on standard Docker layouts.
+    2. `/proc/self/mountinfo` — full 64-hex id via the always-present
+       ``/var/lib/docker/containers/<id>/`` bind mounts.
+    3. Container hostname — short 12-hex id when neither cgroup nor
+       mountinfo yields a match.
+
+    Returns ``None`` when all three strategies fail; the caller logs a
+    warning (including the cgroup, mountinfo, and hostname snapshots)
+    and the ``/logs/orchestrator`` endpoint then returns 503.
+    """
+    try:
+        cgroup_text = Path("/proc/self/cgroup").read_text()
+    except OSError:
+        cgroup_text = None
+    if cgroup_text is not None:
+        cid = _parse_cgroup_for_container_id(cgroup_text)
+        if cid is not None:
+            return cid
+
+    try:
+        mountinfo_text = Path("/proc/self/mountinfo").read_text()
+    except OSError:
+        mountinfo_text = None
+    if mountinfo_text is not None:
+        cid = _parse_mountinfo_for_container_id(mountinfo_text)
+        if cid is not None:
+            return cid
+
+    return _hostname_as_container_id()
 
 
 async def _reaper_loop(
@@ -154,9 +239,25 @@ async def lifespan(app: FastAPI):
 
     own_id = _detect_own_container_id()
     if own_id is None:
+        try:
+            cgroup_dump = Path("/proc/self/cgroup").read_text()
+        except OSError as e:
+            cgroup_dump = f"<unreadable: {e}>"
+        try:
+            mountinfo_dump = Path("/proc/self/mountinfo").read_text()
+        except OSError as e:
+            mountinfo_dump = f"<unreadable: {e}>"
+        try:
+            hostname_dump = socket.gethostname()
+        except OSError as e:
+            hostname_dump = f"<unreadable: {e}>"
         logger.warning(
-            "Could not detect orchestrator's own Docker container ID from "
-            "/proc/self/cgroup; orchestrator log endpoint will return 503"
+            "Could not detect orchestrator's own Docker container ID; "
+            "/logs/orchestrator endpoint will return 503. "
+            "hostname=%r, /proc/self/cgroup=%r, /proc/self/mountinfo=%r",
+            hostname_dump,
+            cgroup_dump,
+            mountinfo_dump,
         )
     else:
         logger.info("Detected orchestrator container ID: %s", own_id)
