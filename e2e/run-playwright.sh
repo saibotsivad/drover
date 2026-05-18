@@ -41,8 +41,15 @@ mkdir -p "$E2E_DIR/playwright-results"
 chmod 777 "$E2E_DIR/playwright-results" || true
 
 echo "==> Running Playwright suite"
+# Tee the runner's stdout+stderr to playwright.log so the CI workflow
+# can surface it under the "Print e2e logs" step (same collapsible-
+# group treatment as the bash-suite logs). `pipefail` keeps the docker
+# exit code intact through the pipe.
 status=0
-compose --profile playwright run --rm playwright-runner || status=$?
+RUNNER_LOG="$E2E_DIR/playwright-results/playwright.log"
+compose --profile playwright run --rm playwright-runner 2>&1 \
+	| tee "$RUNNER_LOG" \
+	|| status=$?
 
 if [ "$status" -eq 0 ]; then
 	echo "==> Playwright tests passed."
