@@ -38,15 +38,18 @@ For each running micro-container, the orchestrator opens a follow
 stream against Docker's logs API
 (`GET /containers/{docker_id}/logs?follow=1&stdout=1&stderr=1&timestamps=1&since=...`),
 parses the multiplex frames, and appends them to a per-container
-directory under `DROVER_LOG_DIR`. A `.cursor` file in that directory
+directory under `/var/lib/drover/logs/` (the fixed in-container log
+path; enabled by `DROVER_ENABLE_CONTAINER_LOGS=true`). A `.cursor`
+file in that directory
 holds the timestamp of the most recently written record so the stream
 can resume after orchestrator restart.
 
 Capture begins immediately after `docker start` succeeds — *before*
 the guest agent connects — so init-failure stdout is captured.
 
-When `DROVER_LOG_DIR` is unset, no capture happens at all and operators
-rely on whatever Docker's daemon log driver retains.
+When `DROVER_ENABLE_CONTAINER_LOGS` is unset (or set to anything other
+than the exact string `"true"`), no capture happens at all and
+operators rely on whatever Docker's daemon log driver retains.
 
 Drover never sets `HostConfig.LogConfig` on container creation. The
 daemon's log-driver choice (`json-file`, `journald`, `loki`, …) is
@@ -70,8 +73,9 @@ independent of Drover's capture and unaffected by it.
 
 ### Negative
 
-- **Two copies of every byte by default.** When `DROVER_LOG_DIR` is
-  set and the daemon also writes (the `json-file` default), every
+- **Two copies of every byte by default.** When
+  `DROVER_ENABLE_CONTAINER_LOGS=true` and the daemon also writes (the
+  `json-file` default), every
   container's stdout exists twice. `docs/observability.md` §5 walks
   the operator through disabling one or the other.
 - **One follow-stream task per running container.** Cheap (asyncio

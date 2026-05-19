@@ -5,7 +5,7 @@
 # so we resolve it at runtime instead of baking a GID into the image.
 set -e
 
-SOCK="${DOCKER_SOCK:-/var/run/docker.sock}"
+SOCK="${DROVER_DOCKER_SOCK:-/var/run/docker.sock}"
 
 if [ -S "$SOCK" ]; then
 	SOCK_GID=$(stat -c '%g' "$SOCK")
@@ -28,7 +28,7 @@ elif [ -d "$SOCK" ]; then
 	# /run/user/$UID/docker.sock, not /var/run/docker.sock.
 	echo "entrypoint: warning: $SOCK is a directory, not a socket. The host path probably doesn't exist." >&2
 	echo "entrypoint:   For rootless Docker, point the bind-mount at /run/user/\$UID/docker.sock" >&2
-	echo "entrypoint:   (e.g. set DOCKER_SOCK=\$XDG_RUNTIME_DIR/docker.sock before 'docker compose up')." >&2
+	echo "entrypoint:   (e.g. set DROVER_DOCKER_SOCK=\$XDG_RUNTIME_DIR/docker.sock before 'docker compose up')." >&2
 elif [ ! -e "$SOCK" ]; then
 	echo "entrypoint: warning: $SOCK does not exist; is the docker socket mounted into the container?" >&2
 else

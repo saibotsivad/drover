@@ -6,10 +6,23 @@
 # proxy). Set DROVER_API_KEY (in both services) before exposing the webapp
 # beyond a trusted LAN.
 #
-# Rootless Docker: the host socket lives at /run/user/$UID/docker.sock, not
-# /var/run/docker.sock. Either export DOCKER_SOCK before running compose:
+# Container paths inside the orchestrator are fixed:
 #
-#     export DOCKER_SOCK=$XDG_RUNTIME_DIR/docker.sock   # or /run/user/$(id -u)/docker.sock
+#   /var/lib/drover/data       SQLite database (+ future config files)
+#   /var/lib/drover/logs       captured micro-container stdout/stderr
+#                              (only written when DROVER_ENABLE_CONTAINER_LOGS=true)
+#   /var/run/docker.sock       host Docker daemon socket
+#   /var/run/drover/sockets    per-micro-container Unix sockets
+#
+# This file binds host directories (alongside docker-compose.yml) to those
+# fixed in-container paths. The per-micro-container socket directory is
+# bind-mounted at the SAME path inside and outside the orchestrator because
+# Docker resolves nested bind-mount sources on the host filesystem.
+#
+# Rootless Docker note: the host Docker socket lives at /run/user/$UID/docker.sock,
+# not /var/run/docker.sock. Either export DROVER_DOCKER_SOCK before running compose:
+#
+#     export DROVER_DOCKER_SOCK=$XDG_RUNTIME_DIR/docker.sock   # or /run/user/$(id -u)/docker.sock
 #     docker compose up
 #
 # or put it in a .env file next to this compose.yml. The orchestrator
@@ -23,21 +36,20 @@ services:
     # build: ./orchestrator
     networks: [drover]
     volumes:
-      - drover-data:/var/lib/orchestrator
-      - drover-sockets:/var/run/microcontainers
-      - ${DOCKER_SOCK:-/var/run/docker.sock}:/var/run/docker.sock
+      - ./data:/var/lib/drover/data
+      - ./logs:/var/lib/drover/logs
+      - /var/run/drover/sockets:/var/run/drover/sockets
+      - ${DROVER_DOCKER_SOCK:-/var/run/docker.sock}:/var/run/docker.sock
     environment:
-      DB_PATH: /var/lib/orchestrator/db.sqlite
-      SOCKET_DIR: /var/run/microcontainers
       LOG_LEVEL: INFO
       # Capture each micro-container's stdout/stderr to disk so the full
       # history survives stop/restart and is reachable through
       # /containers/{id}/logs/files. This roughly doubles per-container
       # disk usage because Docker's own log driver also keeps a copy;
       # docs/observability.md walks through how to disable one or the
-      # other if disk is tight. Logs live inside the existing
-      # drover-data volume — no second volume to manage.
-      DROVER_LOG_DIR: /var/lib/orchestrator/logs
+      # other if disk is tight. Set to the exact string "true" to enable;
+      # any other value (or unset) leaves capture off.
+      DROVER_ENABLE_CONTAINER_LOGS: "true"
       # DROVER_API_KEY: change-me
 
   webapp:
@@ -67,7 +79,3 @@ services:
 
 networks:
   drover:
-
-volumes:
-  drover-data:
-  drover-sockets:

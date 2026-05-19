@@ -3,13 +3,15 @@
 Owned by the FastAPI ``lifespan``, this manager opens a Docker follow
 stream per running container, parses the multiplex frame format, and
 writes one ``{log, stream, time}`` JSON object per parsed frame to a
-size-rotated file under ``DROVER_LOG_DIR/{container_id}/``.
+size-rotated file under ``/var/lib/drover/logs/{container_id}/``.
 
-The on-disk format matches Docker's ``json-file`` driver line format so
-log shippers (Promtail, Vector, Fluent Bit) recognize it without
-Drover-specific configuration. See ``docs/observability.md`` for the
-operator-facing reference and the ADR for the one-JSON-per-chunk
-deviation from json-file's line-splitting behavior.
+Capture is opt-in: it runs only when ``DROVER_ENABLE_CONTAINER_LOGS`` is
+set to the exact string ``"true"``.  The on-disk format matches
+Docker's ``json-file`` driver line format so log shippers (Promtail,
+Vector, Fluent Bit) recognize it without Drover-specific configuration.
+See ``docs/observability.md`` for the operator-facing reference and the
+ADR for the one-JSON-per-chunk deviation from json-file's
+line-splitting behavior.
 """
 
 from __future__ import annotations
@@ -217,9 +219,10 @@ class LogCaptureManager:
     def list_files(self, container_id: str) -> list[str]:
         """Return the captured filenames for *container_id*, ordered.
 
-        Raises ``LoggingNotEnabled`` when ``DROVER_LOG_DIR`` is unset.
-        Returns ``[]`` when the directory does not exist (covers both
-        the never-captured and post-``discard`` cases).
+        Raises ``LoggingNotEnabled`` when
+        ``DROVER_ENABLE_CONTAINER_LOGS`` is not ``"true"``.  Returns
+        ``[]`` when the directory does not exist (covers both the
+        never-captured and post-``discard`` cases).
         """
         if self._config.log_dir is None:
             raise LoggingNotEnabled()
@@ -265,9 +268,10 @@ class LogCaptureManager:
     ) -> None:
         """Begin (or restart) capturing logs for *container_id*.
 
-        No-op when ``DROVER_LOG_DIR`` is unset, when global disk-write
-        has been disabled (after a persistent OSError), or when a
-        capture is already running for the container.
+        No-op when ``DROVER_ENABLE_CONTAINER_LOGS`` is not ``"true"``,
+        when global disk-write has been disabled (after a persistent
+        OSError), or when a capture is already running for the
+        container.
         """
         if self._config.log_dir is None:
             return
@@ -328,7 +332,8 @@ class LogCaptureManager:
     async def discard(self, container_id: str) -> None:
         """Stop the capture (if any) and remove the on-disk directory.
 
-        No-op when ``DROVER_LOG_DIR`` is unset.  Idempotent.
+        No-op when ``DROVER_ENABLE_CONTAINER_LOGS`` is not ``"true"``.
+        Idempotent.
         """
         if self._config.log_dir is None:
             return

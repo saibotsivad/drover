@@ -6,7 +6,8 @@
 ## Context
 
 The container-log-retention feature writes captured micro-container
-stdout/stderr to disk under `DROVER_LOG_DIR` (see the sibling ADR
+stdout/stderr to disk under `/var/lib/drover/logs/` when
+`DROVER_ENABLE_CONTAINER_LOGS=true` (see the sibling ADR
 `2026-05-13-container-log-capture-architecture.md` for the capture
 pipeline). We had to pick:
 
@@ -16,7 +17,7 @@ pipeline). We had to pick:
    log frame regardless of how many newlines it contains.
 
 Both choices are downstream-visible: every operator who points
-Promtail / Vector / Fluent Bit / Loki at `DROVER_LOG_DIR` will reverse-
+Promtail / Vector / Fluent Bit / Loki at `/var/lib/drover/logs/` will reverse-
 engineer the format from one of our sample files. Once shipped, we can
 only change it via a versioned migration.
 

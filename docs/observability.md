@@ -12,7 +12,7 @@ log driver, or when you need to debug a container after it has stopped.
 | Stream | Source | How to access | Retention |
 |---|---|---|---|
 | Orchestrator structured logs | The orchestrator process itself, written to stdout as one JSON object per line. | Whatever log driver the host Docker daemon is configured with (`json-file`, `journald`, `loki`, etc.) — `docker logs drover-orchestrator` is the simplest interactive view. For a per-container filtered view, `GET /containers/{id}/logs/orchestrator` returns only the orchestrator log lines that mention a specific container ID. | Driver-specific. Drover does not manage this. |
-| Micro-container stdout/stderr | Each Drover-managed container's own stdout/stderr. | Live tail: `GET /containers/{id}/logs` (proxies Docker's logs API). On-disk capture: `GET /containers/{id}/logs/files` and `/logs/files/{filename}` when `DROVER_LOG_DIR` is set (see §2). | When `DROVER_LOG_DIR` is set: kept until the container is destroyed. When unset: whatever Docker's log driver provides. |
+| Micro-container stdout/stderr | Each Drover-managed container's own stdout/stderr. | Live tail: `GET /containers/{id}/logs` (proxies Docker's logs API). On-disk capture: `GET /containers/{id}/logs/files` and `/logs/files/{filename}` when `DROVER_ENABLE_CONTAINER_LOGS="true"` (see §2). | When `DROVER_ENABLE_CONTAINER_LOGS="true"`: kept until the container is destroyed. Otherwise: whatever Docker's log driver provides. |
 | Per-command stdout/stderr | The output of an `exec` command run inside a container, captured by the guest agent and streamed back over the per-container Unix socket. | `GET /containers/{id}/execs/{command_id}` returns the `messages` array from the `command_messages` table. | SQLite-backed; lives until the container row is destroyed. |
 
 The rest of this document is about the second stream — the per-container
@@ -23,21 +23,22 @@ stdout/stderr — because that's the one this feature changes.
 ## 2. Modes
 
 There are exactly two modes, controlled by a single environment
-variable.
+variable. The on-disk location is fixed at `/var/lib/drover/logs/`
+inside the orchestrator container; the variable is just an on/off
+switch.
 
-**`DROVER_LOG_DIR` set (recommended for homelab).**
+**`DROVER_ENABLE_CONTAINER_LOGS="true"` (recommended for homelab).**
 
 Drover opens a follow stream against Docker's logs API for every
 running container and writes the captured output to disk under
-`{DROVER_LOG_DIR}/{container_id}/`. The on-disk history survives
+`/var/lib/drover/logs/{container_id}/`. The on-disk history survives
 container stop, orchestrator restart, and orchestrator upgrade. It is
 removed only when the container is destroyed (`DELETE /containers/{id}`).
 
-The sample `docker-compose.yml` ships with this mode enabled at
-`/var/lib/orchestrator/logs` (inside the existing `drover-data` volume —
-no second volume to manage).
+The sample `docker-compose.yml` ships with this mode enabled and binds
+`./logs` on the host to `/var/lib/drover/logs/` inside the container.
 
-**`DROVER_LOG_DIR` unset (recommended if you already ship Docker logs).**
+**`DROVER_ENABLE_CONTAINER_LOGS` unset or any other value (recommended if you already ship Docker logs).**
 
 Drover writes nothing to disk. No directory is created, no `.cursor`
 file is maintained, no follow stream is opened. The
@@ -46,6 +47,10 @@ Historical-log queries fall through to Docker's own log driver: if you
 have `--log-driver=loki` (or journald, or fluentd) at the daemon level,
 that's where your container logs live.
 
+Only the exact string `"true"` enables capture. `"1"`, `"yes"`,
+`"True"`, and `""` are all treated as off; this keeps the toggle
+unambiguous.
+
 ---
 
 ## 3. On-disk format and directory layout
@@ -53,7 +58,7 @@ that's where your container logs live.
 ### Directory layout
 
 ```
-{DROVER_LOG_DIR}/                         # default sample compose: /var/lib/orchestrator/logs
+/var/lib/drover/logs/                     # fixed path inside the orchestrator container
 ├── cnt_abc123/
 │   ├── 0.log
 │   ├── 1.log
@@ -77,7 +82,7 @@ that's where your container logs live.
   `DROVER_LOG_MAX_FILE_BYTES` on the next write, the writer closes it
   and opens the next-numbered file. There is no time-based rotation,
   so a long-quiet container's `0.log` may stay open for days.
-- Keep `DROVER_LOG_DIR` on local storage. Network filesystems (SMB,
+- Keep the bound `./logs` host directory on local storage. Network filesystems (SMB,
   NFS) can produce partial writes that look like a truncated last
   line — log shippers handle that gracefully, but on-disk consistency
   is best on a local POSIX filesystem.
@@ -120,7 +125,9 @@ file directly.
 
 Drover's captured files are valid `json-file` lines, so any tool that
 consumes Docker's `json-file` driver consumes Drover too. The operator
-points the shipper at `DROVER_LOG_DIR` and lets it pick everything up.
+points the shipper at the host directory bound to
+`/var/lib/drover/logs/` and lets it pick everything up. The examples
+below assume the sample compose's `./logs` host bind.
 
 ### Promtail (canonical example)
 
@@ -131,7 +138,7 @@ scrape_configs:
       - targets: [localhost]
         labels:
           job: drover
-          __path__: /var/lib/orchestrator/logs/*/*.log
+          __path__: ./logs/*/*.log
     pipeline_stages:
       - docker: {}
       # If you need single-line records downstream, add a multiline
@@ -147,7 +154,7 @@ on-disk history when the shipper restarts:
 ```toml
 [sources.drover]
 type = "file"
-include = ["/var/lib/orchestrator/logs/*/*.log"]
+include = ["./logs/*/*.log"]
 read_from = "beginning"
 ```
 
@@ -158,7 +165,7 @@ Use the `tail` input with `Parser docker`:
 ```ini
 [INPUT]
     Name        tail
-    Path        /var/lib/orchestrator/logs/*/*.log
+    Path        ./logs/*/*.log
     Parser      docker
 ```
 
@@ -170,26 +177,27 @@ level (`/etc/docker/daemon.json`, the `--log-driver` flag) continues to
 apply, and that's a separate copy of every container's stdout. If you
 already ship Docker logs to Loki via the `loki` driver, you'll see
 each Drover container's output in Loki without doing anything else —
-*and* on disk under `DROVER_LOG_DIR`. See §5 for how to disable one.
+*and* on disk under `/var/lib/drover/logs/`. See §5 for how to disable one.
 
 ---
 
 ## 5. Disk usage and the "two copies" trade-off
 
-When `DROVER_LOG_DIR` is set, every container's stdout exists in two
-places:
+When `DROVER_ENABLE_CONTAINER_LOGS=true`, every container's stdout
+exists in two places:
 
 1. Whatever Docker's daemon log driver writes (default
    `/var/lib/docker/containers/{docker_id}/{docker_id}-json.log` for
    `json-file`).
-2. Drover's capture under `DROVER_LOG_DIR/{container_id}/`.
+2. Drover's capture under `/var/lib/drover/logs/{container_id}/`.
 
 The two paths exist for different reasons — Docker's path is for the
 operator's own logging stack, Drover's path is for Drover's retention
 guarantee — so by default both are kept. To avoid the duplication:
 
 - **Disable Drover's capture** for operators who already have a log
-  pipeline: unset `DROVER_LOG_DIR`. Live tails still work via
+  pipeline: unset `DROVER_ENABLE_CONTAINER_LOGS` (or set it to any
+  value other than `"true"`). Live tails still work via
   `GET /containers/{id}/logs` (proxying Docker's logs API).
 - **Disable Docker's per-container copy** by setting
   `--log-driver=none` at the daemon level (or per-service in compose).
@@ -197,10 +205,10 @@ guarantee — so by default both are kept. To avoid the duplication:
   the disk file. Live tails via `GET /containers/{id}/logs` will return
   empty, but on-disk history at `/logs/files` is intact.
 
-There is no built-in size cap on `DROVER_LOG_DIR` itself. Per-file
-rotation keeps individual files at or below `DROVER_LOG_MAX_FILE_BYTES`
-(default 10 MiB), but a long-running noisy container will accumulate
-many files. Monitor disk usage on the volume.
+There is no built-in size cap on `/var/lib/drover/logs/` itself.
+Per-file rotation keeps individual files at or below
+`DROVER_LOG_MAX_FILE_BYTES` (default 10 MiB), but a long-running noisy
+container will accumulate many files. Monitor disk usage on the volume.
 
 ---
 
@@ -220,7 +228,7 @@ Auto-recovery on space recovery is intentionally not attempted; recovery
 procedure is:
 
 ```bash
-# 1. Free space on the volume that holds DROVER_LOG_DIR.
+# 1. Free space on the host directory bound to /var/lib/drover/logs.
 # 2. Restart the orchestrator container.
 docker compose restart orchestrator
 ```
@@ -232,7 +240,7 @@ because they read directly from Docker.
 
 ## 7. Lifecycle and retention guarantees
 
-| Container event | What happens to `{DROVER_LOG_DIR}/{id}/` |
+| Container event | What happens to `/var/lib/drover/logs/{id}/` |
 |---|---|
 | `initializing`, after Docker `start_container` succeeds | Directory created. `0.log` opened. Capture begins **before** the guest agent connects. This catches init-failure output. |
 | `initializing` → `running` | No log-layer change; capture is already running. |
@@ -242,22 +250,22 @@ because they read directly from Docker.
 | any non-destroyed state → `destroyed` | Directory is removed. This applies to `error` and `initializing` rows too — a destroyed container has no logs. |
 | Orchestrator restart | The startup sync re-opens a follow stream for each `running` row, using the persisted `.cursor` so the gap is small. May produce up to one second of duplicate records (Docker's `since=` parameter is integer-second precision). |
 
-Permission note: the orchestrator runs as UID 1000. The default
-Dockerfile creates `/var/lib/orchestrator` with that ownership, so
-`DROVER_LOG_DIR=/var/lib/orchestrator/logs` works out of the box. If
-you mount `DROVER_LOG_DIR` somewhere else, ensure UID 1000 can create
-files and directories in it — the first-write failure manifests as the
-disk-full path described in §6 and silently disables capture for the
-rest of the process lifetime.
+Permission note: the orchestrator runs as UID 1000. The Dockerfile
+creates `/var/lib/drover/logs` with that ownership, so capture works
+out of the box. If the host directory you bind to that path is owned
+by a different UID, ensure UID 1000 can create files and directories
+in it — the first-write failure manifests as the disk-full path
+described in §6 and silently disables capture for the rest of the
+process lifetime.
 
 ---
 
 ## 8. Live tail
 
 `GET /containers/{id}/logs` proxies Docker's logs API directly and
-returns `text/plain`. It does **not** read from `DROVER_LOG_DIR` in the
-current implementation; it is purely a live tail of Docker's own
-buffer. A follow-up plan will broaden this endpoint with consistent
+returns `text/plain`. It does **not** read from `/var/lib/drover/logs/`
+in the current implementation; it is purely a live tail of Docker's
+own buffer. A follow-up plan will broaden this endpoint with consistent
 pagination (`since`/`until`/`limit`/`offset`) and have it read from
 disk when retention is enabled. Until then:
 

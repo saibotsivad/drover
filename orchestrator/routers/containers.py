@@ -167,7 +167,8 @@ async def list_log_files(container_id: str, request: Request) -> list[str]:
 
     Returns ``[]`` when retention is enabled but the container has no
     captured logs (e.g. discarded after destroy, or row predates
-    ``DROVER_LOG_DIR``).  Returns 409 when retention is disabled.
+    ``DROVER_ENABLE_CONTAINER_LOGS=true``).  Returns 409 when retention
+    is disabled.
     """
     await _ensure_container_exists(request, container_id)
     try:
