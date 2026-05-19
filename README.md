@@ -36,7 +36,7 @@ To run this system, the host requires:
 
 ### Container paths and host bindings
 
-Paths **inside** the orchestrator container are fixed and not configurable. The operator binds host paths to those fixed in-container locations.
+The orchestrator container internally uses the following bindable paths, the operator binds host paths to those in-container locations.
 
 | In-container path | Purpose |
 |---|---|
