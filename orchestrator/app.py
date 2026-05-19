@@ -338,9 +338,8 @@ def _docker_sock_hint(sock_path: str) -> str | None:
             f"{sock_path} is a directory inside the container, not a socket. "
             "Docker created it because the bind-mount source path does not "
             "exist on the host. For rootless Docker the socket lives at "
-            "/run/user/$UID/docker.sock — set DROVER_DOCKER_SOCK on the host "
-            "(e.g. DROVER_DOCKER_SOCK=$XDG_RUNTIME_DIR/docker.sock) and "
-            "recreate the stack."
+            "/run/user/$UID/docker.sock — bind that host path to "
+            "/var/run/docker.sock in your compose file and recreate the stack."
         )
     return f"{sock_path} exists but is not a Unix socket (mode={oct(st.st_mode)})."
 

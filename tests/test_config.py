@@ -1,20 +1,29 @@
-import os
+from orchestrator.config import (
+    Config,
+    DB_PATH,
+    DOCKER_SOCK,
+    LOG_DIR,
+    SOCKET_DIR,
+    load_config,
+)
 
-from orchestrator.config import Config, load_config
+
+def _clear_env(monkeypatch):
+    """Strip every Drover-relevant env var so load_config sees a clean slate."""
+    for name in (
+        "PRIVILEGED_IMAGE",
+        "REAPER_INTERVAL_SECONDS",
+        "DROVER_INIT_TIMEOUT_SECONDS",
+        "LOG_LEVEL",
+        "DROVER_API_KEY",
+        "DROVER_ENABLE_CONTAINER_LOGS",
+        "DROVER_LOG_MAX_FILE_BYTES",
+    ):
+        monkeypatch.delenv(name, raising=False)
 
 
 def test_load_config_defaults(monkeypatch):
-    monkeypatch.delenv("PRIVILEGED_IMAGE", raising=False)
-    monkeypatch.delenv("DROVER_DB_PATH", raising=False)
-    monkeypatch.delenv("DROVER_SOCKET_DIR", raising=False)
-    monkeypatch.delenv("DROVER_DOCKER_SOCK", raising=False)
-    monkeypatch.delenv("REAPER_INTERVAL_SECONDS", raising=False)
-    monkeypatch.delenv("DROVER_INIT_TIMEOUT_SECONDS", raising=False)
-    monkeypatch.delenv("LOG_LEVEL", raising=False)
-    monkeypatch.delenv("DROVER_API_KEY", raising=False)
-    monkeypatch.delenv("DROVER_ENABLE_CONTAINER_LOGS", raising=False)
-    monkeypatch.delenv("DROVER_LOG_MAX_FILE_BYTES", raising=False)
-
+    _clear_env(monkeypatch)
     config = load_config()
 
     assert config.privileged_image is None
@@ -29,11 +38,31 @@ def test_load_config_defaults(monkeypatch):
     assert config.log_max_file_bytes == 10 * 1024 * 1024
 
 
-def test_load_config_from_env(monkeypatch):
-    monkeypatch.setenv("PRIVILEGED_IMAGE", "my-priv-image")
+def test_paths_are_fixed_constants(monkeypatch):
+    """Path defaults are module-level constants, not env-driven."""
+    assert DB_PATH == "/var/lib/drover/data/db.sqlite"
+    assert SOCKET_DIR == "/var/run/drover/sockets"
+    assert DOCKER_SOCK == "/var/run/docker.sock"
+    assert LOG_DIR == "/var/lib/drover/logs"
+
+
+def test_path_env_vars_are_ignored(monkeypatch):
+    """No DROVER_DB_PATH / DROVER_SOCKET_DIR / DROVER_DOCKER_SOCK escape hatch."""
+    _clear_env(monkeypatch)
     monkeypatch.setenv("DROVER_DB_PATH", "/tmp/test.db")
     monkeypatch.setenv("DROVER_SOCKET_DIR", "/tmp/socks")
     monkeypatch.setenv("DROVER_DOCKER_SOCK", "/tmp/docker.sock")
+
+    config = load_config()
+
+    assert config.db_path == DB_PATH
+    assert config.socket_dir == SOCKET_DIR
+    assert config.docker_sock == DOCKER_SOCK
+
+
+def test_load_config_tunables_from_env(monkeypatch):
+    _clear_env(monkeypatch)
+    monkeypatch.setenv("PRIVILEGED_IMAGE", "my-priv-image")
     monkeypatch.setenv("REAPER_INTERVAL_SECONDS", "30")
     monkeypatch.setenv("DROVER_INIT_TIMEOUT_SECONDS", "45")
     monkeypatch.setenv("LOG_LEVEL", "debug")
@@ -44,9 +73,6 @@ def test_load_config_from_env(monkeypatch):
     config = load_config()
 
     assert config.privileged_image == "my-priv-image"
-    assert config.db_path == "/tmp/test.db"
-    assert config.socket_dir == "/tmp/socks"
-    assert config.docker_sock == "/tmp/docker.sock"
     assert config.reaper_interval_seconds == 30
     assert config.init_timeout_seconds == 45
     assert config.log_level == "DEBUG"
@@ -57,6 +83,7 @@ def test_load_config_from_env(monkeypatch):
 
 def test_enable_container_logs_only_true_string_enables(monkeypatch):
     """Only the exact string "true" turns capture on."""
+    _clear_env(monkeypatch)
     for value in ("1", "TRUE", "True", "yes", "on", ""):
         monkeypatch.setenv("DROVER_ENABLE_CONTAINER_LOGS", value)
         assert load_config().log_dir is None, f"value {value!r} should not enable"

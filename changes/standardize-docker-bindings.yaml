@@ -1,0 +1,27 @@
+- project: orchestrator
+  bump: patch
+  description: |
+    Standardize the container-internal paths and host-bind contract.
+
+    In-container paths are now fixed and not configurable:
+    `/var/lib/drover/data/db.sqlite` (SQLite + future config),
+    `/var/lib/drover/logs/` (captured micro-container logs when
+    `DROVER_ENABLE_CONTAINER_LOGS=true`), `/var/run/docker.sock`
+    (host Docker daemon), and `/var/run/drover/sockets/` (per-
+    micro-container Unix sockets).
+
+    Removed the path-override env vars `DROVER_DB_PATH`,
+    `DROVER_SOCKET_DIR`, and `DROVER_DOCKER_SOCK` from the
+    orchestrator — they are no longer read. Operators bind host
+    paths to the fixed container-internal locations instead.
+
+    Sample `docker-compose.yml` now uses host bind mounts under
+    `./data` and `./logs` (overridable via `DROVER_DATA_DIR` and
+    `DROVER_LOGS_DIR` compose-level env vars) and a host-side
+    `DROVER_HOST_DOCKER_SOCK` for the Docker socket. The
+    per-micro-container sockets directory is bound at
+    `/var/run/drover/sockets:/var/run/drover/sockets` (the host
+    path must match the container path because Docker resolves
+    nested bind-mount sources against the host filesystem). The
+    orchestrator entrypoint chowns that directory to UID 1000
+    on startup, so no host-side pre-creation is required.

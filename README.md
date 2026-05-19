@@ -36,16 +36,22 @@ To run this system, the host requires:
 
 ### Container paths and host bindings
 
-Paths **inside** the orchestrator container are fixed. The operator binds host paths to those fixed in-container locations. The defaults are sane for rootless Docker, and environment variables exist as overrides for unusual setups.
+Paths **inside** the orchestrator container are fixed and not configurable. The operator binds host paths to those fixed in-container locations.
 
-| In-container path | Purpose | Override env var |
+| In-container path | Purpose |
+|---|---|
+| `/var/lib/drover/data/` | SQLite database (at `db.sqlite`) and future config files. |
+| `/var/lib/drover/logs/` | Captured micro-container stdout/stderr (only written when `DROVER_ENABLE_CONTAINER_LOGS=true`); also reserved for any future orchestrator-internal log files. |
+| `/var/run/docker.sock` | Host Docker daemon socket (bind-mounted in from the host). |
+| `/var/run/drover/sockets/` | Per-micro-container Unix sockets. Bind-mount the host path at the **same path** (i.e. `/var/run/drover/sockets:/var/run/drover/sockets`) because Docker resolves nested bind-mount sources against the host filesystem. The orchestrator entrypoint chowns this directory to UID 1000 on startup, so no host-side pre-creation is required. |
+
+The sample [`docker-compose.yml`](docker-compose.yml) shows the recommended host bindings. Two host-side bind paths are operator-configurable via compose-level env vars (with sane defaults that work for most homelab setups):
+
+| Compose env var | Default host path | Bound to |
 |---|---|---|
-| `/var/lib/drover/data/` | SQLite database (at `db.sqlite`) and future config files | `DROVER_DB_PATH` (full path to the SQLite file) |
-| `/var/lib/drover/logs/` | Captured micro-container stdout/stderr (only written when `DROVER_ENABLE_CONTAINER_LOGS=true`); also reserved for any future orchestrator-internal log files | _(fixed; not configurable)_ |
-| `/var/run/docker.sock` | Host Docker daemon socket (bind-mounted in from the host) | `DROVER_DOCKER_SOCK` |
-| `/var/run/drover/sockets/` | Per-micro-container Unix sockets. Must be bind-mounted from the host at the **same path**, because Docker resolves nested bind-mount sources against the host filesystem. | `DROVER_SOCKET_DIR` |
-
-The sample [`docker-compose.yml`](docker-compose.yml) shows the recommended host bindings (`./data`, `./logs`, `./sockets` next to the compose file).
+| `DROVER_DATA_DIR` | `./data` | `/var/lib/drover/data` |
+| `DROVER_LOGS_DIR` | `./logs` | `/var/lib/drover/logs` |
+| `DROVER_HOST_DOCKER_SOCK` | `/var/run/docker.sock` | `/var/run/docker.sock` (set to `$XDG_RUNTIME_DIR/docker.sock` for rootless Docker) |
 
 ### Environment variables
 
@@ -53,9 +59,6 @@ The sample [`docker-compose.yml`](docker-compose.yml) shows the recommended host
 |---|---|---|---|
 | `DROVER_API_KEY` | No | _(unset)_ | SHA-256 hash of the API key. When set, all API requests (except `GET /health`) require a valid `Authorization: Bearer <key>` header. See [Authentication](#authentication). |
 | `PRIVILEGED_IMAGE` | No | _(unset)_ | Docker image for privileged micro-containers. If unset, privileged container requests are rejected. |
-| `DROVER_DB_PATH` | No | `/var/lib/drover/data/db.sqlite` | Path to the SQLite database file (inside the container). |
-| `DROVER_SOCKET_DIR` | No | `/var/run/drover/sockets` | Directory for per-container Unix socket files. Inside-container path must match the host path (see above). |
-| `DROVER_DOCKER_SOCK` | No | `/var/run/docker.sock` | Path to the Docker daemon Unix socket inside the container. |
 | `REAPER_INTERVAL_SECONDS` | No | `5` | How often (in seconds) the idle-timeout reaper runs. |
 | `DROVER_INIT_TIMEOUT_SECONDS` | No | `20` | Maximum time a container may spend in `initializing` before the watchdog transitions it to `error`. |
 | `LOG_LEVEL` | No | `INFO` | Python log level (`DEBUG`, `INFO`, `WARNING`, `ERROR`). |
@@ -83,10 +86,10 @@ trade-off vs. Docker's own log driver.
 
 | Host Path | Container Path | Purpose |
 |---|---|---|
-| `/run/user/1000/docker.sock` | `/var/run/docker.sock` | Docker-out-of-Docker: talks to the host Docker daemon |
-| `/var/run/drover/sockets/` | `/var/run/drover/sockets/` | Per-micro-container Unix sockets (must be the same path on both sides) |
-| `./data/` (or anywhere) | `/var/lib/drover/data/` | Persistent state — SQLite database lives here |
-| `./logs/` (or anywhere) | `/var/lib/drover/logs/` | Captured micro-container logs (when `DROVER_ENABLE_CONTAINER_LOGS=true`) |
+| `/run/user/1000/docker.sock` | `/var/run/docker.sock` | Docker-out-of-Docker: talks to the host Docker daemon. Host path overridable via `DROVER_HOST_DOCKER_SOCK`. |
+| `/var/run/drover/sockets/` | `/var/run/drover/sockets/` | Per-micro-container Unix sockets. Must be the same path on both sides. |
+| `./data/` (or `DROVER_DATA_DIR`) | `/var/lib/drover/data/` | Persistent state — SQLite database lives here. |
+| `./logs/` (or `DROVER_LOGS_DIR`) | `/var/lib/drover/logs/` | Captured micro-container logs (when `DROVER_ENABLE_CONTAINER_LOGS=true`). |
 
 ### Dependencies
 
