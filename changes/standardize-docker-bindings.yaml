@@ -8,12 +8,22 @@
     `/var/lib/drover/logs/` (captured micro-container logs when
     `DROVER_ENABLE_CONTAINER_LOGS=true`), `/var/run/docker.sock`
     (host Docker daemon), and `/var/run/drover/sockets/` (per-
-    micro-container Unix sockets).
+    micro-container Unix sockets). Removed the path-override env
+    vars `DROVER_DB_PATH`, `DROVER_SOCKET_DIR`, and
+    `DROVER_DOCKER_SOCK` from the orchestrator.
 
-    Removed the path-override env vars `DROVER_DB_PATH`,
-    `DROVER_SOCKET_DIR`, and `DROVER_DOCKER_SOCK` from the
-    orchestrator — they are no longer read. Operators bind host
-    paths to the fixed container-internal locations instead.
+    Privileged-container bind fix: previously the orchestrator used
+    its in-container view of the Docker socket
+    (`/var/run/docker.sock`) as the bind source when launching
+    privileged micro-containers, which silently broke under rootless
+    Docker (the host socket lives at `/run/user/$UID/docker.sock`,
+    so Docker resolved the bind source against a non-existent host
+    path and bound an empty directory at `/run/docker.sock` inside
+    the privileged micro-container). The orchestrator now
+    self-inspects through the Docker API at startup, reads the
+    `Source` of its own `/var/run/docker.sock` mount, and uses that
+    host path as the bind source. No new environment variable is
+    required.
 
     Sample `docker-compose.yml` now uses host bind mounts under
     `./data` and `./logs` (overridable via `DROVER_DATA_DIR` and

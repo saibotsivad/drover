@@ -13,7 +13,7 @@ from fastapi import FastAPI, Request
 from starlette.responses import JSONResponse, Response
 
 from orchestrator.auth import auth_middleware
-from orchestrator.config import Config, load_config
+from orchestrator.config import DOCKER_SOCK, Config, load_config
 from orchestrator.container_manager import ContainerManager
 from orchestrator.database import Database
 from orchestrator.docker_client import DockerClient
@@ -205,6 +205,57 @@ async def _reaper_loop(
             logger.exception("Reaper loop encountered an error")
 
 
+async def _resolve_host_docker_sock(
+    docker: DockerClient, own_id: str | None
+) -> str:
+    """Return the host-side path of the Docker daemon socket.
+
+    The orchestrator passes this string to Docker as the bind SOURCE
+    when launching privileged micro-containers.  Docker resolves bind
+    sources against the host filesystem, not the orchestrator's view
+    of its own filesystem, so the in-container path
+    (``/var/run/docker.sock``) is wrong when the host socket lives
+    elsewhere (rootless Docker: ``/run/user/$UID/docker.sock``).
+
+    We discover the right value by self-inspecting: the orchestrator
+    asks Docker for its own container's record and reads the ``Source``
+    of the mount whose ``Destination`` is ``/var/run/docker.sock``.
+    When self-inspect can't run (own container id detection failed) or
+    no matching mount is present, we fall back to
+    ``/var/run/docker.sock`` and warn — that fallback only happens to
+    be correct on rootful Docker.
+    """
+    if own_id is not None:
+        try:
+            info = await docker.inspect_container(own_id)
+            for mount in info.get("Mounts", []) or []:
+                if mount.get("Destination") == DOCKER_SOCK:
+                    source = mount.get("Source")
+                    if source:
+                        logger.info(
+                            "Host Docker socket path from self-inspect: %s",
+                            source,
+                        )
+                        return source
+            logger.warning(
+                "Self-inspect succeeded but no mount with destination %s "
+                "was found; privileged container launches may fail.",
+                DOCKER_SOCK,
+            )
+        except Exception:
+            logger.exception(
+                "Self-inspect failed while resolving host Docker socket path"
+            )
+    logger.warning(
+        "Falling back to %s as the host Docker socket path. This only "
+        "happens to be correct on rootful Docker; on rootless Docker the "
+        "host socket lives at /run/user/$UID/docker.sock and privileged "
+        "container launches will receive an empty directory at /run/docker.sock.",
+        DOCKER_SOCK,
+    )
+    return DOCKER_SOCK
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     config = load_config()
@@ -219,23 +270,6 @@ async def lifespan(app: FastAPI):
     docker = DockerClient(config)
     sockets = SocketManager(config, db)
     log_capture = LogCaptureManager(config, docker)
-
-    container_manager = ContainerManager(config, db, docker, sockets, log_capture)
-    await container_manager.sync_containers()
-
-    async def _handle_container_done(container_id: str) -> None:
-        try:
-            await container_manager.stop_container(container_id)
-            logger.info("Container %s stopped via done signal", container_id)
-        except (ContainerStateConflict, ContainerNotFound):
-            pass
-        except Exception:
-            logger.exception(
-                "Failed to stop container %s after done signal", container_id
-            )
-
-    sockets.set_done_callback(_handle_container_done)
-    sockets.set_ready_callback(container_manager.on_container_ready)
 
     own_id = _detect_own_container_id()
     if own_id is None:
@@ -262,6 +296,27 @@ async def lifespan(app: FastAPI):
     else:
         logger.info("Detected orchestrator container ID: %s", own_id)
 
+    host_docker_sock = await _resolve_host_docker_sock(docker, own_id)
+
+    container_manager = ContainerManager(
+        config, db, docker, sockets, log_capture, host_docker_sock=host_docker_sock
+    )
+    await container_manager.sync_containers()
+
+    async def _handle_container_done(container_id: str) -> None:
+        try:
+            await container_manager.stop_container(container_id)
+            logger.info("Container %s stopped via done signal", container_id)
+        except (ContainerStateConflict, ContainerNotFound):
+            pass
+        except Exception:
+            logger.exception(
+                "Failed to stop container %s after done signal", container_id
+            )
+
+    sockets.set_done_callback(_handle_container_done)
+    sockets.set_ready_callback(container_manager.on_container_ready)
+
     app.state.config = config
     app.state.db = db
     app.state.docker = docker
@@ -269,6 +324,7 @@ async def lifespan(app: FastAPI):
     app.state.log_capture = log_capture
     app.state.container_manager = container_manager
     app.state.orchestrator_docker_id = own_id
+    app.state.host_docker_sock = host_docker_sock
 
     reaper_task = asyncio.create_task(
         _reaper_loop(config, db, container_manager)

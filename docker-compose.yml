@@ -34,6 +34,13 @@
 # or put it in a .env file next to this compose.yml. The orchestrator
 # entrypoint detects the socket's GID at runtime, so no further setup
 # is needed.
+#
+# The orchestrator self-inspects through the Docker API at startup to
+# learn the HOST path of /var/run/docker.sock so it can pass the right
+# bind source when launching privileged micro-containers. You do NOT
+# need to pass that path in as an orchestrator environment variable —
+# whatever the compose volume above resolves to is what Docker reports
+# back to the orchestrator.
 
 services:
   orchestrator:

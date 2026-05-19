@@ -78,7 +78,9 @@ when `DROVER_ENABLE_CONTAINER_LOGS=true`):
 | `./data/` (overridable via `DROVER_DATA_DIR`) | `/var/lib/drover/data/` | Persistent SQLite database (and future config files). The SQLite file is created automatically on first start. |
 | `./logs/` (overridable via `DROVER_LOGS_DIR`) | `/var/lib/drover/logs/` | Captured micro-container stdout/stderr. Only needed when `DROVER_ENABLE_CONTAINER_LOGS=true`. |
 
-The container entrypoint runs as root just long enough to detect the GID of the mounted `docker.sock`, add the `orchestrator` user to a group with that GID, and then drops privileges via `gosu`. This works for both rootful Docker (socket owned by `root:docker`) and rootless Docker (socket owned by the invoking user) without baking a GID into the image.
+The container entrypoint runs as root just long enough to (a) detect the GID of the mounted `docker.sock` and add the `orchestrator` user to a group with that GID, and (b) chown `/var/run/drover/sockets` to UID 1000 so the orchestrator can write per-container sockets there. It then drops privileges via `gosu`. This works for both rootful Docker (socket owned by `root:docker`) and rootless Docker (socket owned by the invoking user) without baking a GID into the image.
+
+For privileged micro-containers (the ones that get the host Docker socket bind-mounted in at `/run/docker.sock`), the orchestrator needs the socket's path **on the host** to use as the bind source — Docker resolves nested bind-mount sources against the host filesystem, not the orchestrator's filesystem. The orchestrator self-inspects through the Docker API at startup to discover this: it reads its own container's `Mounts` and uses the `Source` of the mount whose `Destination` is `/var/run/docker.sock`. No environment variable is needed.
 
 A minimal `docker-compose.yml` is provided in the [repo root](../docker-compose.yml).
 

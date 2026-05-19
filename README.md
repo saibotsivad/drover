@@ -179,6 +179,8 @@ Both standard and privileged micro-containers share the same lifecycle, socket p
 
 A privileged micro-container uses the image named by `PRIVILEGED_IMAGE` directly and is not subject to the `drover.managed` label requirement. It also bypasses gVisor, allowing for more system interop as needed.
 
+To bind-mount the host Docker socket into a privileged micro-container, the orchestrator needs the socket's path **on the host**, not its in-container path — Docker resolves nested bind-mount sources against the host filesystem, not against the orchestrator's view. The orchestrator discovers the host path at startup by self-inspecting through the Docker API: it asks Docker for its own container's record and reads the `Source` of the mount whose `Destination` is `/var/run/docker.sock`. No environment variable is needed; the host path you set in the compose volume binding is what gets used.
+
 ### Socket Protocol
 
 The socket at `/run/orchestrator.sock` is the single bidirectional communication channel, carrying newline-delimited JSON. The guest agent connects once at startup and maintains a persistent connection.

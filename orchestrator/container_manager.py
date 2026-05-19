@@ -95,12 +95,21 @@ class ContainerManager:
         docker: DockerClient,
         sockets: SocketManager,
         log_capture: LogCaptureManager,
+        host_docker_sock: str,
     ) -> None:
         self._config = config
         self._db = db
         self._docker = docker
         self._sockets = sockets
         self._logs = log_capture
+        # Host-side path of the Docker daemon socket, resolved during
+        # lifespan startup (see app.py:_resolve_host_docker_sock).  Used
+        # only when launching a privileged micro-container, as the bind
+        # source — Docker resolves the source against the host
+        # filesystem, so the orchestrator's in-container view of the
+        # socket (always /var/run/docker.sock) is wrong here on
+        # rootless setups.
+        self._host_docker_sock = host_docker_sock
         # In-flight background initialization tasks keyed by container id.
         # Used for cancellation on ready-receipt and on orchestrator shutdown.
         self._init_tasks: dict[str, asyncio.Task] = {}
@@ -350,7 +359,7 @@ class ContainerManager:
 
             binds: list[str] = [f"{socket_path}:/run/orchestrator.sock"]
             if req.privileged:
-                binds.append(f"{self._config.docker_sock}:/run/docker.sock")
+                binds.append(f"{self._host_docker_sock}:/run/docker.sock")
 
             host_config: dict = {"Binds": binds}
             if not req.privileged:
