@@ -6,7 +6,7 @@
 # proxy). Set DROVER_API_KEY (in both services) before exposing the webapp
 # beyond a trusted LAN.
 #
-# Container paths inside the orchestrator are fixed:
+# Container paths inside the orchestrator are FIXED and not configurable:
 #
 #   /var/lib/drover/data       SQLite database (+ future config files)
 #   /var/lib/drover/logs       captured micro-container stdout/stderr
@@ -14,20 +14,33 @@
 #   /var/run/docker.sock       host Docker daemon socket
 #   /var/run/drover/sockets    per-micro-container Unix sockets
 #
-# This file binds host directories (alongside docker-compose.yml) to those
-# fixed in-container paths. The per-micro-container socket directory is
-# bind-mounted at the SAME path inside and outside the orchestrator because
-# Docker resolves nested bind-mount sources on the host filesystem.
+# The host-side bind paths below default to relative directories next to
+# this compose file, and can be overridden via DROVER_DATA_DIR /
+# DROVER_LOGS_DIR (e.g. in a .env file) when you want the data and logs
+# on a different filesystem.
+#
+# The per-micro-container socket directory MUST be /var/run/drover/sockets
+# on both the host and inside the orchestrator — Docker resolves nested
+# bind-mount sources against the host filesystem, so the path has to
+# match on both sides. The orchestrator entrypoint chowns the host
+# directory at startup, so you don't need to pre-create it.
 #
 # Rootless Docker note: the host Docker socket lives at /run/user/$UID/docker.sock,
-# not /var/run/docker.sock. Either export DROVER_DOCKER_SOCK before running compose:
+# not /var/run/docker.sock. Either export DROVER_HOST_DOCKER_SOCK before running compose:
 #
-#     export DROVER_DOCKER_SOCK=$XDG_RUNTIME_DIR/docker.sock   # or /run/user/$(id -u)/docker.sock
+#     export DROVER_HOST_DOCKER_SOCK=$XDG_RUNTIME_DIR/docker.sock   # or /run/user/$(id -u)/docker.sock
 #     docker compose up
 #
 # or put it in a .env file next to this compose.yml. The orchestrator
 # entrypoint detects the socket's GID at runtime, so no further setup
 # is needed.
+#
+# The orchestrator self-inspects through the Docker API at startup to
+# learn the HOST path of /var/run/docker.sock so it can pass the right
+# bind source when launching privileged micro-containers. You do NOT
+# need to pass that path in as an orchestrator environment variable —
+# whatever the compose volume above resolves to is what Docker reports
+# back to the orchestrator.
 
 services:
   orchestrator:
@@ -36,10 +49,10 @@ services:
     # build: ./orchestrator
     networks: [drover]
     volumes:
-      - ./data:/var/lib/drover/data
-      - ./logs:/var/lib/drover/logs
+      - ${DROVER_DATA_DIR:-./data}:/var/lib/drover/data
+      - ${DROVER_LOGS_DIR:-./logs}:/var/lib/drover/logs
       - /var/run/drover/sockets:/var/run/drover/sockets
-      - ${DROVER_DOCKER_SOCK:-/var/run/docker.sock}:/var/run/docker.sock
+      - ${DROVER_HOST_DOCKER_SOCK:-/var/run/docker.sock}:/var/run/docker.sock
     environment:
       LOG_LEVEL: INFO
       # Capture each micro-container's stdout/stderr to disk so the full

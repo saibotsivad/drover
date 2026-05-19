@@ -2,15 +2,13 @@ import os
 from dataclasses import dataclass
 
 
-# Fixed in-container paths.  See README.md "Container paths and host
-# bindings" for the binding contract — the operator binds host paths to
-# these container-internal locations; the orchestrator itself never sees
-# the host paths.
-DATA_DIR = "/var/lib/drover/data"
+# Fixed in-container paths.  These are NOT overridable from the
+# environment — the operator binds host paths to these container-internal
+# locations and the orchestrator never touches anything else.
+DB_PATH = "/var/lib/drover/data/db.sqlite"
 LOG_DIR = "/var/lib/drover/logs"
 SOCKET_DIR = "/var/run/drover/sockets"
 DOCKER_SOCK = "/var/run/docker.sock"
-DB_PATH = f"{DATA_DIR}/db.sqlite"
 
 
 @dataclass(frozen=True)
@@ -33,9 +31,9 @@ def load_config() -> Config:
     )
     return Config(
         privileged_image=os.environ.get("PRIVILEGED_IMAGE"),
-        db_path=os.environ.get("DROVER_DB_PATH", DB_PATH),
-        socket_dir=os.environ.get("DROVER_SOCKET_DIR", SOCKET_DIR),
-        docker_sock=os.environ.get("DROVER_DOCKER_SOCK", DOCKER_SOCK),
+        db_path=DB_PATH,
+        socket_dir=SOCKET_DIR,
+        docker_sock=DOCKER_SOCK,
         reaper_interval_seconds=int(
             os.environ.get("REAPER_INTERVAL_SECONDS", "5")
         ),

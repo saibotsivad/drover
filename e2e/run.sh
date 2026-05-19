@@ -19,9 +19,9 @@ E2E_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 REPO_DIR=$(cd -- "$E2E_DIR/.." && pwd)
 COMPOSE_FILE="$E2E_DIR/docker-compose.e2e.yml"
 
-# Load deterministic test env into this shell for `up` (so DROVER_SOCKET_DIR is
-# created with the right path) and for `test` (so the helpers know which
-# endpoints to hit).
+# Load deterministic test env into this shell for `up` (so
+# DROVER_SOCKETS_HOST_DIR is created with the right path) and for
+# `test` (so the helpers know which endpoints to hit).
 set -a
 # shellcheck disable=SC1091
 . "$E2E_DIR/.env.test"
@@ -32,14 +32,26 @@ compose() {
 	docker compose -f "$COMPOSE_FILE" "$@"
 }
 
+# Run a command as root via sudo when available, or directly when we
+# already are root (e.g. some CI containers).  Used for /var/run setup
+# the orchestrator's fixed sockets path needs.
+as_root() {
+	if [ "$(id -u)" -eq 0 ]; then
+		"$@"
+	else
+		sudo "$@"
+	fi
+}
+
 cmd_up() {
-	echo "==> Preparing host bind-mount $DROVER_SOCKET_DIR"
-	mkdir -p "$DROVER_SOCKET_DIR"
-	# DROVER_SOCKET_DIR is the parent that the orchestrator chowns/creates
-	# per-container sockets into. The orchestrator runs as a non-root
-	# user inside its container but reaches the host filesystem directly
-	# via the bind-mount, so the host directory needs to be world-rwx.
-	chmod 777 "$DROVER_SOCKET_DIR" || true
+	echo "==> Preparing host bind-mount $DROVER_SOCKETS_HOST_DIR"
+	# The orchestrator hardcodes /var/run/drover/sockets as its sockets
+	# directory; the host must expose that exact path so Docker's nested
+	# bind-mount resolution works. The orchestrator entrypoint chowns
+	# the directory to UID 1000 once the container starts, so all we
+	# need from the host side is for it to exist and be world-traversable.
+	as_root mkdir -p "$DROVER_SOCKETS_HOST_DIR"
+	as_root chmod 755 "$DROVER_SOCKETS_HOST_DIR" || true
 
 	echo "==> Building images from source"
 	compose build
@@ -94,13 +106,12 @@ cmd_down() {
 		docker rm -f $micro_ids >/dev/null 2>&1 || true
 	fi
 
-	# The bind-mount directory is owned by root after the orchestrator's
-	# socket activity. Clean it up so the next `up` starts fresh.
-	if [ -d "$DROVER_SOCKET_DIR" ]; then
-		echo "==> Cleaning $DROVER_SOCKET_DIR"
-		# `sudo` may not be available; ignore failures, the next `up`
-		# will chmod 777 over the top.
-		rm -rf "${DROVER_SOCKET_DIR:?}/"* 2>/dev/null || true
+	# The orchestrator chowned the host directory to UID 1000 on
+	# startup, so root removal is the only thing that reliably works.
+	# Best-effort: the next `up` will recreate as needed.
+	if [ -d "$DROVER_SOCKETS_HOST_DIR" ]; then
+		echo "==> Cleaning $DROVER_SOCKETS_HOST_DIR"
+		as_root rm -rf "${DROVER_SOCKETS_HOST_DIR:?}/"* 2>/dev/null || true
 	fi
 }
 

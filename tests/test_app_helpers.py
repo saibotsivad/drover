@@ -180,3 +180,66 @@ def test_detect_prefers_cgroup_over_mountinfo_and_hostname(
 	# Cgroup wins, so we get _HEX64 — not _HEX64_B from mountinfo, nor
 	# the short hostname.
 	assert orchestrator_app._detect_own_container_id() == _HEX64
+
+
+# ---------------------------------------------------------------------------
+# Host Docker socket resolution
+# ---------------------------------------------------------------------------
+
+
+class _StubDocker:
+	"""Records inspect_container calls and returns a canned Mounts payload."""
+
+	def __init__(self, mounts: list[dict] | None, raises: Exception | None = None):
+		self._mounts = mounts
+		self._raises = raises
+		self.calls: list[str] = []
+
+	async def inspect_container(self, container_id: str) -> dict:
+		self.calls.append(container_id)
+		if self._raises is not None:
+			raise self._raises
+		return {"Mounts": self._mounts or []}
+
+
+@pytest.mark.asyncio
+async def test_resolve_host_docker_sock_returns_self_inspect_source() -> None:
+	"""Auto-detect reads the Source from the mount whose Destination is the in-container Docker socket."""
+	docker = _StubDocker(
+		mounts=[
+			{"Destination": "/var/run/drover/sockets", "Source": "/var/run/drover/sockets"},
+			{"Destination": "/var/run/docker.sock", "Source": "/run/user/1000/docker.sock"},
+		],
+	)
+	resolved = await orchestrator_app._resolve_host_docker_sock(docker, "abc123")
+	assert resolved == "/run/user/1000/docker.sock"
+	assert docker.calls == ["abc123"]
+
+
+@pytest.mark.asyncio
+async def test_resolve_host_docker_sock_falls_back_when_own_id_missing() -> None:
+	"""No own_id → don't try to inspect; return the fixed-path default."""
+	docker = _StubDocker(mounts=None)
+	resolved = await orchestrator_app._resolve_host_docker_sock(docker, None)
+	assert resolved == "/var/run/docker.sock"
+	assert docker.calls == []  # never queried
+
+
+@pytest.mark.asyncio
+async def test_resolve_host_docker_sock_falls_back_when_inspect_raises() -> None:
+	"""Inspect failures don't crash the orchestrator; they fall back to the default."""
+	docker = _StubDocker(mounts=None, raises=RuntimeError("boom"))
+	resolved = await orchestrator_app._resolve_host_docker_sock(docker, "abc123")
+	assert resolved == "/var/run/docker.sock"
+
+
+@pytest.mark.asyncio
+async def test_resolve_host_docker_sock_falls_back_when_no_matching_mount() -> None:
+	"""If the operator forgot to mount the Docker socket, fall back to the default with a warning."""
+	docker = _StubDocker(
+		mounts=[
+			{"Destination": "/var/lib/drover/data", "Source": "/srv/drover-data"},
+		],
+	)
+	resolved = await orchestrator_app._resolve_host_docker_sock(docker, "abc123")
+	assert resolved == "/var/run/docker.sock"

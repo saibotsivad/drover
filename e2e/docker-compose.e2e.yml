@@ -6,13 +6,12 @@
 # any per-run setup.
 #
 # Notes:
-# - The socket directory is bind-mounted at the same path inside and
-#   outside the orchestrator container (/tmp/drover-sockets — overrides
-#   the fixed default of /var/run/drover/sockets so CI hosts don't need
-#   write access to /var/run). When the orchestrator asks the host
-#   Docker daemon to mount a per-container socket into a builder, Docker
-#   resolves the path against the host filesystem, so host and
-#   in-container paths must match.
+# - The per-micro-container socket directory is bind-mounted at the
+#   fixed in-container path /var/run/drover/sockets on both sides.
+#   `e2e/run.sh up` creates that host directory (with sudo) so the
+#   orchestrator user can write to it. The path must match on both
+#   sides because Docker resolves nested bind-mount sources against the
+#   host filesystem.
 # - DROVER_API_KEY here is the SHA-256 hex digest of the plain-text key
 #   "drover-e2e-test-key" (committed in e2e/.env.test). Both halves are
 #   intentionally checked into the repo: this stack only ever runs against
@@ -30,7 +29,6 @@ services:
     ports:
       - "8000:8000"
     environment:
-      DROVER_SOCKET_DIR: /tmp/drover-sockets
       PRIVILEGED_IMAGE: drover-builder:e2e
       LOG_LEVEL: INFO
       # Capture container stdout/stderr to disk so the e2e suite's
@@ -40,7 +38,7 @@ services:
     volumes:
       - drover-data:/var/lib/drover/data
       - drover-logs:/var/lib/drover/logs
-      - /tmp/drover-sockets:/tmp/drover-sockets
+      - /var/run/drover/sockets:/var/run/drover/sockets
       - /var/run/docker.sock:/var/run/docker.sock
 
   webapp:

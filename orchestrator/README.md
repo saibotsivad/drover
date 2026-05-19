@@ -34,16 +34,22 @@ The optional [webapp](../webapp/README.md) is a management UI that sits in front
 
 ## Configuration
 
-All configuration is via environment variables. The in-container paths
-below are the defaults; override them only when you must.
+In-container paths are FIXED — there is no environment-variable override
+for any path. The orchestrator always reads/writes:
+
+- SQLite at `/var/lib/drover/data/db.sqlite`
+- Captured logs under `/var/lib/drover/logs/`
+- Host Docker socket at `/var/run/docker.sock`
+- Per-micro-container Unix sockets at `/var/run/drover/sockets/`
+
+See [Mounts](#mounts) for the host-side bindings.
+
+Tunable environment variables:
 
 | Variable | Default | Description |
 |---|---|---|
 | `DROVER_API_KEY` | _(unset)_ | SHA-256 hash of the bearer token. When unset, authentication is disabled. |
 | `PRIVILEGED_IMAGE` | _(unset)_ | Docker image name for privileged micro-containers. Required to use `"privileged": true` on container create. |
-| `DROVER_DB_PATH` | `/var/lib/drover/data/db.sqlite` | Path to the SQLite database file (inside the container). |
-| `DROVER_SOCKET_DIR` | `/var/run/drover/sockets` | Directory where per-container Unix sockets are created. Must be bind-mounted at the same path on the host (Docker resolves nested bind-mount sources on the host filesystem). |
-| `DROVER_DOCKER_SOCK` | `/var/run/docker.sock` | Path to the Docker daemon socket inside the container. |
 | `REAPER_INTERVAL_SECONDS` | `5` | How often (in seconds) the idle-timeout reaper runs. |
 | `DROVER_INIT_TIMEOUT_SECONDS` | `20` | Seconds a container has to send `ready` before being marked `error`. |
 | `LOG_LEVEL` | `INFO` | Log verbosity (`DEBUG`, `INFO`, `WARNING`, `ERROR`). |
@@ -67,12 +73,14 @@ when `DROVER_ENABLE_CONTAINER_LOGS=true`):
 
 | Host path | Container path | Purpose |
 |---|---|---|
-| `/run/user/1000/docker.sock` | `/var/run/docker.sock` | Docker-out-of-Docker (rootless). Adjust the host path to match your UID. |
-| `/var/run/drover/sockets/` | `/var/run/drover/sockets/` | Per-container Unix sockets. Must use the same path on both sides — Docker resolves nested bind-mount sources against the host filesystem. |
-| `./data/` (or any host dir) | `/var/lib/drover/data/` | Persistent SQLite database (and future config files). Created automatically on first start. |
-| `./logs/` (or any host dir) | `/var/lib/drover/logs/` | Captured micro-container stdout/stderr. Only needed when `DROVER_ENABLE_CONTAINER_LOGS=true`. |
+| `/var/run/docker.sock` (or `$XDG_RUNTIME_DIR/docker.sock` for rootless) | `/var/run/docker.sock` | Docker-out-of-Docker. Host path overridable in the sample compose via `DROVER_HOST_DOCKER_SOCK`. |
+| `/var/run/drover/sockets/` | `/var/run/drover/sockets/` | Per-container Unix sockets. Must use the same path on both sides — Docker resolves nested bind-mount sources against the host filesystem. The entrypoint chowns it to UID 1000 on startup. |
+| `./data/` (overridable via `DROVER_DATA_DIR`) | `/var/lib/drover/data/` | Persistent SQLite database (and future config files). The SQLite file is created automatically on first start. |
+| `./logs/` (overridable via `DROVER_LOGS_DIR`) | `/var/lib/drover/logs/` | Captured micro-container stdout/stderr. Only needed when `DROVER_ENABLE_CONTAINER_LOGS=true`. |
 
-The container entrypoint runs as root just long enough to detect the GID of the mounted `docker.sock`, add the `orchestrator` user to a group with that GID, and then drops privileges via `gosu`. This works for both rootful Docker (socket owned by `root:docker`) and rootless Docker (socket owned by the invoking user) without baking a GID into the image.
+The container entrypoint runs as root just long enough to (a) detect the GID of the mounted `docker.sock` and add the `orchestrator` user to a group with that GID, and (b) chown `/var/run/drover/sockets` to UID 1000 so the orchestrator can write per-container sockets there. It then drops privileges via `gosu`. This works for both rootful Docker (socket owned by `root:docker`) and rootless Docker (socket owned by the invoking user) without baking a GID into the image.
+
+For privileged micro-containers (the ones that get the host Docker socket bind-mounted in at `/run/docker.sock`), the orchestrator needs the socket's path **on the host** to use as the bind source — Docker resolves nested bind-mount sources against the host filesystem, not the orchestrator's filesystem. The orchestrator self-inspects through the Docker API at startup to discover this: it reads its own container's `Mounts` and uses the `Source` of the mount whose `Destination` is `/var/run/docker.sock`. No environment variable is needed.
 
 A minimal `docker-compose.yml` is provided in the [repo root](../docker-compose.yml).
 
@@ -212,7 +220,7 @@ The [webapp](../webapp/README.md) can hold the token and inject it into proxied 
 
 ## Socket protocol
 
-The orchestrator and guest agents communicate over a per-container Unix socket using newline-delimited JSON. The socket is created in `DROVER_SOCKET_DIR` (default `/var/run/drover/sockets/`) before the container starts and passed to the micro-container at `/run/orchestrator.sock` via a bind mount.
+The orchestrator and guest agents communicate over a per-container Unix socket using newline-delimited JSON. The socket is created in `/var/run/drover/sockets/` before the container starts and passed to the micro-container at `/run/orchestrator.sock` via a bind mount.
 
 **Guest → Orchestrator:**
 
@@ -234,7 +242,7 @@ The [executor](../executor/README.md) library implements this protocol for Pytho
 
 ## Database
 
-The orchestrator uses SQLite (via aiosqlite) in WAL mode. The database is created automatically on first start at `DROVER_DB_PATH` (default `/var/lib/drover/data/db.sqlite`).
+The orchestrator uses SQLite (via aiosqlite) in WAL mode. The database is created automatically on first start at the fixed path `/var/lib/drover/data/db.sqlite`.
 
 **`containers`** — one row per container, retained after destruction for audit purposes.
 

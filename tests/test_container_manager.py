@@ -65,7 +65,10 @@ def log_capture(config):
 
 @pytest.fixture
 def manager(config, db, docker, sockets, log_capture):
-    return ContainerManager(config, db, docker, sockets, log_capture)
+    return ContainerManager(
+        config, db, docker, sockets, log_capture,
+        host_docker_sock="/var/run/docker.sock",
+    )
 
 
 # -- helpers ----------------------------------------------------------------
@@ -157,7 +160,9 @@ async def test_create_privileged_with_config(config, db, docker, sockets):
         log_max_file_bytes=config.log_max_file_bytes,
     )
     mgr = ContainerManager(
-        priv_config, db, docker, sockets, LogCaptureManager(priv_config, docker=None)
+        priv_config, db, docker, sockets,
+        LogCaptureManager(priv_config, docker=None),
+        host_docker_sock="/host/path/docker.sock",
     )
     resp = await mgr.create_container(
         CreateContainerRequest(image="ignored", privileged=True)
@@ -168,6 +173,12 @@ async def test_create_privileged_with_config(config, db, docker, sockets):
     await _await_init(mgr, resp.id)
     create_arg = docker.create_container.call_args.args[0]
     assert create_arg["Image"] == "my-priv-image"
+    # The privileged bind must use the resolved HOST docker.sock path,
+    # not the in-container path — Docker resolves bind sources against
+    # the host filesystem, and on rootless setups the in-container
+    # /var/run/docker.sock is bound from /run/user/$UID/docker.sock.
+    binds = create_arg["HostConfig"]["Binds"]
+    assert "/host/path/docker.sock:/run/docker.sock" in binds
 
 
 async def test_create_docker_failure_transitions_to_error(
@@ -699,7 +710,10 @@ def log_capture_real(log_config, streamer):
 
 @pytest.fixture
 def manager_with_logs(log_config, db, docker, sockets, log_capture_real):
-    return ContainerManager(log_config, db, docker, sockets, log_capture_real)
+    return ContainerManager(
+        log_config, db, docker, sockets, log_capture_real,
+        host_docker_sock="/var/run/docker.sock",
+    )
 
 
 async def _await_first_log_line(log_capture, container_id, timeout=2.0):
