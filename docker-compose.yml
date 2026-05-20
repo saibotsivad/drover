@@ -51,8 +51,8 @@ services:
     volumes:
       - ${DROVER_DATA_DIR:-./data}:/var/lib/drover/data
       - ${DROVER_LOGS_DIR:-./logs}:/var/lib/drover/logs
-      - /var/run/drover/sockets:/var/run/drover/sockets
-      - ${DROVER_HOST_DOCKER_SOCK:-/var/run/docker.sock}:/var/run/docker.sock
+      - ${DROVER_SOCKETS_DIR:-./sockets}:/var/run/drover/sockets
+      - ${DROVER_HOST_DOCKER_SOCK:-/run/user/1000/docker.sock}:/var/run/docker.sock
     environment:
       LOG_LEVEL: INFO
       # Capture each micro-container's stdout/stderr to disk so the full
