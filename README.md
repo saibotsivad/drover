@@ -29,29 +29,23 @@ This is conceptually similar to AWS Lambda: a caller creates an image and sends 
 
 To run this system, the host requires:
 
-1. **Docker in rootless mode** running as the operator user
+1. **Docker** in rootless mode running as the operator user, or rootful
 2. **The orchestrator container** started with the mounts described below
 3. **At least one micro-container image** built with the required Drover labels (`drover.managed=true` and `drover.name=<name>`) so the orchestrator has something to launch (see [Image Management](#image-management))
 4. (Optional) **A privileged container image** built and available on the host (required only if privileged micro-containers will be used)
 
 ### Container paths and host bindings
 
-The orchestrator container internally uses the following bindable paths, the operator binds host paths to those in-container locations.
+The orchestrator container internally uses the following bindable paths, the operator binds host paths to the in-container locations.
 
 | In-container path | Purpose |
 |---|---|
 | `/var/lib/drover/data/` | SQLite database (at `db.sqlite`) and future config files. |
-| `/var/lib/drover/logs/` | Captured micro-container stdout/stderr (only written when `DROVER_ENABLE_CONTAINER_LOGS=true`); also reserved for any future orchestrator-internal log files. |
-| `/var/run/docker.sock` | Host Docker daemon socket (bind-mounted in from the host). |
-| `/var/run/drover/sockets/` | Per-micro-container Unix sockets. Bind-mount the host path at the **same path** (i.e. `/var/run/drover/sockets:/var/run/drover/sockets`) because Docker resolves nested bind-mount sources against the host filesystem. The orchestrator entrypoint chowns this directory to UID 1000 on startup, so no host-side pre-creation is required. |
+| `/var/lib/drover/logs/` | Orchestrator logs and captured micro-container stdout/stderr, only written when `DROVER_ENABLE_CONTAINER_LOGS=true` |
+| `/var/run/docker.sock` | Host Docker daemon socket, **must be** bind-mounted in from the host. |
+| `/var/run/drover/sockets/` | Per-micro-container Unix socket directory, **must be** bind-mounted in from the host path. The orchestrator entrypoint chowns this directory to UID 1000 on startup. |
 
-The sample [`docker-compose.yml`](docker-compose.yml) shows the recommended host bindings. Two host-side bind paths are operator-configurable via compose-level env vars (with sane defaults that work for most homelab setups):
-
-| Compose env var | Default host path | Bound to |
-|---|---|---|
-| `DROVER_DATA_DIR` | `./data` | `/var/lib/drover/data` |
-| `DROVER_LOGS_DIR` | `./logs` | `/var/lib/drover/logs` |
-| `DROVER_HOST_DOCKER_SOCK` | `/var/run/docker.sock` | `/var/run/docker.sock` (set to `$XDG_RUNTIME_DIR/docker.sock` for rootless Docker) |
+The sample [`docker-compose.yml`](docker-compose.yml) shows the recommended host bindings.
 
 ### Environment variables
 
@@ -62,21 +56,15 @@ The sample [`docker-compose.yml`](docker-compose.yml) shows the recommended host
 | `REAPER_INTERVAL_SECONDS` | No | `5` | How often (in seconds) the idle-timeout reaper runs. |
 | `DROVER_INIT_TIMEOUT_SECONDS` | No | `20` | Maximum time a container may spend in `initializing` before the watchdog transitions it to `error`. |
 | `LOG_LEVEL` | No | `INFO` | Python log level (`DEBUG`, `INFO`, `WARNING`, `ERROR`). |
-| `DROVER_ENABLE_CONTAINER_LOGS` | No | _(unset; capture disabled)_ | When set to the exact string `"true"`, Drover captures each micro-container's stdout/stderr to disk under `/var/lib/drover/logs/`. Any other value (or unset) leaves capture off. See [docs/observability.md](docs/observability.md). |
-| `DROVER_LOG_MAX_FILE_BYTES` | No | `10485760` (10 MiB) | Per-file size threshold for log rotation under `/var/lib/drover/logs/`. Ignored when capture is disabled. |
+| `DROVER_ENABLE_CONTAINER_LOGS` | No | _(unset; capture disabled)_ | When set to the exact string `"true"`, Drover captures each micro-container's stdout/stderr through the orchestrator. See [docs/observability.md](docs/observability.md). |
+| `DROVER_LOG_MAX_FILE_BYTES` | No | `10485760` (10 MiB) | Per-file size threshold for log rotation of orchestrator-captured micro-container logs. Ignored when capture is disabled. |
 
 ### Container log retention
 
-When `DROVER_ENABLE_CONTAINER_LOGS=true` (the sample `docker-compose.yml`
-enables this), Drover captures each micro-container's stdout/stderr to
-disk under `/var/lib/drover/logs/`. The full history survives container
-stop, orchestrator restart, and orchestrator upgrade, and is removed
-only when the container is destroyed. Captured files use Docker's
-`json-file` line format so Promtail, Vector, and Fluent Bit consume
-them without any Drover-specific configuration. See
-[docs/observability.md](docs/observability.md) for the full retention
-model, on-disk format, log-shipper examples, and the disk-usage
-trade-off vs. Docker's own log driver.
+When `DROVER_ENABLE_CONTAINER_LOGS=true` on the orchestrator, Drover captures each micro-container's stdout/stderr to the orchestrator under `/var/lib/drover/logs/` so that log history survives micro-container
+and orchestrator lifecycle events, and is removed
+only when the container is destroyed. See
+[docs/observability.md](docs/observability.md) for full retention model, on-disk format, and log-shipper examples.
 
 ---
 
