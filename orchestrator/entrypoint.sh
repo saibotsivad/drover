@@ -1,16 +1,16 @@
 #!/bin/sh
-# Runs as root just long enough to fix up two bind-mounted paths whose
+# Runs as root just long enough to fix up bind-mounted paths whose
 # host-side ownership we can't predict, then drops to UID 1000 via gosu.
 #
 # 1. The Docker socket's GID varies across hosts (rootful Docker uses the
 #    host's "docker" group; rootless Docker uses the invoking user's
 #    group), so we resolve it at runtime instead of baking a GID into the
 #    image.
-# 2. The per-micro-container socket directory is bind-mounted from the
-#    host at /var/run/drover/sockets. Docker creates a missing host
-#    directory as root:root mode 0755 by default, which UID 1000 can't
-#    write to. We chown it on every start so the operator never has to
-#    pre-create or chown the host directory.
+# 2. The data, logs, and per-micro-container socket directories are
+#    bind-mounted from the host. Docker creates a missing host directory
+#    as root:root mode 0755 by default, which UID 1000 can't write to.
+#    We chown all three on every start so the operator never has to
+#    pre-create or chown the host directories.
 #
 # The host Docker socket path inside the container is fixed at
 # /var/run/docker.sock; the sockets directory is fixed at
@@ -19,6 +19,8 @@
 set -e
 
 SOCK=/var/run/docker.sock
+DATA_DIR=/var/lib/drover/data
+LOG_DIR=/var/lib/drover/logs
 SOCKET_DIR=/var/run/drover/sockets
 
 if [ -S "$SOCK" ]; then
@@ -48,10 +50,11 @@ else
 	echo "entrypoint: warning: $SOCK exists but is not a socket; check the bind-mount source path." >&2
 fi
 
-# Ensure UID 1000 owns the sockets directory regardless of how the host
-# directory was created.  Idempotent and cheap; the directory only ever
-# holds short-lived per-container .sock files.
-mkdir -p "$SOCKET_DIR"
-chown orchestrator:orchestrator "$SOCKET_DIR"
+# Ensure UID 1000 owns the bind-mounted directories regardless of how the
+# host directories were created.  Docker creates a missing host bind-mount
+# source as root:root 0755, which UID 1000 can't write to.  Chowning here
+# is idempotent and cheap.
+mkdir -p "$DATA_DIR" "$LOG_DIR" "$SOCKET_DIR"
+chown orchestrator:orchestrator "$DATA_DIR" "$LOG_DIR" "$SOCKET_DIR"
 
 exec gosu orchestrator "$@"
