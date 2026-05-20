@@ -1,8 +1,0 @@
-- project: orchestrator
-  bump: patch
-  description: |
-    Fix startup crash on fresh deploys where the `./data` or `./logs` host
-    directories don't exist yet. Docker creates missing bind-mount source
-    directories as root-owned, which the orchestrator user (UID 1000) cannot
-    write to. The entrypoint now chowns the data and logs directories at
-    startup alongside the existing sockets-directory fix.
