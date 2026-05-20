@@ -10,10 +10,10 @@ Think of it something like a function-as-a-service where the functions are light
 
 | Term | Definition |
 |---|---|
-| **Host** | Bare metal machine running Docker (rootless) |
-| **Orchestrator** | A Docker container managing the micro-container fleet |
+| **Host** | Bare metal machine running Docker in [rootless](https://docs.docker.com/engine/security/rootless/) mode |
+| **Orchestrator** | Docker container managing the micro-container fleet |
 | **Micro-container** | Short-lived ephemeral containers managed by the orchestrator |
-| **Privileged micro-container** | A micro-container with access to the host Docker socket, for build and setup tasks |
+| **Privileged micro-container** | Micro-container with access to the host Docker socket, for build and setup tasks |
 
 ---
 
@@ -29,10 +29,14 @@ This is conceptually similar to AWS Lambda: a caller creates an image and sends 
 
 To run this system, the host requires:
 
-1. **Docker** in rootless mode running as the operator user, or rootful
+1. **Docker in rootless mode** running as the operator user
 2. **The orchestrator container** started with the mounts described below
 3. **At least one micro-container image** built with the required Drover labels (`drover.managed=true` and `drover.name=<name>`) so the orchestrator has something to launch (see [Image Management](#image-management))
 4. (Optional) **A privileged container image** built and available on the host (required only if privileged micro-containers will be used)
+
+---
+
+## Orchestrator Container
 
 ### Container paths and host bindings
 
@@ -40,44 +44,16 @@ The orchestrator container internally uses the following bindable paths, the ope
 
 | In-container path | Purpose |
 |---|---|
-| `/var/lib/drover/data/` | SQLite database (at `db.sqlite`) and future config files. |
-| `/var/lib/drover/logs/` | Orchestrator logs and captured micro-container stdout/stderr, only written when `DROVER_ENABLE_CONTAINER_LOGS=true` |
-| `/var/run/docker.sock` | Host Docker daemon socket, **must be** bind-mounted in from the host. |
-| `/var/run/drover/sockets/` | Per-micro-container Unix socket directory, **must be** bind-mounted in from the host path. The orchestrator entrypoint chowns this directory to UID 1000 on startup. |
+| `/var/lib/drover/data/` | Orchestrator database (SQLite) and config files. |
+| `/var/lib/drover/logs/` | Orchestrator logs and (if configured) the captured micro-container stdout/stderr |
+| `/var/run/docker.sock` | Host Docker daemon socket, **must** be bind-mounted in from the host. |
+| `/var/run/drover/sockets/` | Per-micro-container Unix socket directory, **must** be bind-mounted in from the host path. (The orchestrator entrypoint chowns this directory to UID 1000 on startup.) |
 
-The sample [`docker-compose.yml`](docker-compose.yml) shows the recommended host bindings.
+The Docker socket of the **host** container is usually in one of two places:
+- `/run/user/1000/docker.sock` in **rootless** mode
+- `/var/run/docker.sock` in **rootful** mode
 
-### Environment variables
-
-| Variable | Required | Default | Description |
-|---|---|---|---|
-| `DROVER_API_KEY` | No | _(unset)_ | SHA-256 hash of the API key. When set, all API requests (except `GET /health`) require a valid `Authorization: Bearer <key>` header. See [Authentication](#authentication). |
-| `PRIVILEGED_IMAGE` | No | _(unset)_ | Docker image for privileged micro-containers. If unset, privileged container requests are rejected. |
-| `REAPER_INTERVAL_SECONDS` | No | `5` | How often (in seconds) the idle-timeout reaper runs. |
-| `DROVER_INIT_TIMEOUT_SECONDS` | No | `20` | Maximum time a container may spend in `initializing` before the watchdog transitions it to `error`. |
-| `LOG_LEVEL` | No | `INFO` | Python log level (`DEBUG`, `INFO`, `WARNING`, `ERROR`). |
-| `DROVER_ENABLE_CONTAINER_LOGS` | No | _(unset; capture disabled)_ | When set to the exact string `"true"`, Drover captures each micro-container's stdout/stderr through the orchestrator. See [docs/observability.md](docs/observability.md). |
-| `DROVER_LOG_MAX_FILE_BYTES` | No | `10485760` (10 MiB) | Per-file size threshold for log rotation of orchestrator-captured micro-container logs. Ignored when capture is disabled. |
-
-### Container log retention
-
-When `DROVER_ENABLE_CONTAINER_LOGS=true` on the orchestrator, Drover captures each micro-container's stdout/stderr to the orchestrator under `/var/lib/drover/logs/` so that log history survives micro-container
-and orchestrator lifecycle events, and is removed
-only when the container is destroyed. See
-[docs/observability.md](docs/observability.md) for full retention model, on-disk format, and log-shipper examples.
-
----
-
-## Orchestrator Container
-
-### Host Mounts
-
-| Host Path | Container Path | Purpose |
-|---|---|---|
-| `/run/user/1000/docker.sock` | `/var/run/docker.sock` | Docker-out-of-Docker: talks to the host Docker daemon. Host path overridable via `DROVER_HOST_DOCKER_SOCK`. |
-| `/var/run/drover/sockets/` | `/var/run/drover/sockets/` | Per-micro-container Unix sockets. Must be the same path on both sides. |
-| `./data/` (or `DROVER_DATA_DIR`) | `/var/lib/drover/data/` | Persistent state — SQLite database lives here. |
-| `./logs/` (or `DROVER_LOGS_DIR`) | `/var/lib/drover/logs/` | Captured micro-container logs (when `DROVER_ENABLE_CONTAINER_LOGS=true`). |
+The sample [`docker-compose.yml`](docker-compose.yml) shows recommended host bindings.
 
 ### Dependencies
 
@@ -95,6 +71,23 @@ The orchestrator is built on FastAPI (with Uvicorn), aiosqlite for async SQLite 
 
 - Standard micro-containers run under gVisor (`--runtime=runsc`) for syscall interception
 - Orchestrator itself runs as UID 1000 to match the rootless Docker daemon
+
+### Environment variables
+
+| Variable | Required | Default | Description |
+|---|---|---|---|
+| `DROVER_API_KEY` | No | _(unset)_ | SHA-256 hash of the API key. When set, all API requests (except `GET /health`) require a valid `Authorization: Bearer <key>` header. See [Authentication](#authentication). |
+| `PRIVILEGED_IMAGE` | No | _(unset)_ | Docker image for privileged micro-containers. If unset, privileged container requests are rejected. |
+| `REAPER_INTERVAL_SECONDS` | No | `5` | How often (in seconds) the idle-timeout reaper runs. |
+| `DROVER_INIT_TIMEOUT_SECONDS` | No | `20` | Maximum time a container may spend in `initializing` before the watchdog transitions it to `error`. |
+| `LOG_LEVEL` | No | `INFO` | Python log level (`DEBUG`, `INFO`, `WARNING`, `ERROR`). |
+| `DROVER_ENABLE_CONTAINER_LOGS` | No | _(unset)_ | When set to the string `true`, Drover captures each micro-container's stdout/stderr through the orchestrator. See [docs/observability.md](docs/observability.md). |
+| `DROVER_LOG_MAX_FILE_BYTES` | No | `10485760` (10 MiB) | Per-file size threshold for log rotation of orchestrator-captured micro-container logs. Ignored when capture is disabled. |
+
+### Container log retention
+
+When `DROVER_ENABLE_CONTAINER_LOGS=true` on the orchestrator, Drover captures each micro-container's stdout/stderr to the orchestrator volume under the bindable path `/var/lib/drover/logs/` so that log history survives micro-container
+and orchestrator lifecycle events. See [docs/observability.md](docs/observability.md) for full retention model, on-disk format, and log-shipper examples.
 
 ---
 
