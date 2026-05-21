@@ -23,9 +23,13 @@ import logging
 import os
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
+from typing import TYPE_CHECKING
 
 from orchestrator.config import Config
 from orchestrator.database import Database
+
+if TYPE_CHECKING:
+    from orchestrator.connection_manager import ConnectionManager
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +47,16 @@ class SocketManager:
         self._tasks: dict[str, asyncio.Task] = {}
         self._done_callback: Callable[[str], Awaitable[None]] | None = None
         self._ready_callback: Callable[[str], Awaitable[None]] | None = None
+        self._connection_manager: "ConnectionManager | None" = None
+
+    def set_connection_manager(self, cm: "ConnectionManager") -> None:
+        """Wire up the ConnectionManager after it is created.
+
+        Output and result messages from guest agents are broadcast
+        through it to any WebSocket clients subscribed to the
+        container.
+        """
+        self._connection_manager = cm
 
     def set_done_callback(self, callback: Callable[[str], Awaitable[None]]) -> None:
         """Register a callback invoked when a container sends a done signal."""
@@ -213,9 +227,9 @@ class SocketManager:
         elif msg_type == "heartbeat":
             await self._handle_heartbeat(container_id)
         elif msg_type == "output":
-            await self._handle_output(msg)
+            await self._handle_output(container_id, msg)
         elif msg_type == "result":
-            await self._handle_result(msg)
+            await self._handle_result(container_id, msg)
         elif msg_type == "done":
             await self._handle_done(container_id)
         else:
@@ -275,7 +289,7 @@ class SocketManager:
         )
         logger.debug("Heartbeat from container %s", container_id)
 
-    async def _handle_output(self, msg: dict) -> None:
+    async def _handle_output(self, container_id: str, msg: dict) -> None:
         command_id = msg.get("id")
         stream = msg.get("stream", "stdout")
         data = msg.get("data", "")
@@ -294,11 +308,22 @@ class SocketManager:
             (command_id,),
         )
 
+        if self._connection_manager is not None:
+            await self._connection_manager.broadcast(
+                container_id,
+                {
+                    "type": "output",
+                    "command_id": command_id,
+                    "stream": stream,
+                    "data": data,
+                },
+            )
+
         logger.debug(
             "Output for command %s: [%s] %d bytes", command_id, stream, len(data)
         )
 
-    async def _handle_result(self, msg: dict) -> None:
+    async def _handle_result(self, container_id: str, msg: dict) -> None:
         command_id = msg.get("id")
         exit_code = msg.get("exit_code")
 
@@ -306,6 +331,17 @@ class SocketManager:
             "UPDATE commands SET status = 'complete', exit_code = ? WHERE id = ?",
             (exit_code, command_id),
         )
+
+        if self._connection_manager is not None:
+            await self._connection_manager.broadcast(
+                container_id,
+                {
+                    "type": "status",
+                    "command_id": command_id,
+                    "status": "complete",
+                    "exit_code": exit_code,
+                },
+            )
 
         logger.info(
             "Command %s completed with exit_code=%s", command_id, exit_code

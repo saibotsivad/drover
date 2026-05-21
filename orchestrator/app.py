@@ -14,6 +14,7 @@ from starlette.responses import JSONResponse, Response
 
 from orchestrator.auth import auth_middleware
 from orchestrator.config import DOCKER_SOCK, SOCKET_DIR, Config, load_config
+from orchestrator.connection_manager import ConnectionManager
 from orchestrator.container_manager import ContainerManager
 from orchestrator.database import Database
 from orchestrator.docker_client import DockerClient
@@ -23,7 +24,7 @@ from orchestrator.errors import (
     DockerError,
 )
 from orchestrator.log_capture import LogCaptureManager
-from orchestrator.routers import containers, images
+from orchestrator.routers import containers, images, websockets
 from orchestrator.socket_manager import SocketManager
 
 
@@ -356,6 +357,8 @@ async def lifespan(app: FastAPI):
     await db.connect()
     docker = DockerClient(config)
     sockets = SocketManager(config, db)
+    connection_manager = ConnectionManager()
+    sockets.set_connection_manager(connection_manager)
     log_capture = LogCaptureManager(config, docker)
 
     await _warn_if_gvisor_misconfigured(docker)
@@ -415,6 +418,7 @@ async def lifespan(app: FastAPI):
     app.state.sockets = sockets
     app.state.log_capture = log_capture
     app.state.container_manager = container_manager
+    app.state.connection_manager = connection_manager
     app.state.orchestrator_docker_id = own_id
     app.state.host_docker_sock = host_docker_sock
 
@@ -440,6 +444,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Drover Orchestrator", lifespan=lifespan)
 app.include_router(images.router)
 app.include_router(containers.router)
+app.include_router(websockets.router)
 
 
 @app.exception_handler(httpx.RequestError)
