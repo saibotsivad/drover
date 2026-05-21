@@ -364,6 +364,10 @@ class ContainerManager:
             host_socket_path = os.path.join(
                 self._host_socket_dir, f"{container_id}.sock"
             )
+            logger.info(
+                "Container %s: socket in-container=%s host=%s",
+                container_id, socket_path, host_socket_path,
+            )
             binds: list[str] = [f"{host_socket_path}:/run/orchestrator.sock"]
             if req.privileged:
                 binds.append(f"{self._host_docker_sock}:/run/docker.sock")

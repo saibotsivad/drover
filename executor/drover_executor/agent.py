@@ -57,7 +57,19 @@ class Agent:
                 pass
 
         logger.info("Connecting to %s", self.socket_path)
-        reader, writer = await asyncio.open_unix_connection(self.socket_path)
+        try:
+            reader, writer = await asyncio.open_unix_connection(self.socket_path)
+        except ConnectionRefusedError:
+            logger.error(
+                "Connection refused on orchestrator socket %s. "
+                "If this container runs under gVisor (runsc), the Docker daemon "
+                "must have '--host-uds=all' in the runsc runtimeArgs — without it "
+                "gVisor blocks Unix socket connections across the container boundary. "
+                "See the Drover docs (docs/install-runsc-gvisor.md) for setup "
+                "instructions.",
+                self.socket_path,
+            )
+            raise
         self._writer = writer
 
         try:

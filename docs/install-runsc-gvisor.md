@@ -25,9 +25,20 @@ You should install Docker in rootless mode, in which case installing the `runsc`
     "runsc": {
       "path": "/usr/local/bin/runsc",
       "runtimeArgs": [
-        "--ignore-cgroups"
+        "--ignore-cgroups",
+        "--host-uds=all"
       ]
     }
   }
 }
 ```
+
+Both flags are required:
+
+- **`--ignore-cgroups`** — needed for rootless Docker, where the sandbox cannot
+  manipulate cgroups directly.
+- **`--host-uds=all`** — permits the guest agent inside each micro-container to
+  connect to the per-container Unix socket that the orchestrator bind-mounts in.
+  Without this flag, gVisor blocks all host Unix-socket traffic and every
+  non-privileged container times out with `init_timeout` (the error surfaces
+  inside the container as `ConnectionRefusedError` on `/run/orchestrator.sock`).

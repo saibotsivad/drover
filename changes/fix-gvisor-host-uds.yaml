@@ -1,0 +1,30 @@
+- project: orchestrator
+  bump: patch
+  description: |
+    Add startup warning when gVisor (`runsc`) is registered in Docker but the
+    required `--host-uds=all` flag is absent from its `runtimeArgs`. Without
+    that flag, gVisor blocks the guest agent inside every non-privileged
+    micro-container from connecting to its orchestrator socket, causing all
+    containers to time out with `init_timeout`. The orchestrator now inspects
+    the Docker daemon's runtime configuration at startup and logs a clear,
+    actionable warning if the flag is missing.
+
+    Also logs both the in-container and host-side socket paths when launching a
+    micro-container, making path-resolution issues easier to diagnose.
+
+- project: executor
+  bump: patch
+  description: |
+    Log a clear, actionable error message when the guest agent fails to connect
+    to the orchestrator socket with `ConnectionRefusedError`. The message
+    identifies gVisor's missing `--host-uds=all` flag as the likely cause and
+    points to the Drover install docs.
+
+- project: orchestrator
+  bump: patch
+  description: |
+    Fix `docs/install-runsc-gvisor.md` to include `--host-uds=all` in the
+    required `daemon.json` config. This flag was documented in
+    `docs/full-e2e-suite.md` but missing from the operator install guide,
+    causing operators following that guide to hit `init_timeout` failures on
+    all non-privileged containers with no obvious error message.
