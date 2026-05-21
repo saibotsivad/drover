@@ -6,3 +6,4 @@ e2e/logs/
 e2e/playwright-results/
 e2e/playwright/node_modules/
 e2e/playwright/package-lock.json
+e2e/playwright/results/
