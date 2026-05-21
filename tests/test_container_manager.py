@@ -68,6 +68,7 @@ def manager(config, db, docker, sockets, log_capture):
     return ContainerManager(
         config, db, docker, sockets, log_capture,
         host_docker_sock="/var/run/docker.sock",
+        host_socket_dir="/var/run/drover/sockets",
     )
 
 
@@ -163,6 +164,7 @@ async def test_create_privileged_with_config(config, db, docker, sockets):
         priv_config, db, docker, sockets,
         LogCaptureManager(priv_config, docker=None),
         host_docker_sock="/host/path/docker.sock",
+        host_socket_dir="/var/run/drover/sockets",
     )
     resp = await mgr.create_container(
         CreateContainerRequest(image="ignored", privileged=True)
@@ -713,6 +715,7 @@ def manager_with_logs(log_config, db, docker, sockets, log_capture_real):
     return ContainerManager(
         log_config, db, docker, sockets, log_capture_real,
         host_docker_sock="/var/run/docker.sock",
+        host_socket_dir="/var/run/drover/sockets",
     )
 
 

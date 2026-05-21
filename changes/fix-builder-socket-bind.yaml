@@ -1,0 +1,12 @@
+- project: orchestrator
+  bump: patch
+  description: |
+    Fix builder (micro-container) launch failure where the executor could not
+    connect to `/run/orchestrator.sock`. The socket bind-mount source was using
+    the in-container path for the sockets directory, but Docker resolves bind
+    sources against the host filesystem. This worked when the sockets directory
+    was mounted at the same path on both sides, but broke when the
+    `docker-compose.yml` default changed to `./sockets` on the host. The
+    orchestrator now self-inspects its own mounts to resolve the host-side
+    sockets directory path, mirroring how the host Docker socket path is
+    already resolved.
