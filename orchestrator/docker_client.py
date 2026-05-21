@@ -55,6 +55,12 @@ class DockerClient:
 
     # --- Images ---
 
+    async def get_info(self) -> dict:
+        """Return the Docker daemon system info (GET /info)."""
+        resp = await self._client.get("/info")
+        self._check(resp)
+        return resp.json()
+
     async def list_images(self, name: str | None = None) -> list[dict]:
         """List Drover-managed images.
 

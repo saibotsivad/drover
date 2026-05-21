@@ -298,6 +298,51 @@ async def _resolve_host_socket_dir(
     return SOCKET_DIR
 
 
+def _gvisor_has_host_uds(runtime_args: list) -> bool:
+    """Return True if --host-uds is set to a value that allows connect().
+
+    The required values are 'open' or 'all'.  'create' only allows bind(),
+    not connect().  The default when the flag is absent is 'none' (blocks
+    all host UDS access).
+    """
+    for arg in runtime_args:
+        if isinstance(arg, str) and arg.startswith("--host-uds="):
+            return arg.split("=", 1)[1] in ("open", "all")
+    return False
+
+
+async def _warn_if_gvisor_misconfigured(docker: DockerClient) -> None:
+    """Log a warning if runsc is registered without the --host-uds flag.
+
+    Non-privileged micro-containers run under gVisor (runsc).  Without
+    ``--host-uds=all`` (or ``open``) in the runtime's args, gVisor blocks
+    the guest agent from connecting to the bind-mounted orchestrator socket
+    and every container times out with ``init_timeout``.  We detect this at
+    startup so operators see the root cause immediately rather than chasing
+    cryptic ``ConnectionRefusedError`` logs from inside the container.
+    """
+    try:
+        info = await docker.get_info()
+        runtimes = info.get("Runtimes") or {}
+        if "runsc" not in runtimes:
+            return
+        runtime_args = runtimes["runsc"].get("Args") or []
+        if _gvisor_has_host_uds(runtime_args):
+            logger.info("gVisor (runsc) runtime detected with host-uds support")
+        else:
+            logger.warning(
+                "gVisor (runsc) runtime is registered but '--host-uds=all' is absent "
+                "from its runtimeArgs (current args: %s). Non-privileged containers "
+                "will fail with ConnectionRefusedError when the guest agent tries to "
+                "connect to the orchestrator socket. Add '--host-uds=all' to the runsc "
+                "runtimeArgs in your Docker daemon config and restart Docker. "
+                "See docs/install-runsc-gvisor.md for setup instructions.",
+                runtime_args,
+            )
+    except Exception:
+        logger.exception("Failed to check Docker runtime configuration")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     config = load_config()
@@ -312,6 +357,8 @@ async def lifespan(app: FastAPI):
     docker = DockerClient(config)
     sockets = SocketManager(config, db)
     log_capture = LogCaptureManager(config, docker)
+
+    await _warn_if_gvisor_misconfigured(docker)
 
     own_id = _detect_own_container_id()
     if own_id is None:
