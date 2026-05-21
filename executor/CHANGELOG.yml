@@ -1,2 +1,11 @@
-published: "0.0.0"
-changes: []
+published: 0.0.1
+changes:
+- version: 0.0.1
+  date: '2026-05-21'
+  entries:
+  - bump: patch
+    description: |
+      Log a clear, actionable error message when the guest agent fails to connect
+      to the orchestrator socket with `ConnectionRefusedError`. The message
+      identifies gVisor's missing `--host-uds=all` flag as the likely cause and
+      points to the Drover install docs.
