@@ -171,6 +171,59 @@ test('POST /actions/containers/:id/stop returns an error row on failure', async 
 	}
 });
 
+// --- POST /actions/containers/:id/start ----------------------------------
+
+test('POST /actions/containers/:id/start triggers a resume and redirects via HX-Redirect', async () => {
+	let calledPath = null;
+	const orchestrator = makeFakeOrchestrator({
+		postJson: async (path) => {
+			calledPath = path;
+			return {
+				id: 'c-aaa',
+				image: 'python-runner',
+				privileged: false,
+				status: 'running',
+				label: null,
+				timeout_seconds: 300,
+				created_at: '2026-05-01T12:00:00Z',
+				stopped_at: null,
+				last_seen: null,
+				error_code: null,
+			};
+		},
+	});
+	const { url, close } = await startApp(orchestrator);
+	try {
+		const res = await fetch(`${url}/actions/containers/c-aaa/start`, {
+			method: 'POST',
+			redirect: 'manual',
+		});
+		assert.equal(res.status, 200);
+		assert.equal(calledPath, '/containers/c-aaa/resume');
+		assert.equal(res.headers.get('hx-redirect'), '/views/containers/c-aaa');
+		const text = await res.text();
+		assert.equal(text, '');
+	} finally {
+		await close();
+	}
+});
+
+test('POST /actions/containers/:id/start renders an error fragment on orchestrator failure', async () => {
+	const orchestrator = makeFakeOrchestrator({
+		postJson: async () => { throw new OrchestratorHttpError(409, { detail: 'container is not stopped' }); },
+	});
+	const { url, close } = await startApp(orchestrator);
+	try {
+		const res = await fetch(`${url}/actions/containers/c-aaa/start`, { method: 'POST' });
+		assert.equal(res.status, 409);
+		assert.equal(res.headers.get('hx-redirect'), null);
+		const text = await res.text();
+		assert.match(text, /container is not stopped/);
+	} finally {
+		await close();
+	}
+});
+
 // --- DELETE /actions/containers/:id --------------------------------------
 
 test('DELETE /actions/containers/:id returns an empty body on success', async () => {

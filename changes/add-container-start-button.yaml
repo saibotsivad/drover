@@ -1,0 +1,8 @@
+- project: webapp
+  bump: patch
+  description: |
+    Add a Start button to the container-detail view that appears when the
+    container is in the `stopped` state. Clicking it calls the orchestrator's
+    `POST /containers/{id}/resume` endpoint via a new
+    `POST /actions/containers/{id}/start` action route and redirects back to
+    the detail page so the UI reflects the new running state.
