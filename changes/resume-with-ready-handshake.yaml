@@ -1,5 +1,5 @@
 - project: orchestrator
-  bump: minor
+  bump: patch
   description: |
     `POST /containers/{id}/resume` now mirrors the `POST /containers` init
     flow: it returns immediately with status `resuming`, then transitions
