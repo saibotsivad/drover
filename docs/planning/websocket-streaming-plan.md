@@ -1,15 +1,17 @@
 # WebSocket Streaming Implementation Plan
 
-> This document outlines the implementation plan for enabling WebSocket endpoints to stream both command output and container logs, per the decision in `docs/decisions/2026-04-11-websockets-for-streaming.md`.
+> This document outlines the implementation plan for enabling a WebSocket endpoint to stream both command output and container logs, per the decision in `docs/decisions/2026-04-11-websockets-for-streaming.md`.
 
 ---
 
 ## Overview
 
-The current exec API uses polling (`GET /containers/{id}/execs/{cmd_id}`). We will add WebSocket endpoints for real-time streaming of:
+The current exec API uses polling (`GET /containers/{id}/execs/{cmd_id}`). We will add a single WebSocket endpoint per container that streams real-time output from two sources:
 
-1. **Command output** - Stream stdout/stderr from commands executed via the guest agent
-2. **Container logs** - Stream Docker container logs (stdout/stderr from the container itself)
+1. **Command output** - stdout/stderr from commands executed via the guest agent
+2. **Container logs** - Docker container logs (stdout/stderr from the container itself)
+
+Both sources flow through a single connection. As soon as the client connects, all new output starts arriving — no subscription step required.
 
 ---
 
@@ -17,26 +19,21 @@ The current exec API uses polling (`GET /containers/{id}/execs/{cmd_id}`). We wi
 
 ### Design Principles
 
-- **Per-container endpoints** - Each container gets its own WebSocket URLs to simplify connection management and auth
-- **Connect before command** - Client connects to command output stream first, then issues commands via REST API
+- **Per-container endpoint** - Each container gets its own WebSocket URL to simplify connection management and auth
+- **Auto-stream on connect** - All exec output and container logs flow immediately on connect; no subscription messages
+- **Single combined stream** - Command output and container logs merge into one WebSocket; `type` field distinguishes them
+- **Command correlation** - All exec output messages include `command_id` so clients can correlate with commands they issued
 - **No automatic replay** - WebSocket only streams new output; clients use REST API to fetch historical data
-- **Command correlation** - All command output messages include `command_id` so clients can correlate with commands they issued
-- **Separate streams** - Command output and container logs are separate concerns with different lifecycles
 - **Backward compatibility** - The existing polling API remains functional
 - **Resource cleanup** - Connections must clean up properly when containers stop or clients disconnect
 
 ### WebSocket URL Design
 
 ```
-/ws/containers/{container_id}/execs   - Stream all command output for a container
-/ws/containers/{container_id}/logs   - Stream container logs (Docker stdout/stderr)
+/containers/{container_id}/ws   - Stream all exec output and container logs for a container
 ```
 
-**Key change:** The command output endpoint is per-container, not per-command. This allows:
-1. Client connects WebSocket first
-2. Client issues command via `POST /containers/{id}/execs`
-3. Client subscribes to receive output for specific commands via WebSocket
-4. Client can issue multiple commands and receive all output through one connection
+This endpoint lives under the existing `/containers` prefix and uses `ws` as the final path segment, matching the pattern of other container sub-resources.
 
 ---
 
@@ -44,280 +41,356 @@ The current exec API uses polling (`GET /containers/{id}/execs/{cmd_id}`). We wi
 
 ### 1. New WebSocket Router (`orchestrator/routers/websockets.py`)
 
-New router handling WebSocket upgrade requests:
+New router handling WebSocket upgrade requests. Access to `app.state` follows the same `request.app.state.*` pattern used throughout the existing REST routers.
 
 ```python
-@router.websocket("/ws/containers/{container_id}/execs")
-async def exec_stream(ws: WebSocket, container_id: str):
-    """Stream all command output for a container in real-time.
-    
-    Client connects first, then issues commands via REST API. Output for all
-    commands is streamed through this single connection.
-    
-    Message format (JSON):
-    - Server -> Client:
-      {"type": "output", "command_id": "...", "stream": "stdout|stderr", "data": "..."}
-      {"type": "status", "command_id": "...", "status": "pending|running|complete", "exit_code": N}
-      {"type": "error", "message": "..."}
-    - Client -> Server:
-      {"type": "subscribe", "command_id": "..."}  # Subscribe to output for a specific command
-      {"type": "cancel", "command_id": "..."}     # Optional: request command cancellation
-    """
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from fastapi.requests import Request
 
-@router.websocket("/ws/containers/{container_id}/logs")
-async def container_logs_stream(ws: WebSocket, container_id: str):
-    """Stream container logs from Docker.
-    
-    Query params:
-    - tail: Number of lines to include from history (default: 0 for new logs only)
-    - follow: Whether to follow new logs (default: true)
-    
-    Message format (JSON):
-    {"type": "log", "stream": "stdout|stderr", "data": "..."}
+router = APIRouter(prefix="/containers", tags=["websockets"])
+
+
+@router.websocket("/{container_id}/ws")
+async def container_ws(ws: WebSocket, container_id: str):
+    """Stream all exec output and Docker logs for a container.
+
+    No subscription step — output from all commands and the Docker log
+    stream arrives as soon as the connection opens.
+
+    Message format (JSON, server -> client only):
+      {"type": "output",  "command_id": "...", "stream": "stdout|stderr", "data": "..."}
+      {"type": "status",  "command_id": "...", "status": "pending|running|complete", "exit_code": N}
+      {"type": "log",     "stream": "stdout|stderr", "data": "..."}
+      {"type": "error",   "message": "..."}
     """
 ```
+
+The handler:
+1. Authenticates the connection (see Auth section)
+2. Verifies the container exists via the database
+3. Calls `connection_manager.connect(container_id)` to get a `Queue`
+4. Starts a background task to stream Docker logs into that queue
+5. Loops: `await queue.get()` → `await ws.send_json(message)`
+6. On disconnect or error: cancels log task, calls `connection_manager.disconnect(container_id, queue)`
 
 ### 2. SocketManager Extension (`orchestrator/socket_manager.py`)
 
-The `SocketManager` handles Unix socket connections to guest agents. We need to add:
+The `SocketManager` handles Unix socket connections to guest agents. It needs a reference to the `ConnectionManager` and two small changes:
 
 ```python
 class SocketManager:
-    def __init__(...):
-        # Existing...
-        # container_id -> set of queues (one per WebSocket connection)
-        self._container_subscribers: dict[str, set[asyncio.Queue]] = {}
-        
-    async def subscribe_container(self, container_id: str, queue: asyncio.Queue) -> None:
-        """Subscribe a WebSocket consumer to all command output for a container."""
-        
-    async def unsubscribe_container(self, container_id: str, queue: asyncio.Queue) -> None:
-        """Unsubscribe a WebSocket consumer."""
-        
-    async def _handle_output(self, msg: dict) -> None:
-        """Modified to broadcast to all container subscribers with command_id in message."""
-        # msg contains "id" (command_id), "stream", "data"
-        # Broadcast to all subscribers for this container
+    def __init__(self, config: Config, db: Database) -> None:
+        # Existing fields...
+        self._connection_manager: "ConnectionManager | None" = None
+
+    def set_connection_manager(self, cm: "ConnectionManager") -> None:
+        """Wire up the ConnectionManager after it is created."""
+        self._connection_manager = cm
 ```
 
-### 3. Docker Client Extension (`orchestrator/docker_client.py`)
+`_handle_output` currently receives `msg` but not `container_id`. The caller `_handle_message` does have `container_id`, so thread it through:
 
-Add streaming log support:
+```python
+# In _handle_message:
+elif msg_type == "output":
+    await self._handle_output(container_id, msg)   # add container_id
+elif msg_type == "result":
+    await self._handle_result(container_id, msg)   # add container_id
+
+# Updated _handle_output:
+async def _handle_output(self, container_id: str, msg: dict) -> None:
+    command_id = msg.get("id")
+    stream = msg.get("stream", "stdout")
+    data = msg.get("data", "")
+    now = _now_iso()
+
+    await self._db.execute_insert(
+        "INSERT INTO command_messages (command_id, stream, data, received_at) "
+        "VALUES (?, ?, ?, ?)",
+        (command_id, stream, data, now),
+    )
+    await self._db.execute_insert(
+        "UPDATE commands SET status = 'running' "
+        "WHERE id = ? AND status = 'pending'",
+        (command_id,),
+    )
+
+    if self._connection_manager is not None:
+        await self._connection_manager.broadcast(container_id, {
+            "type": "output",
+            "command_id": command_id,
+            "stream": stream,
+            "data": data,
+        })
+
+# Updated _handle_result:
+async def _handle_result(self, container_id: str, msg: dict) -> None:
+    command_id = msg.get("id")
+    exit_code = msg.get("exit_code")
+
+    await self._db.execute_insert(
+        "UPDATE commands SET status = 'complete', exit_code = ? WHERE id = ?",
+        (exit_code, command_id),
+    )
+
+    if self._connection_manager is not None:
+        await self._connection_manager.broadcast(container_id, {
+            "type": "status",
+            "command_id": command_id,
+            "status": "complete",
+            "exit_code": exit_code,
+        })
+```
+
+### 3. Docker Client (`orchestrator/docker_client.py`)
+
+`stream_container_logs` is already implemented:
 
 ```python
 async def stream_container_logs(
-    self, container_id: str, *, tail: int = 0, follow: bool = True
-) -> AsyncIterator[dict]:
-    """Stream container logs from Docker.
-    
-    Yields: {"stream": "stdout|stderr", "data": "..."}
+    self,
+    container_id: str,
+    *,
+    since: float | int | None = None,
+    follow: bool = True,
+    tail: int | None = None,
+) -> AsyncIterator[bytes]:
+```
+
+It yields raw bytes in Docker's multiplexed stream format. The WebSocket handler needs a parser for that frame format. Each frame is:
+
+```
+[stream_type: 1 byte][reserved: 3 bytes][payload_size: 4 bytes big-endian][payload: payload_size bytes]
+```
+
+`stream_type` values: `1` = stdout, `2` = stderr.
+
+Parser helper (belongs in the websocket router or a shared util):
+
+```python
+def _parse_docker_frames(buf: bytes) -> tuple[list[dict], bytes]:
+    """Parse Docker multiplexed stream frames from a byte buffer.
+
+    Returns (list of {"stream": ..., "data": ...} dicts, remaining unparsed bytes).
+    Partial frames at the end of buf are returned as the remainder so the
+    caller can prepend them to the next chunk.
     """
+    messages = []
+    pos = 0
+    while pos + 8 <= len(buf):
+        stream_type = buf[pos]
+        size = int.from_bytes(buf[pos + 4 : pos + 8], "big")
+        if pos + 8 + size > len(buf):
+            break  # incomplete frame; hold for next chunk
+        payload = buf[pos + 8 : pos + 8 + size].decode("utf-8", errors="replace")
+        stream = "stdout" if stream_type == 1 else "stderr"
+        messages.append({"stream": stream, "data": payload})
+        pos += 8 + size
+    return messages, buf[pos:]
+```
+
+Usage in the log-streaming background task:
+
+```python
+async def _stream_docker_logs(
+    docker: DockerClient,
+    docker_id: str,
+    queue: asyncio.Queue,
+    tail: int | None,
+) -> None:
+    buf = b""
+    try:
+        async for chunk in docker.stream_container_logs(
+            docker_id, follow=True, tail=tail
+        ):
+            buf += chunk
+            frames, buf = _parse_docker_frames(buf)
+            for frame in frames:
+                await queue.put({"type": "log", **frame})
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        await queue.put({"type": "error", "message": str(exc)})
 ```
 
 ### 4. Connection Manager (`orchestrator/connection_manager.py`) (New)
 
-A new component to manage WebSocket connections and handle:
-
-- Connection authentication/authorization
-- Connection lifecycle (cleanup on disconnect)
-- Message broadcasting to multiple subscribers
-- Backpressure handling (slow consumers)
-- Command-specific subscription management
+Manages per-container queues. Each connected WebSocket gets its own `asyncio.Queue` so concurrent writes from the log task and the socket manager are safe. No per-command subscription tracking needed.
 
 ```python
+import asyncio
+
+
 class ConnectionManager:
-    """Manages WebSocket connections for streaming."""
-    
-    def __init__(self):
-        # container_id -> set of WebSockets
-        self._exec_connections: dict[str, set[WebSocket]] = {}
-        # container_id -> set of WebSockets
-        self._log_connections: dict[str, set[WebSocket]] = {}
-        # Track which commands each connection wants to receive
-        self._connection_subscriptions: dict[WebSocket, set[str]] = {}  # ws -> set of command_ids
-        
-    async def connect_exec(self, container_id: str, ws: WebSocket) -> None:
-        """Register a WebSocket for container command output."""
-        
-    async def subscribe_command(self, ws: WebSocket, command_id: str) -> None:
-        """Subscribe a connection to receive output for a specific command."""
-        # Note: No replay. Client uses GET /containers/{id}/execs/{cmd_id} for history.
-        
-    async def disconnect(self, ws: WebSocket) -> None:
-        """Clean up a disconnected WebSocket."""
-        
-    async def broadcast_to_container(self, container_id: str, message: dict) -> None:
-        """Broadcast a message to all WebSockets subscribed to a container's exec stream."""
-        # Only send to connections that have subscribed to this specific command
+    """Manages per-container WebSocket output queues."""
+
+    def __init__(self) -> None:
+        # container_id -> set of queues (one per connected WebSocket)
+        self._queues: dict[str, set[asyncio.Queue]] = {}
+
+    def connect(self, container_id: str) -> asyncio.Queue:
+        """Register a new WebSocket connection; return its dedicated queue."""
+        queue: asyncio.Queue = asyncio.Queue(maxsize=256)
+        self._queues.setdefault(container_id, set()).add(queue)
+        return queue
+
+    def disconnect(self, container_id: str, queue: asyncio.Queue) -> None:
+        """Remove a disconnected WebSocket's queue."""
+        queues = self._queues.get(container_id)
+        if queues:
+            queues.discard(queue)
+            if not queues:
+                del self._queues[container_id]
+
+    async def broadcast(self, container_id: str, message: dict) -> None:
+        """Put a message into every queue registered for container_id.
+
+        Uses put_nowait and drops the message for queues that are full
+        (slow consumer) rather than blocking the SocketManager's read loop.
+        """
+        for queue in list(self._queues.get(container_id, ())):
+            try:
+                queue.put_nowait(message)
+            except asyncio.QueueFull:
+                pass  # slow consumer; drop rather than block
 ```
 
 ---
 
 ## Data Flow
 
-### Command Output Streaming (Per-Container WebSocket)
+### Unified Per-Container WebSocket
 
 ```
-┌─────────────┐     WebSocket      ┌──────────────┐     Unix Socket      ┌─────────────┐
-│   Client    │◄──────────────────►│  Orchestrator│◄────────────────────►│ Guest Agent │
-│             │  (new output only) │              │                      │  (in box)   │
-└──────┬──────┘                    └──────────────┘                      └─────────────┘
-       │                                    │
-       │ POST /execs                        │ INSERT INTO command_messages
-       │ (issue commands)                   ▼
-       │                             ┌──────────────┐
-       └────────────────────────────►│   SQLite     │
-                                     └──────────────┘
-       │                                    ▲
-       │ GET /execs/{cmd_id}                │
-       │ (fetch history)                    │
+┌─────────────┐     WebSocket      ┌──────────────────────────────────────────┐
+│   Client    │◄──────────────────►│  Orchestrator                            │
+│             │  JSON messages     │                                          │
+└──────┬──────┘                    │  ┌──────────────┐   ┌──────────────────┐ │
+       │                           │  │ConnectionMgr │   │  WebSocket       │ │
+       │ POST /containers/{id}/    │  │  (queues)    │◄──│  handler         │ │
+       │   execs                   │  └──────┬───────┘   └──────────────────┘ │
+       │ (issue commands via REST) │         │ broadcast               ▲       │
+       │                           │  ┌──────┴───────┐    ┌───────────┴─────┐ │
+       │                           │  │SocketManager │    │  Log stream     │ │
+       │                           │  │(guest agent) │    │  task           │ │
+       │                           │  └──────┬───────┘    └───────────┬─────┘ │
+       │                           │         │ Unix socket             │Docker │
+       │                           └─────────┼─────────────────────────┼───────┘
+       │                                     │                         │
+       │                              ┌──────▼──────┐          ┌───────▼─────┐
+       │                              │ Guest Agent │          │   Docker    │
+       │                              │  (in box)   │          │   Daemon    │
+       │                              └─────────────┘          └─────────────┘
+       │
+       │ GET /containers/{id}/execs/{cmd_id}
+       └── (fetch historical output via REST)
 ```
 
-1. **Client connects** to `/ws/containers/{id}/execs`
-2. **Client issues command** via `POST /containers/{id}/execs` → gets `command_id`
-3. **Client subscribes** to that command via WebSocket message: `{"type": "subscribe", "command_id": "..."}`
-4. **Server streams** only new output as it arrives from the guest agent
-5. **Client fetches history** (if needed) via existing `GET /containers/{id}/execs/{command_id}` endpoint
-6. **Client can repeat** steps 2-5 for multiple commands over the same WebSocket
-
-**Key point:** The WebSocket only streams new output. Historical data is fetched via the existing REST API, which already supports pagination and is better suited for retrieving potentially large amounts of data.
-
-### Container Logs Streaming
-
-```
-┌─────────────┐     WebSocket      ┌──────────────┐     Docker API       ┌─────────────┐
-│   Client    │◄──────────────────►│  Orchestrator│◄────────────────────►│   Docker    │
-│             │                    │              │   /containers/{id}   │   Daemon    │
-└─────────────┘                    └──────────────┘   /logs?follow=1     └─────────────┘
-```
-
-1. Client connects to `/ws/containers/{id}/logs`
-2. Orchestrator verifies container exists
-3. Orchestrator starts Docker log stream
-4. Docker logs are forwarded to WebSocket (not persisted)
+Two producers write to the same queue; the WebSocket handler is the single consumer. This avoids concurrent WebSocket writes.
 
 ---
 
 ## Implementation Phases
 
-### Phase 1: Command Output Streaming
+### Phase 1: Exec Output Streaming
 
 **Goal:** Real-time streaming of command output via per-container WebSocket
 
 **Tasks:**
 - [ ] **SocketManager modifications**
-  - [ ] Add subscriber registry: `container_id -> set of queues`
-  - [ ] Add `subscribe_container()` method
-  - [ ] Add `unsubscribe_container()` method
-  - [ ] Modify `_handle_output()` to broadcast to container subscribers
-  - [ ] Include `command_id` in broadcasted messages
+  - [ ] Add `_connection_manager` field and `set_connection_manager()` setter
+  - [ ] Pass `container_id` to `_handle_output` and `_handle_result`
+  - [ ] Broadcast to `ConnectionManager` in `_handle_output` (output message)
+  - [ ] Broadcast to `ConnectionManager` in `_handle_result` (status complete message)
 
 - [ ] **ConnectionManager creation**
   - [ ] Create `orchestrator/connection_manager.py`
-  - [ ] Manage per-container WebSocket connections
-  - [ ] Handle command-specific subscriptions (no replay)
-  - [ ] Handle cleanup on disconnect
+  - [ ] `connect(container_id) -> Queue`
+  - [ ] `disconnect(container_id, queue)`
+  - [ ] `broadcast(container_id, message)` with drop-on-full for slow consumers
 
 - [ ] **WebSocket router**
-  - [ ] Create `routers/websockets.py`
-  - [ ] Implement `/ws/containers/{id}/execs` endpoint (per-container)
-  - [ ] Handle subscription messages from client
-  - [ ] Handle connection lifecycle
+  - [ ] Create `orchestrator/routers/websockets.py`
+  - [ ] Implement `GET /containers/{id}/ws` endpoint
+  - [ ] Auth check on connect (see Auth section)
+  - [ ] Verify container exists; send error + close if not
+  - [ ] Register with ConnectionManager; drain queue to WebSocket
+  - [ ] Clean up on disconnect
 
 - [ ] **Integration**
-  - [ ] Add WebSocket router to main app
-  - [ ] Update `TODO.md` to mark command streaming as complete
+  - [ ] Create `ConnectionManager` instance in `app.py` lifespan
+  - [ ] Wire to `SocketManager` via `set_connection_manager()`
+  - [ ] Add `app.state.connection_manager = connection_manager`
+  - [ ] Include WebSocket router in app
 
 **Testing:**
-- [ ] Unit tests for subscriber management
-- [ ] Integration test with mock guest agent
-- [ ] Manual test: connect WebSocket, issue command, receive output
-- [ ] Test multiple commands over one connection
+- [ ] Unit tests for `ConnectionManager.broadcast` (drop-on-full behavior)
+- [ ] Integration test: connect WebSocket, issue command via REST, receive output
+- [ ] Test multiple clients on same container
 
-### Phase 2: Container Logs Streaming
+### Phase 2: Container Log Streaming
 
-**Goal:** Real-time streaming of container stdout/stderr from Docker
+**Goal:** Real-time streaming of container stdout/stderr from Docker in the same connection
 
 **Tasks:**
-- [ ] **Docker client extension**
-  - [ ] Add `stream_container_logs()` method using Docker's streaming API
-  - [ ] Handle multiplexed Docker stream format
+- [ ] **Docker frame parser**
+  - [ ] Implement `_parse_docker_frames(buf)` in websocket router or shared util
+  - [ ] Handle partial frames across chunk boundaries using a carry buffer
 
-- [ ] **WebSocket endpoint**
-  - [ ] Add `/ws/containers/{id}/logs` endpoint
-  - [ ] Support `tail` and `follow` query parameters
-  - [ ] Handle Docker stream parsing
+- [ ] **Log streaming background task**
+  - [ ] Implement `_stream_docker_logs(docker, docker_id, queue, tail)` coroutine
+  - [ ] Start task on WebSocket connect (after accepting connection)
+  - [ ] Cancel task on WebSocket disconnect
+  - [ ] Look up `docker_id` from DB using `container_id`
 
-- [ ] **Connection management**
-  - [ ] Handle multiple concurrent log subscribers per container
-  - [ ] Clean up Docker streams when last subscriber disconnects
+- [ ] **Query parameter support**
+  - [ ] `tail` (int): historical log lines to replay on connect (default: `None`, no history)
 
 **Testing:**
-- [ ] Unit tests for Docker stream parsing
-- [ ] Integration test with Docker
-- [ ] Test concurrent subscribers
+- [ ] Unit tests for `_parse_docker_frames` (partial frames, multi-stream, empty chunks)
+- [ ] Integration test: connect WebSocket, observe both log and exec output messages
+- [ ] Test `tail` parameter replays history then follows live
 
 ### Phase 3: Documentation & Deployment
 
 **Tasks:**
 - [ ] **API documentation**
   - [ ] Document WebSocket message formats
-  - [ ] Add sequence diagrams showing connect → exec → subscribe → receive flow
-  - [ ] Add examples for JavaScript/Python clients
+  - [ ] Add sequence diagram: connect → exec → receive output
+  - [ ] Python and JavaScript client examples
 
 - [ ] **Deployment docs**
-  - [ ] Add reverse proxy configuration (nginx, Caddy, Traefik)
-  - [ ] Document WebSocket-specific timeout settings
+  - [ ] Reverse proxy configuration (nginx, Caddy, Traefik)
+  - [ ] WebSocket timeout settings
 
 - [ ] **TODO.md updates**
-  - [ ] Remove completed items
-  - [ ] Add notes about potential future bidirectional features
+  - [ ] Mark command streaming complete after Phase 1
 
 ---
 
 ## API Specification
 
-### WebSocket: Command Output Stream (Per-Container)
+### WebSocket: Combined Stream
 
-**Endpoint:** `GET /ws/containers/{container_id}/execs`
+**Endpoint:** `GET /containers/{container_id}/ws`
 
-**Authentication:** Same as REST API (API key in header during upgrade)
+**Query Parameters:**
+- `tail` (int, optional): Number of historical Docker log lines to replay before following live logs. Default: no history.
+
+**Authentication:** `Authorization: Bearer <token>` header during the HTTP upgrade handshake. Note: browsers cannot set custom headers on WebSocket connections — see the Auth section below.
 
 **Connection Flow:**
 1. Client opens WebSocket connection
-2. Client issues command via REST API: `POST /containers/{id}/execs`
-3. Client receives `command_id` in response
-4. Client sends subscription message via WebSocket
-5. Server acknowledges subscription
-6. Server streams only **new** output as it arrives
-7. (Optional) Client fetches historical output via `GET /containers/{id}/execs/{command_id}`
-
-**Messages (Client → Server):**
-
-```json
-// Subscribe to a specific command's output
-{
-  "type": "subscribe",
-  "command_id": "cmd_abc123"
-}
-
-// Cancel a running command (future)
-{
-  "type": "cancel",
-  "command_id": "cmd_abc123"
-}
-```
+2. Server validates auth and verifies container exists; closes with 1008 on failure
+3. Server begins streaming Docker logs (with optional history via `tail`)
+4. Server streams exec output for any commands issued via REST API
+5. Client issues commands via `POST /containers/{id}/execs` and receives output automatically
+6. Client uses `GET /containers/{id}/execs/{command_id}` to fetch historical exec output
 
 **Messages (Server → Client):**
 
 ```json
-// Acknowledge subscription
-{
-  "type": "subscribed",
-  "command_id": "cmd_abc123"
-}
-
-// Output chunk (only new output, no replay)
+// Exec output chunk
 {
   "type": "output",
   "command_id": "cmd_abc123",
@@ -325,14 +398,14 @@ class ConnectionManager:
   "data": "Hello, World!\n"
 }
 
-// Status update
+// Exec status: command started executing
 {
   "type": "status",
   "command_id": "cmd_abc123",
   "status": "running"
 }
 
-// Command completion
+// Exec status: command finished
 {
   "type": "status",
   "command_id": "cmd_abc123",
@@ -340,90 +413,121 @@ class ConnectionManager:
   "exit_code": 0
 }
 
-// Error
+// Docker log line
+{
+  "type": "log",
+  "stream": "stdout",
+  "data": "2026-01-15T10:30:00.000000000Z Starting service...\n"
+}
+
+// Error (connection-ending errors close the socket after sending)
 {
   "type": "error",
   "message": "Container not found"
 }
 ```
 
-**Example JavaScript Client:**
+**No client → server messages.** The connection is a one-way stream from server to client.
+
+**Example Python Client:**
+
+```python
+import asyncio
+import json
+import httpx
+import websockets
+
+API_KEY = "secret_key_here"
+BASE_URL = "https://api.example.com"
+WS_BASE = "wss://api.example.com"
+CONTAINER_ID = "cnt_xyz"
+
+auth_headers = {"Authorization": f"Bearer {API_KEY}"}
+
+async def main():
+    async with websockets.connect(
+        f"{WS_BASE}/containers/{CONTAINER_ID}/ws",
+        additional_headers=auth_headers,
+    ) as ws:
+        # Issue a command via REST while the WebSocket is open
+        async with httpx.AsyncClient() as http:
+            resp = await http.post(
+                f"{BASE_URL}/containers/{CONTAINER_ID}/execs",
+                json={"command": "echo hello"},
+                headers=auth_headers,
+            )
+            command_id = resp.json()["command_id"]
+
+        # Receive output — it arrives automatically
+        async for raw in ws:
+            msg = json.loads(raw)
+            if msg["type"] == "output":
+                print(f"[{msg['command_id']}][{msg['stream']}] {msg['data']}", end="")
+            elif msg["type"] == "status" and msg["status"] == "complete":
+                print(f"[{msg['command_id']}] exited with code {msg['exit_code']}")
+                break
+            elif msg["type"] == "log":
+                print(f"[docker][{msg['stream']}] {msg['data']}", end="")
+            elif msg["type"] == "error":
+                print(f"Error: {msg['message']}")
+                break
+
+asyncio.run(main())
+```
+
+**Example JavaScript Client (browser):**
+
+Browsers cannot set custom headers on WebSocket connections. Pass the token as a query parameter instead and have the server read it from `request.query_params`:
 
 ```javascript
-const ws = new WebSocket('wss://api.example.com/ws/containers/cnt_xyz/execs', [], {
-  headers: { 'X-API-Key': 'secret_key_here' }
-});
+const token = 'secret_key_here';
+const containerId = 'cnt_xyz';
+
+const ws = new WebSocket(
+  `wss://api.example.com/containers/${containerId}/ws?token=${token}`
+);
 
 ws.onopen = () => {
-  console.log('Connected to container exec stream');
+  console.log('Connected');
+
+  // Issue a command via REST while the WebSocket is open
+  fetch(`/containers/${containerId}/execs`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${token}`,
+    },
+    body: JSON.stringify({ command: 'echo hello' }),
+  });
 };
 
 ws.onmessage = (event) => {
   const msg = JSON.parse(event.data);
-  
+
   if (msg.type === 'output') {
-    console.log(`[${msg.command_id}][${msg.stream}] ${msg.data}`);
+    console.log(`[${msg.command_id}][${msg.stream}]`, msg.data);
   } else if (msg.type === 'status') {
-    console.log(`[${msg.command_id}] Status: ${msg.status}`, msg.exit_code);
+    console.log(`[${msg.command_id}] status=${msg.status}`, msg.exit_code ?? '');
+  } else if (msg.type === 'log') {
+    console.log(`[docker][${msg.stream}]`, msg.data);
+  } else if (msg.type === 'error') {
+    console.error('Server error:', msg.message);
   }
 };
 
-// Issue a command via REST API
-const response = await fetch('/containers/cnt_xyz/execs', {
-  method: 'POST',
-  headers: { 'Content-Type': 'application/json', 'X-API-Key': 'secret_key_here' },
-  body: JSON.stringify({ command: 'echo hello' })
-});
-const { command_id } = await response.json();
-
-// Subscribe to receive its output via WebSocket
-ws.send(JSON.stringify({ type: 'subscribe', command_id }));
-
-// (Optional) Fetch historical output via REST API
-const history = await fetch(`/containers/cnt_xyz/execs/${command_id}`, {
-  headers: { 'X-API-Key': 'secret_key_here' }
-});
-const { messages } = await history.json();
-```
-
-### WebSocket: Container Logs Stream
-
-**Endpoint:** `GET /ws/containers/{container_id}/logs?tail=100&follow=true`
-
-**Query Parameters:**
-- `tail` (int): Number of historical log lines to include (default: 0)
-- `follow` (bool): Whether to follow new logs (default: true)
-
-**Messages (Server → Client):**
-
-```json
-// Log line
-{
-  "type": "log",
-  "stream": "stdout",
-  "data": "2024-01-15T10:30:00Z Starting service...\n"
-}
-
-// Stream end (when follow=false or container stops)
-{
-  "type": "end"
-}
-
-// Error
-{
-  "type": "error",
-  "message": "Container not found"
-}
+ws.onclose = (event) => console.log('Disconnected', event.code);
 ```
 
 ---
 
 ## Reverse Proxy Configuration
 
+The `/containers/{id}/ws` path doesn't need a special prefix to match — standard WebSocket proxy configuration on the location that handles all API traffic is sufficient.
+
 ### nginx
 
 ```nginx
-location /ws/ {
+location / {
     proxy_pass http://orchestrator;
     proxy_http_version 1.1;
     proxy_set_header Upgrade $http_upgrade;
@@ -433,21 +537,33 @@ location /ws/ {
 }
 ```
 
+Or, if only the WebSocket path needs special treatment:
+
+```nginx
+location ~ ^/containers/[^/]+/ws$ {
+    proxy_pass http://orchestrator;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+    proxy_set_header Host $host;
+    proxy_read_timeout 86400;
+}
+```
+
 ### Caddy
 
 ```caddy
-@websockets {
-    path /ws/*
-}
-reverse_proxy @websockets orchestrstrator:8000
+reverse_proxy orchestrator:8000
 ```
+
+Caddy handles WebSocket upgrades automatically for all proxied traffic.
 
 ### Traefik
 
 ```yaml
 # Docker labels
 labels:
-  - "traefik.http.routers.drover.rule=PathPrefix(`/ws/`)")
+  - "traefik.http.routers.drover.rule=PathPrefix(`/`)"
   - "traefik.http.services.drover.loadbalancer.server.port=8000"
   # WebSocket support is automatic in Traefik
 ```
@@ -462,103 +578,86 @@ labels:
 |----------|----------|
 | Container not found | Close with 1008 (policy violation) + error message |
 | Container not running | Close with 1008 + error message |
-| Auth failure | Close with 1008 (handled by auth middleware) |
+| Auth failure | Close with 1008 (see auth flow below) |
+| Docker daemon unreachable | Send error message, close connection |
 
 ### Runtime Errors
 
 | Scenario | Behavior |
 |----------|----------|
-| Invalid command_id in subscribe | Send error message, keep connection open |
-| Guest agent disconnects | Send error to affected command subscribers, keep connection for new commands |
-| Docker daemon error | Send error message, then close |
-| Client disconnect | Clean up all subscriptions |
+| Guest agent disconnects | Queue drains; exec output stops. Docker log stream continues. |
+| Docker daemon error during log stream | Send `{"type": "error", ...}` via queue, log task exits |
+| Slow consumer (queue full) | Drop message for that connection; do not block SocketManager |
+| Client disconnect | Cancel log task, unregister queue from ConnectionManager |
+
+---
+
+## Authentication
+
+The existing middleware (`orchestrator/auth.py`) handles `Authorization: Bearer <token>` for HTTP requests but runs after the WebSocket upgrade completes. For WebSocket connections the auth check must happen explicitly inside the handler before calling `await ws.accept()`:
+
+```python
+@router.websocket("/{container_id}/ws")
+async def container_ws(ws: WebSocket, container_id: str):
+    config = ws.app.state.config
+    if config.api_key_hash is not None:
+        # Try header first, fall back to ?token= query param for browser clients
+        auth_header = ws.headers.get("authorization", "")
+        if auth_header.startswith("Bearer "):
+            token = auth_header[7:]
+        else:
+            token = ws.query_params.get("token", "")
+        if not hmac.compare_digest(hash_api_key(token), config.api_key_hash):
+            await ws.close(code=1008)
+            return
+
+    await ws.accept()
+    # ... rest of handler
+```
 
 ---
 
 ## Security Considerations
 
-1. **Authentication** - WebSocket connections must pass the same API key validation as REST endpoints
-2. **Authorization** - A client can only stream from containers they have access to (verified on connect)
-3. **Rate limiting** - Consider rate limits for WebSocket message volume
-4. **Connection limits** - Limit concurrent WebSocket connections per container
+1. **Authentication** - Check `Authorization: Bearer` header or `?token=` query param before accepting the upgrade
+2. **Authorization** - Verify the container exists and belongs to the authenticated caller before accepting
+3. **Query parameter token exposure** - The `?token=` query param appears in server access logs; document this tradeoff for browser clients
+4. **Connection limits** - Consider limiting concurrent WebSocket connections per container
+5. **Queue depth** - The 256-message queue cap per connection limits memory exposure from slow consumers
 
 ---
 
 ## Future Considerations
 
-This design leaves room for future enhancements without breaking changes:
-
-1. **Bidirectional command input** - Client can send stdin to running commands via the same WebSocket
-2. **Auto-subscription** - Server could automatically subscribe clients to commands they issue (tracked by API key)
-3. **Interactive shell** - A new endpoint for PTY-based interactive sessions
-4. **SSE fallback** - Alternative endpoint for clients that can't use WebSockets
-5. **Filtered logs** - Query parameters for log filtering (grep, time range, etc.)
-6. **Log persistence** - Store container logs in SQLite for historical access
+1. **Bidirectional command input** - Client sends stdin to running commands via the same WebSocket
+2. **Interactive shell** - A new endpoint for PTY-based interactive sessions
+3. **Log persistence** - Store container logs in SQLite for historical access
+4. **Filtered logs** - Query parameters for log filtering (grep, time range)
+5. **Dropped message notification** - `{"type": "dropped", "count": N}` to signal slow-consumer drops
 
 ---
 
 ## Files to Modify/Create
 
 ### New Files
-- `orchestrator/routers/websockets.py` - WebSocket endpoints
-- `orchestrator/connection_manager.py` - Connection state management
+- `orchestrator/routers/websockets.py` - WebSocket endpoint + `_parse_docker_frames` + `_stream_docker_logs`
+- `orchestrator/connection_manager.py` - Per-container queue registry
 - `tests/test_websockets.py` - WebSocket tests
 
 ### Modified Files
-- `orchestrator/app.py` - Add WebSocket router
-- `orchestrator/socket_manager.py` - Change subscriber model to per-container
-- `orchestrator/docker_client.py` - Add log streaming
-- `orchestrator/models.py` - Add WebSocket message models (optional)
-- `TODO.md` - Update status
-- `docs/decisions/` - Add implementation notes (optional)
+- `orchestrator/app.py` - Create `ConnectionManager`, wire to `SocketManager`, include WebSocket router
+- `orchestrator/socket_manager.py` - Add `set_connection_manager()`, pass `container_id` to `_handle_output`/`_handle_result`, broadcast via `ConnectionManager`
+- `TODO.md` - Update status after Phase 1
 
 ---
 
 ## Open Questions
 
-1. Should the server automatically subscribe clients to commands they issue?
-   - **Decision:** No, explicit subscription is cleaner. Client can subscribe immediately after receiving command_id.
-   
-2. Should historical command output be replayed on WebSocket connect or subscribe?
-   - **Decision:** No. The WebSocket only streams new output. Clients use the existing `GET /containers/{id}/execs/{command_id}` REST endpoint to fetch historical output. This avoids overwhelming the connection with potentially large amounts of data and keeps concerns separated: WebSocket for real-time, REST for history.
-   
-3. Should container logs be persisted like command output?
-   - **Decision:** No, for now they are ephemeral. Can add persistence later if needed.
+1. Should a `tail` parameter also replay historical exec output (from `command_messages` table) on connect?
+   - Current decision: No. Clients use `GET /containers/{id}/execs/{cmd_id}` for that. The `tail` parameter only applies to Docker logs since the Docker streaming API natively supports it.
 
-4. How to handle very slow WebSocket consumers?
-   - **Decision:** Apply backpressure - drop messages for slow consumers after a buffer limit, or close the connection
+2. How to handle very slow WebSocket consumers?
+   - Decision: Drop messages when the per-connection queue (maxsize=256) is full. This prevents a slow consumer from blocking the SocketManager's read loop. No `dropped` notification in Phase 1; add it later if needed.
 
-5. Should multiple WebSocket connections to the same container be allowed?
-   - **Decision:** Yes, each client can have its own connection. Useful for multiple browser tabs or services.
-
----
-
-## Follow-Up Items
-
-Items to reconsider after initial implementation:
-
-### Authentication Mechanism
-The current plan uses header-based authentication (`X-API-Key`), which works for programmatic clients but **browsers cannot set custom headers on WebSocket connections**. After implementation, reconsider:
-- Adding token-based auth via query parameter (`?token=<jwt>`)
-- Post-connect authentication message flow
-- Cookie-based authentication for same-origin clients
-- Update auth middleware to support WebSocket connections
-
-### Dependencies
-- [ ] Add `websockets` package to `orchestrator/requirements.txt` for production WebSocket support
-
-### Message Protocol Enhancements
-- [ ] Consider adding `unsubscribe` message type for long-lived connections
-- [ ] Clarify backpressure strategy: buffer limits, signaling dropped messages to clients
-- [ ] Add `dropped` message type: `{"type": "dropped", "command_id": "...", "count": N}`
-
-### Documentation
-- [ ] Clarify SocketManager is adding **new** subscriber functionality (not changing existing code)
-- [ ] Document the data flow: Guest Agent → SocketManager → ConnectionManager → WebSocket Clients
-- [ ] Specify when broadcast happens relative to DB write (before/after/concurrent)
-
-### Potential Improvements
-- [ ] Auto-subscription: Track commands by API key and auto-subscribe the issuing client
-- [ ] SSE fallback endpoint for clients that can't use WebSockets
-- [ ] Log persistence: Store container logs in SQLite for historical access
-- [ ] Interactive shell endpoint for PTY-based sessions
+3. Should multiple WebSocket connections to the same container be allowed?
+   - Decision: Yes. Each client gets its own queue. Useful for multiple browser tabs or services.
