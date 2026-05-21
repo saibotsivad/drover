@@ -1,5 +1,16 @@
-published: 0.0.9
+published: 0.0.10
 changes:
+- version: 0.0.10
+  date: '2026-05-21'
+  entries:
+  - bump: patch
+    description: |
+      Add a Resume button to the container-detail view that appears when the
+      container is in the `stopped` state. Clicking it calls the orchestrator's
+      `POST /containers/{id}/resume` via a new
+      `POST /actions/containers/{id}/resume` action route and redirects back to
+      the detail page so the UI reflects the new `resuming` state (which then
+      transitions to `running` once the guest agent reconnects).
 - version: 0.0.9
   date: '2026-05-18'
   entries:
