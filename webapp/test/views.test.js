@@ -345,6 +345,58 @@ test('GET /views/containers/:id?log_source=orchestrator handles 503', async () =
 	}
 });
 
+// --- action bar (Stop / Resume / Destroy) --------------------------------
+
+test('GET /views/containers/:id renders a Resume button when the container is stopped', async () => {
+	const stoppedContainer = {
+		...SAMPLE_CONTAINERS[0],
+		status: 'stopped',
+		stopped_at: '2026-05-04T01:00:00Z',
+	};
+	const orchestrator = makeFakeOrchestrator({
+		getJson: async (path) => {
+			if (path === '/containers/c-aaa') return stoppedContainer;
+			if (path === '/containers/c-aaa/logs/files') return [];
+			if (path === '/containers/c-aaa/execs') return [];
+			throw new Error(`unexpected getJson: ${path}`);
+		},
+		getText: async () => '',
+	});
+	const { url, close } = await startApp(orchestrator);
+	try {
+		const res = await fetch(`${url}/views/containers/c-aaa`);
+		assert.equal(res.status, 200);
+		const text = await res.text();
+		assert.match(text, /<button[^>]*class="btn btn-primary btn-resume"[^>]*hx-post="\/actions\/containers\/c-aaa\/resume"[^>]*>Resume<\/button>/);
+		// Stop button must not be rendered on a stopped container.
+		assert.equal(text.includes('btn-stop'), false, 'Stop button must not appear when stopped');
+	} finally {
+		await close();
+	}
+});
+
+test('GET /views/containers/:id does not render a Resume button when the container is running', async () => {
+	const orchestrator = makeFakeOrchestrator({
+		getJson: async (path) => {
+			if (path === '/containers/c-aaa') return SAMPLE_CONTAINERS[0];
+			if (path === '/containers/c-aaa/logs/files') return [];
+			if (path === '/containers/c-aaa/execs') return [];
+			throw new Error(`unexpected getJson: ${path}`);
+		},
+		getText: async () => '',
+	});
+	const { url, close } = await startApp(orchestrator);
+	try {
+		const res = await fetch(`${url}/views/containers/c-aaa`);
+		assert.equal(res.status, 200);
+		const text = await res.text();
+		assert.equal(text.includes('btn-resume'), false, 'Resume button must not appear when running');
+		assert.match(text, /btn-stop/);
+	} finally {
+		await close();
+	}
+});
+
 // --- exec commands panel + exec output view ------------------------------
 
 const SAMPLE_COMMANDS = [

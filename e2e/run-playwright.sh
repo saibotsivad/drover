@@ -10,7 +10,7 @@
 # Usage:
 #   ./e2e/run-playwright.sh    Run all Playwright tests (stack must be up)
 #
-# The HTML report and any trace archives land in `e2e/playwright-results/`.
+# The HTML report and any trace archives land in `e2e/playwright/results/`.
 # That directory sits alongside `e2e/logs/` rather than inside it so the
 # Drover service logs (what the stack did) stay clearly separated from
 # the test-runner artifacts (what the tests saw).
@@ -37,8 +37,8 @@ fi
 
 # Ensure the bind-mount target exists with permissions the playwright-runner
 # container (which runs as a non-root user) can write to.
-mkdir -p "$E2E_DIR/playwright-results"
-chmod 777 "$E2E_DIR/playwright-results" || true
+mkdir -p "$E2E_DIR/playwright/results"
+chmod 777 "$E2E_DIR/playwright/results" || true
 
 echo "==> Running Playwright suite"
 # Tee the runner's stdout+stderr to playwright.log so the CI workflow
@@ -46,7 +46,7 @@ echo "==> Running Playwright suite"
 # group treatment as the bash-suite logs). `pipefail` keeps the docker
 # exit code intact through the pipe.
 status=0
-RUNNER_LOG="$E2E_DIR/playwright-results/playwright.log"
+RUNNER_LOG="$E2E_DIR/playwright/results/playwright.log"
 compose --profile playwright run --rm playwright-runner 2>&1 \
 	| tee "$RUNNER_LOG" \
 	|| status=$?
@@ -55,7 +55,7 @@ if [ "$status" -eq 0 ]; then
 	echo "==> Playwright tests passed."
 else
 	echo "==> Playwright tests failed (exit $status)." >&2
-	echo "==> See e2e/playwright-results/ for the HTML report and traces." >&2
+	echo "==> See e2e/playwright/results/ for the HTML report and traces." >&2
 fi
 
 exit "$status"

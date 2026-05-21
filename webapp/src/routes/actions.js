@@ -81,6 +81,18 @@ export function createActionsRouter({ orchestrator }) {
 		}
 	});
 
+	router.post('/containers/:id/resume', async (req, res) => {
+		const id = req.params.id;
+		try {
+			await orchestrator.postJson(`/containers/${encodeURIComponent(id)}/resume`);
+			res.set('HX-Redirect', `/views/containers/${id}`);
+			res.status(200).type('html').send('');
+		} catch (err) {
+			const { status } = describeOrchestratorError(err);
+			sendFragment(res, html`<div class="action-error">${renderOrchestratorError(err)}</div>`, status);
+		}
+	});
+
 	router.post('/containers/:id/execs', async (req, res) => {
 		const encodedId = encodeURIComponent(req.params.id);
 		const body = req.body || {};

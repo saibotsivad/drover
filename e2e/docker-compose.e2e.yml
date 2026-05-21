@@ -81,7 +81,7 @@ services:
     working_dir: /tests
     volumes:
       - ./playwright:/tests
-      - ./playwright-results:/tests/results
+      - ./playwright/results:/tests/results
     environment:
       WEBAPP_URL: http://webapp:8080
       ORCHESTRATOR_URL: http://orchestrator:8000

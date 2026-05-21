@@ -275,7 +275,7 @@ cmd_playwright() {
 	# Thin pass-through to the dedicated wrapper so callers don't have to
 	# learn a second script name. Kept separate from cmd_test because
 	# Playwright runs in its own container with a different reporter and
-	# artifact layout (e2e/playwright-results/ vs. e2e/logs/).
+	# artifact layout (e2e/playwright/results/ vs. e2e/logs/).
 	"$E2E_DIR/run-playwright.sh"
 }
 

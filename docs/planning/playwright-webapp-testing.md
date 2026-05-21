@@ -35,7 +35,7 @@ playwright-runner:
   working_dir: /tests
   volumes:
     - ./playwright:/tests                  # test source
-    - ./playwright-results:/tests/results  # HTML report + traces go here
+    - ./playwright/results:/tests/results  # HTML report + traces go here
   environment:
     WEBAPP_URL: http://webapp:9091
     ORCHESTRATOR_URL: http://orchestrator:8000
@@ -125,12 +125,9 @@ A thin wrapper that:
 2. Runs `docker compose -f e2e/docker-compose.e2e.yml --profile playwright run --rm playwright-runner`.
 3. Exits with the container's exit code so CI can pick it up.
 
-Playwright's HTML report and trace archives land in `e2e/playwright-results/`
-(via the volume mount). They sit alongside `e2e/logs/` rather than inside it so
-the Drover service logs (which describe what the stack did) stay clearly
-separated from the test-runner artifacts (which describe what the tests saw).
-The CI artifact upload step needs to include `e2e/playwright-results/` in
-addition to the existing `e2e/logs/` upload.
+Playwright's HTML report and trace archives land in `e2e/playwright/results/`
+(via the volume mount). The CI artifact upload step needs to include
+`e2e/playwright/results/` in addition to the existing `e2e/logs/` upload.
 
 ## Tests to implement
 
@@ -267,7 +264,7 @@ Reuses the container from Test 2.
       log viewer).
 - [ ] Write `e2e/run-playwright.sh` (health check → compose run → exit-code passthrough).
 - [ ] Update `run.sh ci` to call `run-playwright.sh` after `cmd_test`.
-- [ ] Verify Playwright HTML report lands in `e2e/playwright-results/`, and add
+- [ ] Verify Playwright HTML report lands in `e2e/playwright/results/`, and add
       that path to the CI artifact upload step (alongside the existing
       `e2e/logs/` upload — the two trees are kept separate on purpose).
 - [ ] Add a note to `e2e/README.md` explaining how to run the Playwright suite
@@ -373,7 +370,7 @@ The shipped Test 5 awaits both the URL change and the
 
 ### Artifact upload: separate workflow step
 
-The plan calls for adding `e2e/playwright-results/` to the existing
+The plan calls for adding `e2e/playwright/results/` to the existing
 artifact upload step. The shipped workflow uses a separate
 `Upload Playwright results` step that publishes the directory as its
 own artifact (`e2e-playwright-results`). Keeping the two artifacts

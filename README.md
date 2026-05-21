@@ -79,7 +79,7 @@ The orchestrator is built on FastAPI (with Uvicorn), aiosqlite for async SQLite 
 | `DROVER_API_KEY` | No | _(unset)_ | SHA-256 hash of the API key. When set, all API requests (except `GET /health`) require a valid `Authorization: Bearer <key>` header. See [Authentication](#authentication). |
 | `PRIVILEGED_IMAGE` | No | _(unset)_ | Docker image for privileged micro-containers. If unset, privileged container requests are rejected. |
 | `REAPER_INTERVAL_SECONDS` | No | `5` | How often (in seconds) the idle-timeout reaper runs. |
-| `DROVER_INIT_TIMEOUT_SECONDS` | No | `20` | Maximum time a container may spend in `initializing` before the watchdog transitions it to `error`. |
+| `DROVER_INIT_TIMEOUT_SECONDS` | No | `20` | Maximum time a container may spend in `initializing` or `resuming` before the watchdog transitions it to `error`. Covers both first init and the resume-after-stop handshake. |
 | `LOG_LEVEL` | No | `INFO` | Python log level (`DEBUG`, `INFO`, `WARNING`, `ERROR`). |
 | `DROVER_ENABLE_CONTAINER_LOGS` | No | _(unset)_ | When set to the string `true`, Drover captures each micro-container's stdout/stderr through the orchestrator. See [docs/observability.md](docs/observability.md). |
 | `DROVER_LOG_MAX_FILE_BYTES` | No | `10485760` (10 MiB) | Per-file size threshold for log rotation of orchestrator-captured micro-container logs. Ignored when capture is disabled. |
@@ -327,7 +327,8 @@ stateDiagram-v2
     running --> stopping: POST /stop (or idle timeout or done signal)
     stopping --> stopped: Docker confirms stop
     stopped --> resuming: POST /resume
-    resuming --> running: Docker confirms start
+    resuming --> running: guest agent sends ready
+    resuming --> error: resume failure / timeout / crash
     running --> destroying: DELETE
     stopped --> destroying: DELETE
     destroying --> destroyed: Docker confirms removal
@@ -337,15 +338,17 @@ stateDiagram-v2
 
 A stopped container retains its filesystem layer and can be resumed. Destroyed containers are fully removed.
 
-`POST /containers` returns immediately with status `initializing`. The Docker create/start work and the guest-agent startup happen in the background; the container is ready to accept exec commands only once status reaches `running`. See [Container Initialization](docs/container-initialization.md) for the full flow.
+`POST /containers` returns immediately with status `initializing`. The Docker create/start work and the guest-agent startup happen in the background; the container is ready to accept exec commands only once status reaches `running`. `POST /containers/{id}/resume` mirrors this: it returns immediately with status `resuming`, then transitions to `running` only after Docker starts the container *and* the guest agent reconnects and sends a `ready` message. See [Container Initialization](docs/container-initialization.md) for the full flow.
 
-When initialization fails (Docker error, timeout, or an orchestrator restart mid-init), the container moves to `error` with an `error_code` field explaining the cause:
+When initialization or resume fails (Docker error, timeout, or an orchestrator restart mid-transition), the container moves to `error` with an `error_code` field explaining the cause:
 
 | `error_code` | Meaning |
 |---|---|
 | `init_docker_error` | Docker create or start call failed during initialization. |
 | `init_timeout` | Initialization did not complete within `DROVER_INIT_TIMEOUT_SECONDS`. |
-| `orchestrator_crash` | The orchestrator restarted while the container was still initializing. |
+| `resume_docker_error` | Docker start call failed during resume. |
+| `resume_timeout` | Resume did not complete within `DROVER_INIT_TIMEOUT_SECONDS` (guest agent did not reconnect and send `ready` in time). |
+| `orchestrator_crash` | The orchestrator restarted while the container was still in `initializing` or `resuming`. |
 
 The intermediate states (`stopping`, `resuming`, `destroying`) are transient guard rails. The API returns `409 Conflict` if you attempt an action that conflicts with a transition already in progress.
 

@@ -3,12 +3,13 @@
 Sits between the REST API layer, the SQLite database, and the Docker
 client.  All container state transitions flow through this module.
 
-Initialization is asynchronous: ``create_container`` inserts the DB row with
-status ``initializing`` and returns immediately.  A background task performs
-the Docker create/start work, and the container transitions to ``running``
-only once the guest agent sends a ``ready`` message.  A watchdog task fails
-the container to ``error`` if initialization does not complete within
-``init_timeout_seconds``.
+Both initialization and resume are asynchronous: ``create_container`` and
+``resume_container`` insert / update the DB row (status ``initializing`` or
+``resuming`` respectively) and return immediately.  A background task
+performs the Docker create/start work, and the container transitions to
+``running`` only once the guest agent sends a ``ready`` message.  A
+watchdog task fails the container to ``error`` if the transition does not
+complete within ``init_timeout_seconds``.
 """
 
 import asyncio
@@ -133,11 +134,11 @@ class ContainerManager:
         self._init_watchdogs.clear()
 
     async def on_container_ready(self, container_id: str) -> None:
-        """Cancel the init watchdog after a ``ready`` message is received.
+        """Cancel the init/resume watchdog after a ``ready`` message is received.
 
         Invoked by ``SocketManager`` via the ready callback.  The DB status
-        has already been transitioned from ``initializing`` to ``running``
-        by the socket manager before this is called.
+        has already been transitioned from ``initializing`` or ``resuming``
+        to ``running`` by the socket manager before this is called.
         """
         watchdog = self._init_watchdogs.pop(container_id, None)
         if watchdog and not watchdog.done():
@@ -156,11 +157,12 @@ class ContainerManager:
             mid-transition),
           - re-establish a socket listener for containers still running.
 
-        Rows in ``initializing`` are skipped during reconciliation because
-        the background init task that owned them was interrupted by the
-        restart and the Docker container may or may not exist yet.  After
-        the reconciliation pass, any remaining ``initializing`` rows are
-        transitioned to ``error`` with code ``orchestrator_crash``.
+        Rows in ``initializing`` or ``resuming`` are skipped during
+        reconciliation because the background task that owned them was
+        interrupted by the restart and the Docker container may or may not
+        be in the expected state.  After the reconciliation pass, any
+        remaining ``initializing`` / ``resuming`` rows are transitioned to
+        ``error`` with code ``orchestrator_crash``.
         """
         rows = await self._db.fetchall(
             "SELECT id, docker_id, status, socket_path FROM containers "
@@ -176,8 +178,9 @@ class ContainerManager:
             docker_id = row["docker_id"]
             db_status = row["status"]
 
-            if db_status == "initializing":
-                # Crashed mid-init; handled by the post-reconciliation pass.
+            if db_status in ("initializing", "resuming"):
+                # Crashed mid-init / mid-resume; handled by the
+                # post-reconciliation pass below.
                 continue
 
             try:
@@ -243,19 +246,25 @@ class ContainerManager:
                     "Startup sync: failed to reconcile container %s", container_id
                 )
 
-        # Any container still in ``initializing`` was interrupted by the
-        # restart.  Force-remove the Docker container if one was created and
-        # transition to ``error`` with code ``orchestrator_crash``.
+        # Any container still in ``initializing`` or ``resuming`` was
+        # interrupted by the restart.  Force-remove the Docker container if
+        # one was created and transition to ``error`` with code
+        # ``orchestrator_crash``.
         stuck_rows = await self._db.fetchall(
-            "SELECT id, docker_id FROM containers WHERE status = 'initializing'",
+            "SELECT id, docker_id, status FROM containers "
+            "WHERE status IN ('initializing', 'resuming')",
         )
         for row in stuck_rows:
             container_id = row["id"]
             docker_id = row["docker_id"]
-            await self._fail_init(container_id, "orchestrator_crash", docker_id)
+            source_status = row["status"]
+            await self._fail_init(
+                container_id, "orchestrator_crash", docker_id, source_status
+            )
             logger.warning(
-                "Startup sync: container %s was stuck initializing, marked error",
+                "Startup sync: container %s was stuck in %s, marked error",
                 container_id,
+                source_status,
             )
 
     # -- create -------------------------------------------------------------
@@ -314,7 +323,7 @@ class ContainerManager:
         )
 
         watchdog_task = asyncio.create_task(
-            self._init_watchdog(container_id, init_task)
+            self._init_watchdog(container_id, init_task, "initializing", "init_timeout")
         )
         self._init_watchdogs[container_id] = watchdog_task
         watchdog_task.add_done_callback(
@@ -416,15 +425,21 @@ class ContainerManager:
             await self._fail_init(container_id, "init_docker_error", docker_id)
 
     async def _init_watchdog(
-        self, container_id: str, init_task: asyncio.Task
+        self,
+        container_id: str,
+        init_task: asyncio.Task,
+        source_status: str,
+        timeout_error_code: str,
     ) -> None:
-        """Fail a container to ``error`` if init does not complete in time.
+        """Fail a container to ``error`` if init/resume does not complete in time.
 
         Sleeps for ``init_timeout_seconds`` and then checks whether the
-        container is still ``initializing``.  If so, cancels the init task,
-        marks the row as ``error`` with code ``init_timeout``, and cleans
-        up.  The watchdog is cancelled when ``ready`` is received or when
-        init itself fails and transitions to ``error`` first.
+        container is still in ``source_status`` (``initializing`` for first
+        init, ``resuming`` for resume).  If so, cancels the background task,
+        marks the row as ``error`` with code ``timeout_error_code``, and
+        cleans up.  The watchdog is cancelled when ``ready`` is received or
+        when the background task itself fails and transitions to ``error``
+        first.
         """
         try:
             await asyncio.sleep(self._config.init_timeout_seconds)
@@ -435,7 +450,7 @@ class ContainerManager:
             "SELECT status, docker_id FROM containers WHERE id = ?",
             (container_id,),
         )
-        if not row or row["status"] != "initializing":
+        if not row or row["status"] != source_status:
             return
 
         if not init_task.done():
@@ -446,26 +461,33 @@ class ContainerManager:
                 pass
 
         logger.warning(
-            "Container %s init timed out after %ds",
+            "Container %s %s timed out after %ds",
             container_id,
+            source_status,
             self._config.init_timeout_seconds,
         )
-        await self._fail_init(container_id, "init_timeout", row["docker_id"])
+        await self._fail_init(
+            container_id, timeout_error_code, row["docker_id"], source_status
+        )
 
     async def _fail_init(
-        self, container_id: str, error_code: str, docker_id: str | None
+        self,
+        container_id: str,
+        error_code: str,
+        docker_id: str | None,
+        source_status: str = "initializing",
     ) -> None:
-        """Transition an initializing container to ``error`` and clean up.
+        """Transition an initializing/resuming container to ``error`` and clean up.
 
-        The UPDATE is conditional on the row still being ``initializing``
-        so a late ``ready`` or a racing watchdog fire cannot overwrite a
-        successful transition.  Cleanup (socket + Docker) only runs if this
-        call actually performed the transition.
+        The UPDATE is conditional on the row still being in
+        ``source_status`` so a late ``ready`` or a racing watchdog fire
+        cannot overwrite a successful transition.  Cleanup (socket +
+        Docker) only runs if this call actually performed the transition.
         """
         async with self._db.execute(
             "UPDATE containers SET status = 'error', error_code = ? "
-            "WHERE id = ? AND status = 'initializing'",
-            (error_code, container_id),
+            "WHERE id = ? AND status = ?",
+            (error_code, container_id, source_status),
         ) as cursor:
             rowcount = cursor.rowcount
 
@@ -614,6 +636,15 @@ class ContainerManager:
     # -- resume -------------------------------------------------------------
 
     async def resume_container(self, container_id: str) -> ContainerResponse:
+        """Begin resuming a stopped container.
+
+        Returns immediately with status ``resuming``.  The Docker start and
+        the wait for the guest agent's ``ready`` message run in the
+        background, mirroring the ``initializing`` flow.  The container
+        transitions to ``running`` only when ``ready`` arrives.  A
+        watchdog transitions the row to ``error`` (code ``resume_timeout``)
+        if ``ready`` does not arrive within ``init_timeout_seconds``.
+        """
         row = await self._db.fetchone(
             "SELECT * FROM containers WHERE id = ?", (container_id,)
         )
@@ -627,33 +658,71 @@ class ContainerManager:
             (container_id,),
         )
 
-        # Re-create the socket listener before starting the container
-        await self._sockets.create_socket(container_id)
-
-        # Read the cursor before starting so we resume from the last
-        # captured timestamp.  None when no logs have been captured yet.
-        cursor = self._logs.read_cursor(container_id)
-
-        await self._docker.start_container(row["docker_id"])
-
-        try:
-            await self._logs.start(container_id, row["docker_id"], since=cursor)
-        except Exception:
-            logger.exception(
-                "Container %s: log capture failed to resume", container_id
-            )
-
-        now = _now_iso()
-        await self._db.execute_insert(
-            "UPDATE containers SET status = 'running', stopped_at = NULL, last_seen = ? WHERE id = ?",
-            (now, container_id),
+        resume_task = asyncio.create_task(
+            self._resume_container_async(container_id, row["docker_id"])
+        )
+        self._init_tasks[container_id] = resume_task
+        resume_task.add_done_callback(
+            lambda _t, cid=container_id: self._init_tasks.pop(cid, None)
         )
 
-        logger.info("Resumed container %s", container_id)
+        watchdog_task = asyncio.create_task(
+            self._init_watchdog(container_id, resume_task, "resuming", "resume_timeout")
+        )
+        self._init_watchdogs[container_id] = watchdog_task
+        watchdog_task.add_done_callback(
+            lambda _t, cid=container_id: self._init_watchdogs.pop(cid, None)
+        )
+
+        logger.info("Resuming container %s; awaiting ready", container_id)
         row = await self._db.fetchone(
             "SELECT * FROM containers WHERE id = ?", (container_id,)
         )
         return _row_to_response(row)
+
+    async def _resume_container_async(
+        self, container_id: str, docker_id: str
+    ) -> None:
+        """Background work for resume: re-create socket, docker start, log capture.
+
+        Mirrors ``_init_container`` but for an existing Docker container.
+        On Docker failure, transitions the row to ``error`` with code
+        ``resume_docker_error``.  On success, the row stays ``resuming``
+        until the guest agent sends ``ready`` (handled by SocketManager).
+        """
+        try:
+            # Re-create the socket listener before starting the container so
+            # the agent has something to connect to when it boots back up.
+            await self._sockets.create_socket(container_id)
+
+            # Read the cursor before starting so log capture resumes from
+            # the last captured timestamp.  None when no logs have been
+            # captured yet (e.g. capture disabled on first run).
+            cursor = self._logs.read_cursor(container_id)
+
+            await self._docker.start_container(docker_id)
+
+            try:
+                await self._logs.start(container_id, docker_id, since=cursor)
+            except Exception:
+                logger.exception(
+                    "Container %s: log capture failed to resume", container_id
+                )
+
+            logger.info(
+                "Container %s Docker resume complete (docker=%s); awaiting ready",
+                container_id,
+                docker_id[:12],
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception(
+                "Container %s failed during Docker resume", container_id
+            )
+            await self._fail_init(
+                container_id, "resume_docker_error", docker_id, "resuming"
+            )
 
     # -- destroy ------------------------------------------------------------
 
