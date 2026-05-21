@@ -13,6 +13,7 @@ the container to ``error`` if initialization does not complete within
 
 import asyncio
 import logging
+import os
 from datetime import datetime, timezone
 
 from orchestrator.config import Config
@@ -96,20 +97,20 @@ class ContainerManager:
         sockets: SocketManager,
         log_capture: LogCaptureManager,
         host_docker_sock: str,
+        host_socket_dir: str,
     ) -> None:
         self._config = config
         self._db = db
         self._docker = docker
         self._sockets = sockets
         self._logs = log_capture
-        # Host-side path of the Docker daemon socket, resolved during
-        # lifespan startup (see app.py:_resolve_host_docker_sock).  Used
-        # only when launching a privileged micro-container, as the bind
-        # source — Docker resolves the source against the host
-        # filesystem, so the orchestrator's in-container view of the
-        # socket (always /var/run/docker.sock) is wrong here on
-        # rootless setups.
+        # Host-side paths resolved during lifespan startup via self-inspect
+        # (see app.py).  Docker resolves bind-mount sources against the host
+        # filesystem, so the orchestrator's in-container views of these paths
+        # are wrong when the host and container paths differ (e.g. rootless
+        # Docker with a relative sockets directory).
         self._host_docker_sock = host_docker_sock
+        self._host_socket_dir = host_socket_dir
         # In-flight background initialization tasks keyed by container id.
         # Used for cancellation on ready-receipt and on orchestrator shutdown.
         self._init_tasks: dict[str, asyncio.Task] = {}
@@ -357,7 +358,13 @@ class ContainerManager:
             env_list = [f"{k}={v}" for k, v in req.env.items()]
             env_list.append(f"DROVER_CONTAINER_ID={container_id}")
 
-            binds: list[str] = [f"{socket_path}:/run/orchestrator.sock"]
+            # Use the HOST-side socket path as the bind source — Docker
+            # resolves bind sources against the host filesystem, not the
+            # orchestrator container's filesystem.
+            host_socket_path = os.path.join(
+                self._host_socket_dir, f"{container_id}.sock"
+            )
+            binds: list[str] = [f"{host_socket_path}:/run/orchestrator.sock"]
             if req.privileged:
                 binds.append(f"{self._host_docker_sock}:/run/docker.sock")
 

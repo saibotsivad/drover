@@ -13,7 +13,7 @@ from fastapi import FastAPI, Request
 from starlette.responses import JSONResponse, Response
 
 from orchestrator.auth import auth_middleware
-from orchestrator.config import DOCKER_SOCK, Config, load_config
+from orchestrator.config import DOCKER_SOCK, SOCKET_DIR, Config, load_config
 from orchestrator.container_manager import ContainerManager
 from orchestrator.database import Database
 from orchestrator.docker_client import DockerClient
@@ -256,6 +256,48 @@ async def _resolve_host_docker_sock(
     return DOCKER_SOCK
 
 
+async def _resolve_host_socket_dir(
+    docker: DockerClient, own_id: str | None
+) -> str:
+    """Return the host-side path of the per-container socket directory.
+
+    Docker resolves bind-mount sources against the host filesystem, so
+    when the orchestrator bind-mounts a socket file into a micro-container
+    it must use the HOST path of the socket, not the in-container path
+    (SOCKET_DIR).  We discover the right value by self-inspecting: look
+    for the mount whose Destination is SOCKET_DIR and return its Source.
+    Falls back to SOCKET_DIR, which is only correct when the host and
+    container paths match.
+    """
+    if own_id is not None:
+        try:
+            info = await docker.inspect_container(own_id)
+            for mount in info.get("Mounts", []) or []:
+                if mount.get("Destination") == SOCKET_DIR:
+                    source = mount.get("Source")
+                    if source:
+                        logger.info(
+                            "Host socket directory from self-inspect: %s", source
+                        )
+                        return source
+            logger.warning(
+                "Self-inspect succeeded but no mount with destination %s "
+                "was found; micro-container socket binds may fail.",
+                SOCKET_DIR,
+            )
+        except Exception:
+            logger.exception(
+                "Self-inspect failed while resolving host socket directory"
+            )
+    logger.warning(
+        "Falling back to %s as the host socket directory. This is only "
+        "correct when the sockets directory is mounted at the same path "
+        "on the host and inside the orchestrator container.",
+        SOCKET_DIR,
+    )
+    return SOCKET_DIR
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     config = load_config()
@@ -297,9 +339,12 @@ async def lifespan(app: FastAPI):
         logger.info("Detected orchestrator container ID: %s", own_id)
 
     host_docker_sock = await _resolve_host_docker_sock(docker, own_id)
+    host_socket_dir = await _resolve_host_socket_dir(docker, own_id)
 
     container_manager = ContainerManager(
-        config, db, docker, sockets, log_capture, host_docker_sock=host_docker_sock
+        config, db, docker, sockets, log_capture,
+        host_docker_sock=host_docker_sock,
+        host_socket_dir=host_socket_dir,
     )
     await container_manager.sync_containers()
 
