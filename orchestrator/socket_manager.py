@@ -52,8 +52,9 @@ class SocketManager:
         """Register a callback invoked after a ready transition succeeds.
 
         Fired only when the ``ready`` message actually transitions the row
-        from ``initializing`` to ``running``.  The orchestrator uses this
-        to cancel the init timeout watchdog for the container.
+        from ``initializing`` or ``resuming`` to ``running``.  The orchestrator
+        uses this to cancel the init/resume timeout watchdog for the
+        container.
         """
         self._ready_callback = callback
 
@@ -225,29 +226,44 @@ class SocketManager:
             )
 
     async def _handle_ready(self, container_id: str) -> None:
-        """Transition an initializing container to running.
+        """Transition an initializing or resuming container to running.
 
         The UPDATE is conditional on the current status being
-        ``initializing`` so a late-arriving ready (e.g. after the init
-        watchdog has already fired and transitioned the row to ``error``)
-        is silently ignored.  Only a successful transition fires the ready
-        callback so the orchestrator can cancel the watchdog.
+        ``initializing`` or ``resuming`` so a late-arriving ready (e.g.
+        after the watchdog has already fired and transitioned the row to
+        ``error``) is silently ignored.  Both paths share this gate
+        because the guest agent's connect-then-send-ready handshake is
+        identical for first init and for resume after stop.  Only a
+        successful transition fires the ready callback so the
+        orchestrator can cancel the watchdog.
         """
+        # Capture the source status before the update so we can log
+        # whether this was an init or a resume transition.
+        row = await self._db.fetchone(
+            "SELECT status FROM containers WHERE id = ?", (container_id,)
+        )
+        source_status = row["status"] if row else None
+
         async with self._db.execute(
-            "UPDATE containers SET status = 'running' "
-            "WHERE id = ? AND status = 'initializing'",
+            "UPDATE containers SET status = 'running', stopped_at = NULL "
+            "WHERE id = ? AND status IN ('initializing', 'resuming')",
             (container_id,),
         ) as cursor:
             rowcount = cursor.rowcount
 
         if rowcount == 0:
             logger.debug(
-                "Ignored ready from container %s (not in initializing state)",
+                "Ignored ready from container %s (status=%s)",
                 container_id,
+                source_status,
             )
             return
 
-        logger.info("Container %s ready; status initializing -> running", container_id)
+        logger.info(
+            "Container %s ready; status %s -> running",
+            container_id,
+            source_status,
+        )
         if self._ready_callback:
             asyncio.create_task(self._ready_callback(container_id))
 

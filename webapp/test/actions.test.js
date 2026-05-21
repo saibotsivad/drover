@@ -171,9 +171,9 @@ test('POST /actions/containers/:id/stop returns an error row on failure', async 
 	}
 });
 
-// --- POST /actions/containers/:id/start ----------------------------------
+// --- POST /actions/containers/:id/resume ---------------------------------
 
-test('POST /actions/containers/:id/start triggers a resume and redirects via HX-Redirect', async () => {
+test('POST /actions/containers/:id/resume triggers a resume and redirects via HX-Redirect', async () => {
 	let calledPath = null;
 	const orchestrator = makeFakeOrchestrator({
 		postJson: async (path) => {
@@ -182,7 +182,7 @@ test('POST /actions/containers/:id/start triggers a resume and redirects via HX-
 				id: 'c-aaa',
 				image: 'python-runner',
 				privileged: false,
-				status: 'running',
+				status: 'resuming',
 				label: null,
 				timeout_seconds: 300,
 				created_at: '2026-05-01T12:00:00Z',
@@ -194,7 +194,7 @@ test('POST /actions/containers/:id/start triggers a resume and redirects via HX-
 	});
 	const { url, close } = await startApp(orchestrator);
 	try {
-		const res = await fetch(`${url}/actions/containers/c-aaa/start`, {
+		const res = await fetch(`${url}/actions/containers/c-aaa/resume`, {
 			method: 'POST',
 			redirect: 'manual',
 		});
@@ -208,13 +208,13 @@ test('POST /actions/containers/:id/start triggers a resume and redirects via HX-
 	}
 });
 
-test('POST /actions/containers/:id/start renders an error fragment on orchestrator failure', async () => {
+test('POST /actions/containers/:id/resume renders an error fragment on orchestrator failure', async () => {
 	const orchestrator = makeFakeOrchestrator({
 		postJson: async () => { throw new OrchestratorHttpError(409, { detail: 'container is not stopped' }); },
 	});
 	const { url, close } = await startApp(orchestrator);
 	try {
-		const res = await fetch(`${url}/actions/containers/c-aaa/start`, { method: 'POST' });
+		const res = await fetch(`${url}/actions/containers/c-aaa/resume`, { method: 'POST' });
 		assert.equal(res.status, 409);
 		assert.equal(res.headers.get('hx-redirect'), null);
 		const text = await res.text();

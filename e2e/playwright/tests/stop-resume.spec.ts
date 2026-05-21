@@ -53,48 +53,49 @@ async function destroyContainerViaApi(request: APIRequestContext, id: string): P
 	await request.delete(`${ORCHESTRATOR_URL}/containers/${id}`, { headers: AUTH_HEADERS });
 }
 
-test.describe.serial('container detail Start button', () => {
+test.describe.serial('container detail Resume button', () => {
 	let containerId: string;
 
 	test.afterAll(async ({ request }) => {
 		if (containerId) await destroyContainerViaApi(request, containerId);
 	});
 
-	test('Start button appears when stopped, and resumes the container when clicked', async ({ page, request }) => {
+	test('Resume button appears when stopped, and brings the container back to running when clicked', async ({ page, request }) => {
 		containerId = await createPrivilegedContainer(request);
 		await waitForContainerStatus(request, containerId, 'running', 30_000);
 
-		// While running, the detail page shows Stop/Destroy but no Start.
+		// While running, the detail page shows Stop/Destroy but no Resume.
 		await page.goto(`/views/containers/${containerId}`);
 		await expect(page.locator('#container-detail')).toBeVisible();
-		await expect(page.locator('.btn-start')).toHaveCount(0);
+		await expect(page.locator('.btn-resume')).toHaveCount(0);
 		await expect(page.locator('.btn-stop')).toHaveCount(1);
 
 		// Stop via the API (the UI Stop button on the detail page lives in
-		// its own code path; this test is about the Start button).
+		// its own code path; this test is about the Resume button).
 		await stopContainerViaApi(request, containerId);
 		await waitForContainerStatus(request, containerId, 'stopped', 30_000);
 
-		// After reload the detail page should now show the Start button and
+		// After reload the detail page should now show the Resume button and
 		// no Stop button.
 		await page.reload();
-		await expect(page.locator('.btn-start')).toHaveCount(1);
+		await expect(page.locator('.btn-resume')).toHaveCount(1);
 		await expect(page.locator('.btn-stop')).toHaveCount(0);
 		await expect(page.locator('.status-stopped')).toBeVisible();
 
-		// Click Start. The action route returns HX-Redirect back to the
+		// Click Resume. The action route returns HX-Redirect back to the
 		// detail page; htmx swaps it to a real navigation.
 		await Promise.all([
 			page.waitForURL(new RegExp(`/views/containers/${containerId}(?:[?#]|$)`)),
-			page.locator('.btn-start').click(),
+			page.locator('.btn-resume').click(),
 		]);
 
-		// The orchestrator's resume call returns synchronously with status
-		// `running`. Poll the API to confirm the underlying state change,
-		// then reload the page to assert the UI now reflects it.
+		// After resume the orchestrator returns immediately with status
+		// `resuming` and only flips to `running` once the guest agent
+		// reconnects and sends ready.  Poll the API for the full
+		// transition, then reload the page to assert the UI matches.
 		await waitForContainerStatus(request, containerId, 'running', 30_000);
 		await page.reload();
-		await expect(page.locator('.btn-start')).toHaveCount(0);
+		await expect(page.locator('.btn-resume')).toHaveCount(0);
 		await expect(page.locator('.btn-stop')).toHaveCount(1);
 		await expect(page.locator('.status-running')).toBeVisible();
 	});

@@ -51,7 +51,7 @@ Tunable environment variables:
 | `DROVER_API_KEY` | _(unset)_ | SHA-256 hash of the bearer token. When unset, authentication is disabled. |
 | `PRIVILEGED_IMAGE` | _(unset)_ | Docker image name for privileged micro-containers. Required to use `"privileged": true` on container create. |
 | `REAPER_INTERVAL_SECONDS` | `5` | How often (in seconds) the idle-timeout reaper runs. |
-| `DROVER_INIT_TIMEOUT_SECONDS` | `20` | Seconds a container has to send `ready` before being marked `error`. |
+| `DROVER_INIT_TIMEOUT_SECONDS` | `20` | Seconds the guest agent has to send `ready` before being marked `error`. Applies to both the initial `initializing → running` handshake and the `resuming → running` handshake after `POST /containers/{id}/resume`. |
 | `LOG_LEVEL` | `INFO` | Log verbosity (`DEBUG`, `INFO`, `WARNING`, `ERROR`). |
 | `DROVER_ENABLE_CONTAINER_LOGS` | _(unset)_ | Set to the exact string `"true"` to capture each micro-container's stdout/stderr under `/var/lib/drover/logs/`. Any other value (or unset) leaves capture off. |
 | `DROVER_LOG_MAX_FILE_BYTES` | `10485760` | Rotation threshold for captured log files. Ignored when capture is disabled. |
@@ -187,18 +187,20 @@ States:
 | `running` | Guest agent connected and ready; commands can be sent. |
 | `stopping` | Stop requested; Docker stop in progress. |
 | `stopped` | Paused; can be resumed. The socket file is preserved. |
-| `resuming` | Docker start in progress after resume request. |
+| `resuming` | Resume requested; Docker start in progress and waiting for the guest agent to reconnect and send `ready`. |
 | `destroying` | Delete requested; Docker remove in progress. |
 | `destroyed` | Terminal state; container and socket are gone. |
-| `error` | Initialization failed. DB row kept for diagnostics; `DELETE` to remove. |
+| `error` | Initialization or resume failed. DB row kept for diagnostics; `DELETE` to remove. |
 
 Error codes (set when status is `error`):
 
 | `error_code` | Cause |
 |---|---|
-| `init_docker_error` | Docker create or start call failed. |
-| `init_timeout` | Guest did not send `ready` within `DROVER_INIT_TIMEOUT_SECONDS`. |
-| `orchestrator_crash` | Orchestrator restarted while container was initializing. |
+| `init_docker_error` | Docker create or start call failed during initialization. |
+| `init_timeout` | Guest did not send `ready` within `DROVER_INIT_TIMEOUT_SECONDS` during initialization. |
+| `resume_docker_error` | Docker start call failed during resume. |
+| `resume_timeout` | Guest did not reconnect and send `ready` within `DROVER_INIT_TIMEOUT_SECONDS` during resume. |
+| `orchestrator_crash` | Orchestrator restarted while container was in `initializing` or `resuming`. |
 
 A background reaper task runs every `REAPER_INTERVAL_SECONDS` and stops any running container whose `last_seen` timestamp is older than its `timeout_seconds`. Heartbeats from the guest agent update `last_seen`. A guest can also send `done` to request an immediate stop without waiting for the timeout.
 

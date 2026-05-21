@@ -11,15 +11,15 @@ function metadataRow(label, value) {
 function actionBar(container) {
 	const id = container.id;
 	const isStoppable = container.status === 'running' || container.status === 'initializing';
-	const isStartable = container.status === 'stopped';
+	const isResumable = container.status === 'stopped';
 	const isDestroyable = container.status !== 'destroying' && container.status !== 'destroyed';
-	if (!isStoppable && !isStartable && !isDestroyable) return null;
+	if (!isStoppable && !isResumable && !isDestroyable) return null;
 	return html`<div class="action-bar">
-		${isStartable ? html`<button
+		${isResumable ? html`<button
 			type="button"
-			class="btn btn-primary btn-start"
-			hx-post="/actions/containers/${id}/start"
-		>Start</button>` : null}
+			class="btn btn-primary btn-resume"
+			hx-post="/actions/containers/${id}/resume"
+		>Resume</button>` : null}
 		${isStoppable ? html`<button
 			type="button"
 			class="btn btn-secondary btn-stop"

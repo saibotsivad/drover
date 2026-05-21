@@ -75,6 +75,26 @@ def manager(config, db, docker, sockets, log_capture):
 # -- helpers ----------------------------------------------------------------
 
 
+async def _drain_pending_init(manager, container_id):
+    """Await the background init/resume task and cancel its watchdog.
+
+    Used when the test does NOT want to simulate a successful ready (e.g.
+    when asserting the row stays in ``resuming`` after the background task
+    completes, or when forcing a Docker failure).  Without this drain the
+    pending watchdog leaks into the next test.
+    """
+    task = manager._init_tasks.get(container_id)
+    if task:
+        await task
+    watchdog = manager._init_watchdogs.pop(container_id, None)
+    if watchdog and not watchdog.done():
+        watchdog.cancel()
+        try:
+            await watchdog
+        except asyncio.CancelledError:
+            pass
+
+
 async def _await_init(manager, container_id):
     """Wait for the background init task and cancel the watchdog."""
     task = manager._init_tasks.get(container_id)
@@ -96,6 +116,27 @@ async def _create_running(manager, db, **kwargs):
         "UPDATE containers SET status = 'running' "
         "WHERE id = ? AND status = 'initializing'",
         (resp.id,),
+    )
+    return resp
+
+
+async def _resume_to_running(manager, db, container_id):
+    """Resume a stopped container and simulate ``ready`` from the agent.
+
+    Mirrors ``_create_running``: awaits the background resume task,
+    cancels the watchdog, and flips the DB row from ``resuming`` to
+    ``running``.  Tests that exercise resume end-to-end go through this
+    helper to match the production handshake.
+    """
+    resp = await manager.resume_container(container_id)
+    task = manager._init_tasks.get(container_id)
+    if task:
+        await task
+    await manager.on_container_ready(container_id)
+    await db.execute_insert(
+        "UPDATE containers SET status = 'running', stopped_at = NULL "
+        "WHERE id = ? AND status = 'resuming'",
+        (container_id,),
     )
     return resp
 
@@ -337,7 +378,8 @@ async def test_stop_initializing_raises_conflict(manager, db):
 # -- resume -----------------------------------------------------------------
 
 
-async def test_resume_container(manager, docker, sockets, db):
+async def test_resume_container_returns_resuming(manager, docker, sockets, db):
+    """resume_container returns immediately with status=resuming."""
     resp = await _create_running(manager, db, image="test-img")
     await manager.stop_container(resp.id)
 
@@ -346,10 +388,44 @@ async def test_resume_container(manager, docker, sockets, db):
     docker.start_container.reset_mock()
 
     resumed = await manager.resume_container(resp.id)
-    assert resumed.status == ContainerStatus.running
-    assert resumed.stopped_at is None
+    assert resumed.status == ContainerStatus.resuming
+
+    # Drain the background resume task and cancel its watchdog so the
+    # event loop has nothing pending when the test exits.  Status remains
+    # ``resuming`` until the guest agent's ready arrives.
+    await _drain_pending_init(manager, resp.id)
     sockets.create_socket.assert_called_once_with(resp.id)
     docker.start_container.assert_called_once()
+
+    fetched = await manager.get_container(resp.id)
+    assert fetched.status == ContainerStatus.resuming
+
+
+async def test_resume_to_running_after_ready(manager, db):
+    """Status flips to running only after the guest agent's ready arrives."""
+    resp = await _create_running(manager, db, image="test-img")
+    await manager.stop_container(resp.id)
+
+    resumed = await _resume_to_running(manager, db, resp.id)
+    assert resumed.status == ContainerStatus.resuming
+
+    fetched = await manager.get_container(resp.id)
+    assert fetched.status == ContainerStatus.running
+    assert fetched.stopped_at is None
+
+
+async def test_resume_docker_failure_marks_error(manager, docker, db):
+    """Docker start failure during resume transitions row to error."""
+    resp = await _create_running(manager, db, image="test-img")
+    await manager.stop_container(resp.id)
+
+    docker.start_container.side_effect = RuntimeError("docker boom")
+    await manager.resume_container(resp.id)
+    await _drain_pending_init(manager, resp.id)
+
+    fetched = await manager.get_container(resp.id)
+    assert fetched.status == ContainerStatus.error
+    assert fetched.error_code == "resume_docker_error"
 
 
 async def test_resume_running_raises_conflict(manager, db):
@@ -795,6 +871,11 @@ async def test_resume_passes_cursor_to_log_capture(
     initial_calls = len(streamer.calls)
 
     await manager_with_logs.resume_container(resp.id)
+    # The background resume task does the streamer call; await it.
+    task = manager_with_logs._init_tasks.get(resp.id)
+    if task:
+        await task
+
     # Resume should issue exactly one new streamer call carrying the
     # parsed cursor (Docker takes integer unix seconds).
     assert len(streamer.calls) == initial_calls + 1
@@ -815,6 +896,9 @@ async def test_resume_after_stop_appends_to_existing_log_file(
     # On resume the streamer yields the same frame again; the writer
     # appends to 0.log (file is small, no rotation).
     await manager_with_logs.resume_container(resp.id)
+    task = manager_with_logs._init_tasks.get(resp.id)
+    if task:
+        await task
     log_path = log_capture_real.container_dir(resp.id) / "0.log"
     deadline = asyncio.get_event_loop().time() + 2
     while asyncio.get_event_loop().time() < deadline:

@@ -81,7 +81,7 @@ export function createActionsRouter({ orchestrator }) {
 		}
 	});
 
-	router.post('/containers/:id/start', async (req, res) => {
+	router.post('/containers/:id/resume', async (req, res) => {
 		const id = req.params.id;
 		try {
 			await orchestrator.postJson(`/containers/${encodeURIComponent(id)}/resume`);
