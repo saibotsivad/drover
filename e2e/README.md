@@ -54,9 +54,7 @@ already-up stack the bash tests use. Tests live under
 
 `./e2e/run.sh ci` runs the bash suite, then the Playwright suite, then
 tears the stack down in one shot. The Playwright HTML report and any
-trace archives land in `e2e/playwright/results/`. See
-[`docs/planning/playwright-webapp-testing.md`](../docs/planning/playwright-webapp-testing.md)
-for the design.
+trace archives land in `e2e/playwright/results/`.
 
 ## Where logs go
 
