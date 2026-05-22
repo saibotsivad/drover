@@ -50,11 +50,16 @@ _ws_run() {
 
 _ws_parse_status() {
 	# $1 = stderr file path. Sets $WS_HANDSHAKE_STATUS / $WS_CLOSE_CODE.
+	#
+	# Both grep pipelines are wrapped in `|| true` because `set -o
+	# pipefail` is in effect (via common.sh) and CLOSE_CODE is normally
+	# absent from handshake-only runs — without the guard, a no-match
+	# grep aborts the calling test before assert_equals ever runs.
 	WS_HANDSHAKE_STATUS=""
 	WS_CLOSE_CODE=""
 	if [ -s "$1" ]; then
-		WS_HANDSHAKE_STATUS=$(grep '^HANDSHAKE_STATUS:' "$1" | head -1 | awk '{print $2}')
-		WS_CLOSE_CODE=$(grep '^CLOSE_CODE:' "$1" | head -1 | awk '{print $2}')
+		WS_HANDSHAKE_STATUS=$(grep '^HANDSHAKE_STATUS:' "$1" 2>/dev/null | head -1 | awk '{print $2}' || true)
+		WS_CLOSE_CODE=$(grep '^CLOSE_CODE:' "$1" 2>/dev/null | head -1 | awk '{print $2}' || true)
 	fi
 	export WS_HANDSHAKE_STATUS WS_CLOSE_CODE
 }
