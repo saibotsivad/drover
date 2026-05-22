@@ -111,6 +111,7 @@ GET    /containers/{id}/logs                    Live container log tail (text/pl
 GET    /containers/{id}/logs/files              List on-disk captured log files; 409 if capture disabled
 GET    /containers/{id}/logs/files/{filename}   Fetch a captured log file; 409 if capture disabled
 GET    /containers/{id}/logs/orchestrator       Orchestrator logs filtered to this container
+WS     /containers/{id}/ws                      Real-time stream of exec output and Docker logs
 ```
 
 **Create request body:**
@@ -152,6 +153,56 @@ GET    /containers/{id}/logs/orchestrator       Orchestrator logs filtered to th
 ```
 
 `status` progresses `pending` → `running` → `complete`. Messages are ordered by `seq` and preserve the interleaved order of stdout and stderr. See [exec commands doc](../docs/exec-commands.md) for the full schema.
+
+**WebSocket stream:**
+
+`/containers/{id}/ws` is a one-way (server → client) WebSocket that pushes both exec output and the container's Docker logs as they happen. Use it to avoid polling for long-running commands. Commands are still issued via `POST /containers/{id}/execs`; the WebSocket only delivers output. Historical exec output is still fetched via the polling endpoint — the WebSocket only carries new messages from the moment it connects.
+
+| Query param | Type | Description |
+|---|---|---|
+| `tail` | int | Number of historical Docker log lines to replay before live-tailing. Default: none. Applies only to Docker logs, not exec output. |
+| `token` | string | Authentication fallback for clients that can't set request headers (browsers). Equivalent to `Authorization: Bearer <token>`. Note: query params appear in access logs. |
+
+Server-to-client JSON messages:
+
+```jsonc
+// exec output chunk (one per stdout/stderr write from a command)
+{"type": "output", "command_id": "<id>", "stream": "stdout|stderr", "data": "..."}
+
+// exec command finished
+{"type": "status", "command_id": "<id>", "status": "complete", "exit_code": 0}
+
+// container stdout/stderr line (carries Docker's RFC3339Nano timestamp prefix)
+{"type": "log", "stream": "stdout|stderr", "data": "..."}
+
+// server-side error; the socket is closed after a fatal error
+{"type": "error", "message": "..."}
+```
+
+Multiple WebSocket connections to the same container are allowed; each gets an independent 256-message queue. A slow consumer that fills its queue starts dropping messages rather than back-pressuring the server — drained reads resume cleanly.
+
+Connection-time errors close the socket with a `1008 Policy Violation`: unknown container, invalid auth, or malformed `tail`. After accept, the socket stays open until the client disconnects or the orchestrator shuts down. Stopping or destroying the container ends the Docker log stream but does not auto-close existing WebSocket connections.
+
+Minimal Python client:
+
+```python
+import asyncio, json, websockets
+
+async def stream(container_id, token):
+    headers = {"Authorization": f"Bearer {token}"}
+    async with websockets.connect(
+        f"ws://localhost:8000/containers/{container_id}/ws",
+        additional_headers=headers,
+    ) as ws:
+        async for raw in ws:
+            print(json.loads(raw))
+
+asyncio.run(stream("cnt_xyz", "secret"))
+```
+
+The orchestrator's WebSocket support depends on the `websockets` package being installed (already in `requirements.txt`); without it, uvicorn rejects the upgrade with `No supported WebSocket library detected`.
+
+**Reverse-proxy note:** Any HTTP reverse proxy in front of the orchestrator must forward the `Upgrade` and `Connection` headers and use HTTP/1.1 to the upstream. Caddy and Traefik handle this automatically; for nginx add `proxy_http_version 1.1;`, `proxy_set_header Upgrade $http_upgrade;`, `proxy_set_header Connection "upgrade";` and bump `proxy_read_timeout` to cover the expected idle period on long-lived connections.
 
 ### Images
 

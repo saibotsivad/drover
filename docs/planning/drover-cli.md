@@ -1,8 +1,6 @@
 # Drover CLI
 
 > Draft for team review — not yet adopted.
->
-> **Status: blocked** — waiting on `docs/planning/websocket-streaming-plan.md` to land before the exec command can be implemented with real streaming output.
 
 ---
 
@@ -18,7 +16,7 @@ The orchestrator exposes a REST API over HTTP. Today the only first-class client
 
 Relevant context:
 - `docs/exec-commands.md` — how commands flow from caller → orchestrator → guest agent
-- `docs/planning/websocket-streaming-plan.md` — WebSocket streaming is in-flight; exec output streaming in the CLI will depend on this landing
+- `orchestrator/README.md` (WebSocket stream section) — the per-container WebSocket endpoint the CLI will use for exec output streaming
 
 ---
 
@@ -100,7 +98,7 @@ This is the interesting one — see Open Questions below.
 
 **`drover start` not `drover run`** — "run" implies synchronous execution. Starting a container is an async operation that hands back a container ID; the caller decides what to do next. "Start" is more accurate.
 
-**Exec streaming depends on WebSocket plan** — The polling exec API works today but would feel broken in a CLI (you'd have to wait for the full command to finish before seeing any output). The CLI should use WebSockets for streaming once that lands. In the interim, the CLI could poll and print incrementally, but that's a stopgap worth calling out explicitly.
+**Exec streaming uses the WebSocket endpoint** — The polling exec API works today but would feel broken in a CLI (you'd have to wait for the full command to finish before seeing any output). The CLI uses the per-container WebSocket endpoint (`/containers/{id}/ws`) to receive output frames as they arrive and forwards them to stdout/stderr.
 
 ---
 
@@ -113,24 +111,20 @@ This is the interesting one — see Open Questions below.
 - Bidirectional stdin streaming (also not planned)
 - Raw terminal mode handling in the CLI
 
-The WebSocket streaming plan mentions interactive shell as a future consideration. The question is whether we want to scope it into the CLI v1 or ship non-interactive exec first and revisit.
+Interactive shell support over the WebSocket transport is listed as a future consideration in the [WebSocket ADR](../decisions/2026-04-11-websockets-for-streaming.md); the current endpoint is one-way (server → client only). The question is whether we want to scope interactive into the CLI v1 or ship non-interactive exec first and revisit.
 
 Options:
 - **a)** Non-interactive only in v1. No-arg `drover exec` errors with a clear "not yet supported" message.
-- **b)** Interactive in v1, which means PTY support needs to be designed and implemented first — probably a meaningful addition to the orchestrator scope.
-- **c)** Non-interactive now, interactive as a fast follow once the WebSocket plan ships.
+- **b)** Interactive in v1, which means PTY support and bidirectional stdin need to be designed and implemented on the orchestrator side first — probably a meaningful addition to the orchestrator scope.
+- **c)** Non-interactive now, interactive as a fast follow once orchestrator-side stdin/PTY work lands.
 
 Option (c) seems most pragmatic but the team should confirm.
 
-**2. How does the CLI handle streaming before WebSockets land?**
-
-If we want to ship the CLI before the WebSocket streaming plan is complete, the exec command has to either (a) poll and print incrementally, or (b) wait until the command finishes and print everything at once. Neither is great UX. Should the CLI wait for WebSockets, or ship with polling and upgrade later?
-
-**3. Output format**
+**2. Output format**
 
 Tables are readable for humans but bad for scripting. Should there be a `--json` flag for machine-readable output? A `--quiet` flag that prints only the ID? Worth deciding before implementation so it's consistent across commands.
 
-**4. Container ID prefix matching**
+**3. Container ID prefix matching**
 
 Typing full container IDs is painful. Should the CLI accept unambiguous prefixes (like Docker does)? Straightforward to implement but slightly more complexity in the client.
 
@@ -138,7 +132,7 @@ Typing full container IDs is painful. Should the CLI accept unambiguous prefixes
 
 ## Implementation Notes
 
-The CLI would live in a new top-level directory (e.g. `cli/`) and be a separate installable package. It talks to the orchestrator REST API (and eventually WebSocket) as an HTTP client — no direct database or socket access.
+The CLI would live in a new top-level directory (e.g. `cli/`) and be a separate installable package. It talks to the orchestrator REST API for control-plane operations and the per-container WebSocket endpoint for exec output streaming — no direct database or socket access.
 
 Rough structure:
 ```
@@ -156,15 +150,13 @@ cli/
 
 The HTTP client layer wraps httpx, reads `DROVER_API_URL`/`DROVER_API_KEY` from the environment, and handles error responses uniformly (print the `detail` field and exit non-zero).
 
-For exec streaming, the client will eventually open a WebSocket (per the streaming plan), subscribe to the command's output, and forward chunks to stdout/stderr as they arrive.
+For exec streaming, the client opens a WebSocket to `/containers/{id}/ws`, filters incoming messages by the `command_id` returned from the `POST /containers/{id}/execs` call, and forwards `output` chunks to stdout/stderr as they arrive. It exits when the matching `status: complete` message arrives, propagating `exit_code`.
 
 ---
 
 ## Risks and Mitigations
 
-**Exec streaming dependency** — The most useful part of `drover exec` blocks on the WebSocket plan. Mitigation: ship images/ps/start/stop first; treat exec as a phase 2 or explicitly wait on the streaming plan.
-
-**Interactive mode scope creep** — PTY support is a significant orchestrator change. If we don't decide on interactive mode before starting the CLI build, it could end up being re-architected later. Mitigation: make the open question above a concrete decision before implementation starts.
+**Interactive mode scope creep** — PTY and bidirectional stdin support are a significant orchestrator change (the current WebSocket is one-way). If we don't decide on interactive mode before starting the CLI build, it could end up being re-architected later. Mitigation: make the open question above a concrete decision before implementation starts.
 
 **Auth token in process list** — If `DROVER_API_KEY` ever gets passed as a CLI flag instead of an env var, it would appear in `ps` output. Env vars are safer. Keep it env-only.
 

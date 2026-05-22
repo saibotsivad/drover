@@ -93,7 +93,9 @@ The caller gets a command ID back immediately and polls `GET /containers/{id}/ex
 | `exit_code` | int or null | `null` until status is `complete` |
 | `messages` | array | Ordered list of `{seq, stream, data}` objects |
 
-**Note** - Streaming (SSE or WebSocket) is listed as an open design question in the README and is not part of the initial implementation.
+### Streaming
+
+A WebSocket endpoint at `GET /containers/{id}/ws` pushes exec output (`{"type": "output", ...}`) and command-complete events (`{"type": "status", "status": "complete", ...}`) as they happen, alongside container Docker logs. Use it for long-running commands where polling would be wasteful. The polling endpoint above is still the only way to fetch historical output for a command — the WebSocket only carries new messages from the moment the client connects. See [WebSocket stream in the orchestrator README](../orchestrator/README.md#containers) for the message schema, auth options, and a minimal client.
 
 ### Socket protocol is newline-delimited JSON
 
