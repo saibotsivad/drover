@@ -4,10 +4,6 @@ The items below are follow-up work and open design decisions identified during p
 
 ---
 
-## Command output streaming
-
-The current exec API uses polling (`GET /containers/{id}/exec/{cmd_id}`). Real-time delivery via SSE or WebSocket would reduce latency and load for long-running commands. There's an RFC open that details some stuff about that with WebSockets.
-
 ## List-endpoint pagination
 
 Container log retention landed via `DROVER_ENABLE_CONTAINER_LOGS` and the

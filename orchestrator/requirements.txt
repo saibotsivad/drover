@@ -1,5 +1,10 @@
 fastapi==0.115.6
 uvicorn==0.34.0
+# Required by uvicorn to accept the per-container WebSocket upgrade
+# (see orchestrator/routers/websockets.py).  Without this dependency
+# uvicorn logs "No supported WebSocket library detected" and rejects
+# the upgrade before the handler runs.
+websockets==14.2
 aiosqlite==0.21.0
 httpx==0.28.1
 pydantic==2.10.4
