@@ -93,8 +93,7 @@ jobs:
 
       # Playwright HTML report and traces live under a separate path
       # (e2e/playwright/results/) so the Drover service logs and the
-      # test-runner artifacts stay clearly separated. See
-      # docs/planning/playwright-webapp-testing.md.
+      # test-runner artifacts stay clearly separated.
       - name: Upload Playwright results
         if: always()
         uses: actions/upload-artifact@v4
