@@ -49,11 +49,11 @@ drover exec <container-id> [command...]    Run a command (or drop into interacti
 
 #### `drover images` / `drover image <name>`
 
-Thin wrappers over `GET /images` and `GET /images/{name}`. Output as a table for list, key-value pairs for detail.
+Thin wrappers over `GET /images` and `GET /images/{name}`. Returns a JSON array of image objects for the list form, and a single JSON image object for the detail form.
 
 #### `drover ps`
 
-Lists containers from `GET /containers`. Shows ID, image, status, label, age. Useful to grab a container ID for subsequent commands.
+Lists containers from `GET /containers`. Returns a JSON array of container objects (id, image, status, label, age, etc.). Useful to grab a container ID for subsequent commands via `jq`.
 
 #### `drover start <image-name>`
 
@@ -66,17 +66,17 @@ Maps to `POST /containers`. Flags:
 | `--env KEY=VALUE` | `env` dict | Repeatable |
 | `--timeout <seconds>` | `timeout_seconds` | Default: server default (300s) |
 
-On success, prints the container ID so it can be captured: `$(drover start myimage)`.
+On success, prints a JSON object `{"id": "<container-id>"}` so the ID can be captured: `id=$(drover start myimage | jq -r .id)`.
 
 #### `drover stop` / `drover destroy`
 
-POST to the appropriate stop/destroy endpoint. Print status on completion.
+POST to the appropriate stop/destroy endpoint. Returns a JSON object describing the resulting state (e.g. `{"id": "...", "status": "stopped"}`).
 
 #### `drover exec <container-id> [command...]`
 
 This is the interesting one — see Open Questions below.
 
-**Non-interactive** (`drover exec <id> git clone ...`): Posts to `POST /containers/{id}/execs` with the joined command string, then streams output to the terminal as it arrives. Exits with the command's exit code.
+**Non-interactive** (`drover exec <id> git clone ...`): Posts to `POST /containers/{id}/execs` with the joined command string, then streams output to the terminal as it arrives. `stdout` and `stderr` chunks are forwarded to the corresponding CLI streams as raw bytes (not wrapped in JSON) so that command output remains pipeable as-is. The process exits with the command's exit code. (See Open Questions on whether a `--json` mode that wraps the stream in newline-delimited JSON frames is worth adding.)
 
 **Interactive** (`drover exec <id>` with no command): Would drop the user into an interactive shell inside the container. This requires PTY support in the orchestrator, which doesn't exist yet.
 
@@ -100,6 +100,14 @@ This is the interesting one — see Open Questions below.
 
 **Exec streaming uses the WebSocket endpoint** — The polling exec API works today but would feel broken in a CLI (you'd have to wait for the full command to finish before seeing any output). The CLI uses the per-container WebSocket endpoint (`/containers/{id}/ws`) to receive output frames as they arrive and forwards them to stdout/stderr.
 
+**All control-plane output is JSON** — Every command that returns data (everything except `exec`'s streamed output) prints a single JSON value to stdout. Even commands that conceptually return a single scalar — `drover start` returning a container ID, `drover stop` returning a status — emit a JSON object (`{"id": "..."}`, `{"id": "...", "status": "stopped"}`) rather than a bare string. This is deliberate:
+
+- The shape of the response can grow over time (extra fields, nested metadata) without breaking callers that select specific fields with `jq`.
+- One consistent contract across every command is easier to learn and document than a mix of tables, key-value text, and bare IDs.
+- `jq` is universally available and makes scripting against the CLI straightforward: `drover ps | jq -r '.[] | select(.status=="running") | .id'`.
+
+Errors are also emitted as JSON on stderr (`{"error": "...", "detail": "..."}`) with a non-zero exit code. Human-friendly table rendering, if it's ever wanted, can be added later as an opt-in `--format=table` flag without breaking the default contract.
+
 ---
 
 ## Open Questions
@@ -120,9 +128,9 @@ Options:
 
 Option (c) seems most pragmatic but the team should confirm.
 
-**2. Output format**
+**2. Exec output framing**
 
-Tables are readable for humans but bad for scripting. Should there be a `--json` flag for machine-readable output? A `--quiet` flag that prints only the ID? Worth deciding before implementation so it's consistent across commands.
+Control-plane output is JSON (see Key Decisions), but `drover exec` streams raw bytes so its output is directly pipeable. Should there also be an opt-in `--json` mode for `exec` that wraps each chunk in a newline-delimited JSON frame (e.g. `{"stream": "stdout", "data": "..."}` ... `{"exit_code": 0}`)? Useful for callers that want structured access to exit codes and stream separation without parsing the raw byte stream. Defer until there's a concrete need.
 
 **3. Container ID prefix matching**
 
