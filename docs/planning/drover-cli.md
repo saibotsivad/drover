@@ -68,7 +68,7 @@ Maps to `POST /containers`. Flags:
 
 On success, prints a JSON object `{"id": "<container-id>"}` so the ID can be captured: `id=$(drover start myimage | jq -r .id)`.
 
-#### `drover stop` / `drover destroy`
+#### `drover (stop|destroy) <container-id>`
 
 POST to the appropriate stop/destroy endpoint. Returns a JSON object describing the resulting state (e.g. `{"id": "...", "status": "stopped"}`).
 
