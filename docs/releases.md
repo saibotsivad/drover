@@ -171,6 +171,36 @@ Notes:
   `CHANGELOG.yml`. The data is identical to that file; the change feed
   just aggregates across components for one release.
 
+## CLI release assets (`cli-release-assets.json`)
+
+The CLI is built outside the container publish flow, so its download URLs
+and checksums can't be derived from GHCR. Instead the CLI release job
+emits a small sidecar JSON and uploads it as a workflow artifact named
+`cli-release-assets`. The umbrella job downloads that artifact and feeds
+it to the manifest builder, which populates the `cli` manifest entry and
+bakes the per-platform URLs + SHA-256s into `install.sh`. This is a
+workflow-to-workflow contract: changes to it require coordinated PRs
+against both the CLI publish workflow (producer) and the umbrella
+workflow (consumer). The builder validates the shape and fails loudly on
+a missing field or platform.
+
+```json
+{
+  "version": "1.0.2",
+  "release_url": "https://github.com/saibotsivad/drover/releases/tag/cli-v1.0.2",
+  "assets": {
+    "linux-amd64":  { "url": "...", "sha256": "..." },
+    "linux-arm64":  { "url": "...", "sha256": "..." },
+    "darwin-amd64": { "url": "...", "sha256": "..." },
+    "darwin-arm64": { "url": "...", "sha256": "..." },
+    "windows-amd64":{ "url": "...", "sha256": "..." }
+  }
+}
+```
+
+When the CLI didn't change in a release, no artifact is produced and the
+builder carries the previous manifest's `cli` block forward unchanged.
+
 ## Commitments
 
 - **Stable install URL.** `https://github.com/saibotsivad/drover/releases/latest/download/install.sh`
@@ -214,6 +244,15 @@ flowchart TD
 The umbrella release is the last step of the existing release flow. It
 runs only after every per-component publish job in the same release has
 succeeded; if any of them fails, no umbrella release is created.
+
+The pinned `docker-compose.yml` needs a digest for every container
+component. On a normal release those come from the freshly-published
+components plus the previous manifest (carried forward). The **first
+umbrella release ever** has no previous manifest to carry digests from,
+so it must re-publish every container component in one go — otherwise the
+compose step fails loudly with the missing-digest component named. The
+fix is to re-run `push-tag.yml` for the unchanged components (or land a
+follow-on release once a previous manifest exists).
 
 ## Installation
 

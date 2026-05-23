@@ -139,6 +139,30 @@ jobs:
       version: ${{ needs.detect.outputs.webapp_version }}
       mark_latest: true
 
+  umbrella:
+    needs: [detect, publish-orchestrator, publish-builder, publish-webapp]
+    if: |
+      always() &&
+      needs.detect.result == 'success' &&
+      (needs.publish-orchestrator.result == 'success' || needs.publish-orchestrator.result == 'skipped') &&
+      (needs.publish-builder.result      == 'success' || needs.publish-builder.result      == 'skipped') &&
+      (needs.publish-webapp.result       == 'success' || needs.publish-webapp.result       == 'skipped') &&
+      (needs.detect.outputs.orchestrator_version != '' ||
+       needs.detect.outputs.builder_version      != '' ||
+       needs.detect.outputs.webapp_version       != '')
+    permissions:
+      contents: write
+      id-token: write
+      packages: read
+    uses: ./.github/workflows/umbrella-release.yml
+    with:
+      orchestrator_version: ${{ needs.detect.outputs.orchestrator_version }}
+      orchestrator_digest:  ${{ needs.publish-orchestrator.outputs.digest }}
+      builder_version:      ${{ needs.detect.outputs.builder_version }}
+      builder_digest:       ${{ needs.publish-builder.outputs.digest }}
+      webapp_version:       ${{ needs.detect.outputs.webapp_version }}
+      webapp_digest:        ${{ needs.publish-webapp.outputs.digest }}
+
   notify-pr:
     needs: [detect, publish-orchestrator, publish-builder, publish-webapp]
     if: |

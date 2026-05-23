@@ -1,0 +1,37 @@
+drover: v2026.5-2
+released: 2026-05-22T18:00:00Z
+components:
+  orchestrator:
+    version: 1.2.3
+    image: ghcr.io/saibotsivad/drover:1.2.3
+    digest: sha256:1111111111111111111111111111111111111111111111111111111111111111
+  builder:
+    version: 0.4.0
+    image: ghcr.io/saibotsivad/drover-builder:0.4.0
+    digest: sha256:2222222222222222222222222222222222222222222222222222222222222222
+  webapp:
+    version: 1.9.0
+    image: ghcr.io/saibotsivad/drover-webapp:1.9.0
+    digest: sha256:3333333333333333333333333333333333333333333333333333333333333333
+  executor:
+    version: 0.3.0
+    pypi: drover-executor==0.3.0
+  cli:
+    version: 1.0.1
+    release: https://github.com/saibotsivad/drover/releases/tag/cli-v1.0.1
+    assets:
+      linux-amd64:
+        url: https://example.com/cli-1.0.1/drover-linux-amd64.tar.gz
+        sha256: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      linux-arm64:
+        url: https://example.com/cli-1.0.1/drover-linux-arm64.tar.gz
+        sha256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+      darwin-amd64:
+        url: https://example.com/cli-1.0.1/drover-darwin-amd64.tar.gz
+        sha256: cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+      darwin-arm64:
+        url: https://example.com/cli-1.0.1/drover-darwin-arm64.tar.gz
+        sha256: dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
+      windows-amd64:
+        url: https://example.com/cli-1.0.1/drover-windows-amd64.tar.gz
+        sha256: eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee

@@ -21,6 +21,10 @@ on:
         required: false
         type: boolean
         default: false
+    outputs:
+      digest:
+        description: 'sha256:... digest of the pushed image manifest. Consumed by the umbrella release workflow to pin compose references.'
+        value: ${{ jobs.publish.outputs.digest }}
 
 env:
   REGISTRY: ghcr.io
@@ -33,6 +37,8 @@ jobs:
       packages: write
       id-token: write
       attestations: write
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4

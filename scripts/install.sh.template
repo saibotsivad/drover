@@ -1,0 +1,105 @@
+#!/usr/bin/env bash
+# Drover CLI installer.
+#
+# This file is GENERATED per release by scripts/build_manifest.py from
+# scripts/install.sh.template in the source repo. The values block below
+# carries that release's CLI version and per-platform asset URLs +
+# SHA-256s as literal bash variable assignments. Everything below the
+# values block is byte-identical to the template for every release —
+# reviewers should diff a generated install.sh against
+# scripts/install.sh.template plus the rendered values block to verify
+# the logic is unchanged.
+#
+# The installer does NOT fetch or parse manifest.yaml; every URL and
+# hash it uses is baked in here, so install.sh.sig covers the full
+# install path.
+
+set -euo pipefail
+
+# --- VALUES BLOCK ---
+
+err() { printf '%s\n' "drover install: $*" >&2; }
+die() { err "$@"; exit 1; }
+
+if [ -z "${CLI_VERSION:-}" ]; then
+    die "values block missing or malformed (no CLI_VERSION)"
+fi
+
+if command -v curl >/dev/null 2>&1; then
+    DOWNLOADER="curl"
+elif command -v wget >/dev/null 2>&1; then
+    DOWNLOADER="wget"
+else
+    die "need curl or wget on PATH"
+fi
+
+if command -v sha256sum >/dev/null 2>&1; then
+    SHA_TOOL="sha256sum"
+elif command -v shasum >/dev/null 2>&1; then
+    SHA_TOOL="shasum -a 256"
+else
+    die "need sha256sum or shasum on PATH"
+fi
+
+os_raw=$(uname -s)
+arch_raw=$(uname -m)
+
+case "$os_raw" in
+    Linux)   os="linux" ;;
+    Darwin)  os="darwin" ;;
+    MINGW*|MSYS*|CYGWIN*) os="windows" ;;
+    *) die "unsupported OS: $os_raw" ;;
+esac
+
+case "$arch_raw" in
+    x86_64|amd64)   arch="amd64" ;;
+    aarch64|arm64)  arch="arm64" ;;
+    *) die "unsupported architecture: $arch_raw" ;;
+esac
+
+platform="${os}_${arch}"
+
+url_var="ASSET_${platform}_URL"
+sha_var="ASSET_${platform}_SHA256"
+
+url="${!url_var:-}"
+sha="${!sha_var:-}"
+
+if [ -z "$url" ] || [ -z "$sha" ]; then
+    die "no prebuilt asset for platform: ${platform} (CLI ${CLI_VERSION})"
+fi
+
+tmpdir=$(mktemp -d)
+trap 'rm -rf "$tmpdir"' EXIT
+
+tarball="${tmpdir}/drover-${platform}.tar.gz"
+
+if [ "$DOWNLOADER" = "curl" ]; then
+    curl -fsSL -o "$tarball" "$url"
+else
+    wget -q -O "$tarball" "$url"
+fi
+
+(cd "$tmpdir" && printf '%s  %s\n' "$sha" "$(basename "$tarball")" | $SHA_TOOL -c -) >/dev/null \
+    || die "checksum mismatch on downloaded archive for ${platform}"
+
+tar -xzf "$tarball" -C "$tmpdir"
+
+binary=""
+for candidate in drover drover.exe; do
+    found=$(find "$tmpdir" -type f -name "$candidate" 2>/dev/null | head -n 1 || true)
+    if [ -n "$found" ]; then
+        binary="$found"
+        break
+    fi
+done
+
+if [ -z "$binary" ]; then
+    die "drover binary not found inside ${tarball}"
+fi
+
+install_dir="${DROVER_INSTALL_DIR:-/usr/local/bin}"
+mkdir -p "$install_dir"
+install -m 0755 "$binary" "${install_dir}/$(basename "$binary")"
+
+echo "drover ${CLI_VERSION} installed to ${install_dir}/$(basename "$binary")"

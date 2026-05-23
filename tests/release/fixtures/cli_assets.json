@@ -1,0 +1,11 @@
+{
+  "version": "1.0.2",
+  "release_url": "https://github.com/saibotsivad/drover/releases/tag/cli-v1.0.2",
+  "assets": {
+    "linux-amd64":  { "url": "https://example.com/cli-1.0.2/drover-linux-amd64.tar.gz",  "sha256": "1010101010101010101010101010101010101010101010101010101010101010" },
+    "linux-arm64":  { "url": "https://example.com/cli-1.0.2/drover-linux-arm64.tar.gz",  "sha256": "2020202020202020202020202020202020202020202020202020202020202020" },
+    "darwin-amd64": { "url": "https://example.com/cli-1.0.2/drover-darwin-amd64.tar.gz", "sha256": "3030303030303030303030303030303030303030303030303030303030303030" },
+    "darwin-arm64": { "url": "https://example.com/cli-1.0.2/drover-darwin-arm64.tar.gz", "sha256": "4040404040404040404040404040404040404040404040404040404040404040" },
+    "windows-amd64":{ "url": "https://example.com/cli-1.0.2/drover-windows-amd64.tar.gz","sha256": "5050505050505050505050505050505050505050505050505050505050505050" }
+  }
+}

@@ -4,6 +4,11 @@ Drover ships several independently-versioned projects out of one repository.
 Versioning is driven entirely by human-authored YAML files in the [`/changes`](../changes) folder, and runs on a small set of
 GitHub Actions workflows and a Python script.
 
+For the umbrella layer that sits on top of these per-component versions —
+the CalVer release (`v$YEAR.$MONTH-$INCREMENT`), the cross-link manifest,
+and the cosign-signed install/compose assets — see
+[`docs/releases.md`](./releases.md).
+
 ## Versioned projects
 
 | Project | Path | Published as |

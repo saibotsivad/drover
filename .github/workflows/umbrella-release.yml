@@ -1,0 +1,282 @@
+name: Umbrella release
+
+# Builds and publishes a GitHub Release whose body is a cross-link
+# manifest. See docs/releases.md for the contract.
+
+on:
+  workflow_call:
+    inputs:
+      orchestrator_version:
+        description: 'Bare semver of orchestrator if it just published; "" if not.'
+        required: false
+        type: string
+        default: ""
+      orchestrator_digest:
+        description: 'sha256:... digest of the orchestrator image, if published.'
+        required: false
+        type: string
+        default: ""
+      builder_version:
+        required: false
+        type: string
+        default: ""
+      builder_digest:
+        required: false
+        type: string
+        default: ""
+      webapp_version:
+        required: false
+        type: string
+        default: ""
+      webapp_digest:
+        required: false
+        type: string
+        default: ""
+      executor_version:
+        description: 'Reserved: executor has no publish workflow today; carried forward from previous manifest.'
+        required: false
+        type: string
+        default: ""
+      cli_version:
+        description: 'Reserved: CLI release coordination ships in a follow-up; carried forward from previous manifest until then.'
+        required: false
+        type: string
+        default: ""
+  workflow_dispatch:
+    inputs:
+      drover_version:
+        description: 'Explicit CalVer string for the release (e.g. v2026.5-3). Required for manual re-runs.'
+        required: true
+        type: string
+      dry_run:
+        description: 'If true, build and upload artifacts but do not create a release.'
+        required: false
+        type: boolean
+        default: true
+      make_latest:
+        description: 'Set the release as latest. False for backport publishes of older Drover versions.'
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+  id-token: write
+  packages: read
+
+concurrency:
+  group: umbrella-release-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      drover_version: ${{ steps.version.outputs.drover_version }}
+      have_changes: ${{ steps.gather.outputs.have_changes }}
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install release requirements
+        run: pip install -r requirements-release.txt
+
+      - name: Compute drover version
+        id: version
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            version="${{ inputs.drover_version }}"
+            if [[ ! "$version" =~ ^v[0-9]{4}\.[0-9]{1,2}-[0-9]+$ ]]; then
+              echo "error: drover_version must match v\$YEAR.\$MONTH-\$INCREMENT (got '$version')" >&2
+              exit 1
+            fi
+          else
+            export YEAR=$(date -u +%Y)
+            export MONTH=$(date -u +%-m)
+            # Forward releases only — backports (make_latest=false) are
+            # tagged the same way but we'd ignore them via the isLatest
+            # flag, and prereleases are filtered out below. The auto path
+            # always computes forward from the newest forward release;
+            # backports use the workflow_dispatch path.
+            export JSON=$(gh api "repos/${{ github.repository }}/releases?per_page=30" 2>/dev/null || echo '[]')
+            increment=$(python3 <<'PY'
+          import json, os, re
+          data = json.loads(os.environ["JSON"])
+          year, month = os.environ["YEAR"], os.environ["MONTH"]
+          pat = re.compile(r"^v(\d{4})\.(\d{1,2})-(\d+)$")
+          max_inc = 0
+          for rel in data:
+              if rel.get("prerelease"):
+                  continue
+              m = pat.match(rel.get("tag_name", ""))
+              if not m:
+                  continue
+              if m.group(1) == year and m.group(2) == month:
+                  max_inc = max(max_inc, int(m.group(3)))
+          print(max_inc + 1)
+          PY
+          )
+            version="v${YEAR}.${MONTH}-${increment}"
+          fi
+          echo "drover_version=$version" >> "$GITHUB_OUTPUT"
+          echo "Computed drover version: $version"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download previous release manifest (if any)
+        id: previous
+        run: |
+          set -euo pipefail
+          mkdir -p staging
+          if gh release view --repo "${{ github.repository }}" \
+               --json tagName --jq '.tagName' >/dev/null 2>&1; then
+            # Try latest first; tolerate 404 (no releases yet).
+            if gh release download --repo "${{ github.repository }}" \
+                 --pattern 'manifest.yaml' --dir staging/prev 2>/dev/null; then
+              echo "have_previous=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "have_previous=false" >> "$GITHUB_OUTPUT"
+            fi
+          else
+            echo "have_previous=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Download CLI release assets manifest (if produced this run)
+        id: cli
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: cli-release-assets
+          path: staging/cli
+
+      - name: Gather component args
+        id: gather
+        run: |
+          set -euo pipefail
+          args=()
+          registry="ghcr.io/${{ github.repository }}"
+
+          add() {
+            local name=$1 version=$2 image=$3 digest=$4
+            if [[ -n "$version" && -n "$digest" ]]; then
+              args+=("--component" "${name}=${version}:${image}@${digest}")
+            elif [[ -n "$version" && -z "$digest" ]]; then
+              echo "warning: ${name} version=${version} provided without digest; skipping" >&2
+            fi
+          }
+
+          add orchestrator "${{ inputs.orchestrator_version }}" "${registry}"          "${{ inputs.orchestrator_digest }}"
+          add builder      "${{ inputs.builder_version }}"      "${registry}-builder"  "${{ inputs.builder_digest }}"
+          add webapp       "${{ inputs.webapp_version }}"       "${registry}-webapp"   "${{ inputs.webapp_digest }}"
+
+          if [[ ${#args[@]} -eq 0 && ! -f staging/cli/cli-release-assets.json ]]; then
+            echo "have_changes=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "have_changes=true" >> "$GITHUB_OUTPUT"
+          fi
+
+          # Persist the array as a single newline-delimited string for the next step.
+          printf '%s\n' "${args[@]}" > staging/component_args.txt || true
+
+      - name: Build manifest, changes, install.sh, docker-compose.yml
+        if: steps.gather.outputs.have_changes == 'true'
+        run: |
+          set -euo pipefail
+          mkdir -p staging/out
+          prev_args=()
+          if [[ -f staging/prev/manifest.yaml ]]; then
+            prev_args=(--previous-manifest staging/prev/manifest.yaml)
+          fi
+          cli_args=()
+          if [[ -f staging/cli/cli-release-assets.json ]]; then
+            cli_args=(--cli-assets staging/cli/cli-release-assets.json)
+          fi
+          mapfile -t comp_args < <(grep -v '^$' staging/component_args.txt || true)
+
+          python3 scripts/build_manifest.py \
+            --drover-version "${{ steps.version.outputs.drover_version }}" \
+            --repo-root . \
+            --compose-source docker-compose.yml \
+            --installer-template scripts/install.sh.template \
+            --output-dir staging/out \
+            "${prev_args[@]}" "${cli_args[@]}" "${comp_args[@]}"
+
+          python3 scripts/build_release_notes.py \
+            --manifest staging/out/manifest.yaml \
+            --changes staging/out/changes.yml \
+            --output staging/out/notes.md
+
+      - name: Install cosign
+        if: steps.gather.outputs.have_changes == 'true'
+        uses: sigstore/cosign-installer@v3
+
+      - name: Sign release blobs with cosign (keyless OIDC)
+        if: steps.gather.outputs.have_changes == 'true'
+        run: |
+          set -euo pipefail
+          cd staging/out
+          for asset in manifest.yaml changes.yml install.sh docker-compose.yml; do
+            if [[ -f "$asset" ]]; then
+              cosign sign-blob --yes \
+                --output-signature "${asset}.sig" \
+                "$asset"
+            fi
+          done
+
+      - name: Build checksums.txt
+        if: steps.gather.outputs.have_changes == 'true'
+        run: |
+          set -euo pipefail
+          cd staging/out
+          # Hash every release artifact except checksums.txt itself.
+          sha256sum manifest.yaml manifest.yaml.sig \
+                    changes.yml changes.yml.sig \
+                    docker-compose.yml docker-compose.yml.sig \
+                    $([[ -f install.sh ]] && echo "install.sh install.sh.sig") \
+                    > checksums.txt
+
+      - name: Upload release assets as workflow artifact
+        if: steps.gather.outputs.have_changes == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: umbrella-release-${{ steps.version.outputs.drover_version }}
+          path: staging/out/
+          if-no-files-found: error
+
+      - name: Create GitHub Release
+        # dry_run only exists on the workflow_dispatch path. On
+        # workflow_call from push-tag.yml, github.event_name reflects the
+        # caller's trigger ('pull_request'), not 'workflow_call' — so the
+        # condition gates on dispatch-with-dry-run rather than on
+        # event_name being 'workflow_call'.
+        if: |
+          steps.gather.outputs.have_changes == 'true' &&
+          !(github.event_name == 'workflow_dispatch' && inputs.dry_run)
+        run: |
+          set -euo pipefail
+          cd staging/out
+          assets=(
+            manifest.yaml manifest.yaml.sig
+            changes.yml changes.yml.sig
+            docker-compose.yml docker-compose.yml.sig
+            checksums.txt
+          )
+          if [[ -f install.sh ]]; then
+            assets+=(install.sh install.sh.sig)
+          fi
+          latest_flag="--latest"
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" && "${{ inputs.make_latest }}" != "true" ]]; then
+            latest_flag="--latest=false"
+          fi
+          gh release create "${{ steps.version.outputs.drover_version }}" \
+            --repo "${{ github.repository }}" \
+            --title "Drover ${{ steps.version.outputs.drover_version }}" \
+            --notes-file notes.md \
+            $latest_flag \
+            "${assets[@]}"
