@@ -142,21 +142,7 @@ The CLI exits when the matching `status: complete` frame arrives, propagating it
 
 Errors are also emitted as JSON on stderr (`{"error": "...", "detail": "..."}`) with a non-zero exit code. Human-friendly table rendering, if it's ever wanted, can be added later as an opt-in `--format=table` flag without breaking the default contract.
 
----
-
-## Open Questions
-
-**1. Container ID prefix matching**
-
-Typing full container IDs is painful. Should the CLI accept unambiguous prefixes (like Docker does)? Straightforward to implement but slightly more complexity in the client.
-
----
-
-## Resolved Questions
-
-**Interactive exec is out of scope for v1.** Non-interactive only. The `--`-less form (`drover exec <id>`) is reserved for interactive in a future version — until then it errors with a clear "not yet supported" message. Interactive lands as a fast follow once orchestrator-side PTY and bidirectional stdin support exist (currently the WebSocket is one-way, per the [WebSocket ADR](../decisions/2026-04-11-websockets-for-streaming.md)).
-
-**Exec output framing: pass through WebSocket frames as NDJSON.** The orchestrator already emits structured JSON frames over the WebSocket; the CLI writes them to stdout one per line without transformation. Callers reconstruct stdout/stderr (or pluck out `exit_code`) with `jq`. This avoids a second framing decision in the CLI and keeps `exec` consistent with the rest of the JSON-output contract.
+**Container IDs are matched exactly** — no prefix matching. Callers grab the full ID with `jq` from `drover ps` or `drover start`.
 
 ---
 
@@ -187,8 +173,6 @@ For the lifecycle commands (`drover start`, `drover stop`, `drover destroy`), th
 ---
 
 ## Risks and Mitigations
-
-**Interactive mode scope creep** — PTY and bidirectional stdin support are a significant orchestrator change (the current WebSocket is one-way). If we don't decide on interactive mode before starting the CLI build, it could end up being re-architected later. Mitigation: make the open question above a concrete decision before implementation starts.
 
 **Auth token in process list** — If `DROVER_API_KEY` ever gets passed as a CLI flag instead of an env var, it would appear in `ps` output. Env vars are safer. Keep it env-only.
 
