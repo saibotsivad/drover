@@ -16,7 +16,7 @@ jobs:
           python-version: "3.12"
 
       - name: Install dependencies
-        run: pip install -r orchestrator/requirements.txt -r requirements-test.txt
+        run: pip install -r orchestrator/requirements.txt -r requirements-test.txt -r requirements-release.txt
 
       - name: Install executor
         run: pip install -e executor/
