@@ -47,13 +47,15 @@ Every Drover release has the same shape:
 | `manifest.yaml.sig` | Cosign signature over `manifest.yaml`. |
 | `install.sh` | CLI installer. Generated per release from a stable template plus this release's component data; carries the CLI binary URLs and SHA-256s as literal variable assignments at the top of the script. Does not parse `manifest.yaml`. |
 | `install.sh.sig` | Cosign signature over `install.sh`. Verifying this covers every URL and checksum the installer will use. |
+| `docker-compose.yml` | Operator-ready compose stack with every `image:` pinned to `<name>:<version>@sha256:<digest>` for this release. Generated from the root `docker-compose.yml` in the repo by substituting only the `image:` lines, so all comments and structure are preserved byte-for-byte. |
+| `docker-compose.yml.sig` | Cosign signature over `docker-compose.yml`. |
 | `checksums.txt` | SHA-256 of every asset attached to this release. |
 
-`install.sh` and `manifest.yaml` are generated from the same component
-data in the same workflow step, so they cannot drift. Consumers verifying
-an install use `install.sh.sig`; consumers verifying a container
-deployment or any other non-install use of the release data use
-`manifest.yaml.sig`.
+`install.sh`, `manifest.yaml`, and `docker-compose.yml` are generated
+from the same component data in the same workflow step, so they cannot
+drift. Consumers verifying an install use `install.sh.sig`; operators
+deploying the stack verify `docker-compose.yml.sig`; consumers verifying
+any other use of the release data use `manifest.yaml.sig`.
 
 **Body of the release:**
 
@@ -179,13 +181,33 @@ sh install.sh
 Because the URLs and checksums are baked into the script body,
 `install.sh.sig` covers everything the installer will fetch.
 
-Container operators pin to a Drover version by reading the manifest:
+Container operators run a Drover release by downloading its pinned
+compose file:
+
+```sh
+curl -fsSL -O https://github.com/saibotsivad/drover/releases/latest/download/docker-compose.yml
+docker compose up -d
+```
+
+Every `image:` in the released compose file is pinned to
+`<name>:<version>@sha256:<digest>` — Docker resolves the digest and
+ignores tag drift, so a `compose up` is byte-identical to what was
+tested at release time. Operators wanting maximum supply-chain hygiene
+verify it first:
+
+```sh
+curl -fsSL -O https://github.com/saibotsivad/drover/releases/latest/download/docker-compose.yml.sig
+cosign verify-blob docker-compose.yml --signature docker-compose.yml.sig \
+  --certificate-identity ... --certificate-oidc-issuer ...
+```
+
+Operators with custom needs can still pin from the manifest directly:
 
 ```sh
 curl -sL https://github.com/saibotsivad/drover/releases/download/v2026.5-3/manifest.yaml
 ```
 
-…and pulling each image by its digest.
+…and reference each image by its digest in their own infrastructure.
 
 ## Re-running a release
 
