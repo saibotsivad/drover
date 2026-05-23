@@ -135,194 +135,234 @@ implementation purposes:
 
 ### 1. Manifest builder script (`scripts/build_manifest.py`)
 
-- [ ] Accept inputs via env vars or argparse:
+- [x] Accept inputs via env vars or argparse:
   - `--previous-manifest` (path to last release's `manifest.yaml`, may be
     absent for the very first umbrella release).
   - `--component <name>=<version>:<image>@<digest>` (repeatable, for
     container components that were just published).
   - `--released-at` (ISO 8601 UTC; defaults to now).
   - `--drover-version` (the CalVer string computed upstream).
-  - `--output` (path to write the assembled manifest).
-- [ ] For each project in the canonical list (read from
-  `docs/versioning.md`'s table, or a hard-coded list in the script kept in
-  sync — pick one and call it out in a comment):
-  - [ ] If the project appears in `--component` arguments, use those values.
-  - [ ] Else, copy the entry from `--previous-manifest`.
-  - [ ] Else (first release ever, no previous), read `published` from the
+  - `--output-dir` (directory to write `manifest.yaml`, `changes.yml`,
+    `install.sh`, and `docker-compose.yml` into).
+- [x] For each project in the canonical list (hard-coded in the script as
+  `PROJECTS`, kept in sync with `docs/versioning.md`'s table — see the
+  comment above `PROJECTS` in `scripts/build_manifest.py`):
+  - [x] If the project appears in `--component` arguments, use those values.
+  - [x] Else, copy the entry from `--previous-manifest`.
+  - [x] Else (first release ever, no previous), read `published` from the
     project's `CHANGELOG.yml` and synthesize the image reference from the
-    known image-suffix mapping.
-- [ ] For the CLI: read a sidecar JSON file produced by the per-CLI release
+    known image-suffix mapping. Digest is omitted in that degraded case
+    (warning logged); see "Edge cases" for the implication on compose
+    rendering.
+- [x] For the CLI: read a sidecar JSON file produced by the per-CLI release
   job (`cli-release-assets.json`) describing each platform's URL and
-  SHA-256. Schema documented in section 4 below.
-- [ ] Write `manifest.yaml` with deterministic key ordering (use
-  `yaml.safe_dump(..., sort_keys=False)` and an explicit dict order so
-  diffs between releases stay readable).
-- [ ] Assemble `changes.yml`:
-  - [ ] For each project named in `--component`, load its
+  SHA-256. Schema documented in section 5 below.
+- [x] Write `manifest.yaml` with deterministic key ordering (`yaml.safe_dump`
+  with `sort_keys=False`; the script builds plain `dict`s in canonical
+  insertion order, and `_dump_yaml` preserves that).
+- [x] Assemble `changes.yml`:
+  - [x] For each project named in `--component`, load its
         `CHANGELOG.yml` and find the entry whose `version` equals the
         project's new version. Lift its `entries` verbatim.
-  - [ ] Set `from` from the previous manifest's
+  - [x] Set `from` from the previous manifest's
         `components.<project>.version`, or `null` if absent (first
         release ever, or new project).
-  - [ ] Set `to` from the new version. Compute `bump` at the component
+  - [x] Set `to` from the new version. Compute `bump` at the component
         level as `max(entries[].bump)` under the ordering
         `major > minor > patch`.
-  - [ ] `previous_drover` comes from the previous manifest's `drover`
+  - [x] `previous_drover` comes from the previous manifest's `drover`
         field, or `null` if there was no previous manifest.
-  - [ ] Refuse to render if `--component` is empty (a no-op release —
+  - [x] Refuse to render if `--component` is empty (a no-op release —
         same condition that prevents the umbrella job from creating a
         release at all).
-  - [ ] Refuse to render if any project's `CHANGELOG.yml` lacks an entry
+  - [x] Refuse to render if any project's `CHANGELOG.yml` lacks an entry
         matching the released version. That would mean the release PR
         was constructed incorrectly upstream; the workflow should fail
         loudly rather than emit an empty `changes` block for that
         component.
-  - [ ] Write `changes.yml` with the same deterministic key-ordering
+  - [x] Write `changes.yml` with the same deterministic key-ordering
         convention as `manifest.yaml`.
-- [ ] Render a pinned `docker-compose.yml` from the repo-root
+- [x] Render a pinned `docker-compose.yml` from the repo-root
   `docker-compose.yml`:
-  - [ ] Read the source compose file as raw text. Do **not** YAML-parse
+  - [x] Read the source compose file as raw text. Do **not** YAML-parse
         it — round-tripping through PyYAML would lose the comment block
         at the top, which contains operator-facing documentation.
-  - [ ] For each container component (orchestrator, builder, webapp,
+  - [x] For each container component (orchestrator, builder, webapp,
         plus any future ones in the canonical project list), rewrite the
         `image:` line that references `ghcr.io/<owner>/<image_name>` to
         `ghcr.io/<owner>/<image_name>:<version>@sha256:<digest>`. Use a
         regex anchored to the start of the line and the image name so
         comments mentioning `image:` aren't touched.
-  - [ ] Refuse to render if any expected image line is missing, or if a
+  - [x] Refuse to render if any expected image line is missing, or if a
         line matches more than once. The check enforces that the source
         compose stays in sync with the canonical project list.
-  - [ ] Refuse to render if any rewritten line still contains `:latest`
+  - [x] Refuse to render if any rewritten line still contains `:latest`
         (defensive: catches a missed substitution).
-  - [ ] Snapshot-test the output against a fixture in `tests/release/`.
-- [ ] Render `install.sh` from `scripts/install.sh.template`:
-  - [ ] Read the template.
-  - [ ] Build a values block — a sequence of literal bash variable
+  - [x] Snapshot-test the output against a fixture in `tests/release/`.
+- [x] Render `install.sh` from `scripts/install.sh.template`:
+  - [x] Read the template.
+  - [x] Build a values block — a sequence of literal bash variable
         assignments derived from the same component data used to write
         `manifest.yaml`. Per-platform CLI variables are flat names like
         `ASSET_linux_amd64_URL`, `ASSET_linux_amd64_SHA256`.
-  - [ ] Shell-escape every value (use `shlex.quote` and wrap in double
-        quotes in the rendered output) so a future malformed input cannot
-        break out of the assignment.
-  - [ ] Substitute the values block into the template at a single marker
-        (e.g. `# --- VALUES BLOCK ---`). Reject the rendering if the
-        marker appears zero or more than one times.
-  - [ ] Add a generated-at timestamp and the Drover version as a comment
+  - [x] Shell-escape every value. Implementation uses a uniform
+        always-single-quote helper (`_bash_squote`) rather than
+        `shlex.quote` so safe values stay quoted too — that way every
+        assignment line in the rendered installer has the same shape and
+        the audit-by-diff workflow described below is unambiguous.
+  - [x] Substitute the values block into the template at a single marker
+        (`# --- VALUES BLOCK ---`). Reject the rendering if the marker
+        appears zero or more than one times.
+  - [x] Add a generated-at timestamp and the Drover version as a comment
         header so the rendered script is self-describing.
-- [ ] Unit tests under `tests/release/test_build_manifest.py`:
-  - [ ] No previous manifest, one component changed.
-  - [ ] Previous manifest, no components changed (no-op release, should
+- [x] Unit tests under `tests/release/test_build_manifest.py`:
+  - [x] No previous manifest, one component changed (partial-manifest +
+        compose-render-fails coverage; first-release-ever with every
+        container bumped is the full-build test).
+  - [x] Previous manifest, no components changed (no-op release, should
     error — see "Edge cases" below).
-  - [ ] Previous manifest, one container changed, CLI unchanged.
-  - [ ] Previous manifest, CLI changed, containers unchanged.
-  - [ ] Schema validation against a vendored JSON schema.
-  - [ ] Rendered `install.sh` parses under `bash -n` (syntax check).
-  - [ ] Rendered `install.sh` and `manifest.yaml` agree on every CLI URL
+  - [x] Previous manifest, one container changed, CLI unchanged.
+  - [x] Previous manifest, CLI changed, containers unchanged.
+  - [ ] Schema validation against a vendored JSON schema. **Deferred** —
+        the manifest/changes schema is small and covered by structural
+        assertions in the existing unit tests; adding a JSON schema and
+        keeping it in sync is more friction than value at this stage.
+        Revisit if the schema grows downstream consumers.
+  - [x] Rendered `install.sh` parses under `bash -n` (syntax check).
+  - [x] Rendered `install.sh` and `manifest.yaml` agree on every CLI URL
         and SHA-256 (cross-check fixture).
-  - [ ] Shell escaping: feed a value containing `"`, `$`, and backticks
+  - [x] Shell escaping: feed a value containing `"`, `$`, and backticks
         through the renderer and confirm the resulting `install.sh` still
         parses and exposes the literal string.
-  - [ ] Rendered `docker-compose.yml` parses cleanly under
-        `docker compose config` (run in CI as a smoke test).
-  - [ ] Rendered `docker-compose.yml` contains zero occurrences of
+  - [x] Rendered `docker-compose.yml` parses cleanly under
+        `docker compose config` (skips if docker is not on PATH so unit
+        runs without Docker stay green; CI exercises it).
+  - [x] Rendered `docker-compose.yml` contains zero occurrences of
         `:latest`.
-  - [ ] Rendered `docker-compose.yml` and `manifest.yaml` agree on every
+  - [x] Rendered `docker-compose.yml` and `manifest.yaml` agree on every
         image digest (cross-check fixture).
-  - [ ] Missing-image guard: if the source compose lacks an `image:`
+  - [x] Missing-image guard: if the source compose lacks an `image:`
         line for an expected component, the builder errors with the
         component name.
-  - [ ] `changes.yml`: first-ever release sets `from` and
+  - [x] `changes.yml`: first-ever release sets `from` and
         `previous_drover` to `null`.
-  - [ ] `changes.yml`: component bump rolls up correctly when a project
+  - [x] `changes.yml`: component bump rolls up correctly when a project
         has multiple entries (`major` wins over `minor` and `patch`).
-  - [ ] `changes.yml`: only components named in `--component` appear;
+  - [x] `changes.yml`: only components named in `--component` appear;
         unchanged components are absent.
-  - [ ] `changes.yml`: missing CHANGELOG entry for the released version
+  - [x] `changes.yml`: missing CHANGELOG entry for the released version
         causes the builder to fail with the project name.
-  - [ ] `changes.yml` and `manifest.yaml` agree on every `to` version
+  - [x] `changes.yml` and `manifest.yaml` agree on every `to` version
         (cross-check fixture).
 
 ### 2. CalVer version computation
 
-- [ ] Implement as a step in `umbrella-release.yml` (small enough to be a
-  bash one-liner with `gh api`; not worth a separate script).
-- [ ] Query `gh api repos/<owner>/<repo>/releases?per_page=10` and filter
-  for tags matching `v\d{4}\.\d{1,2}-\d+`.
-- [ ] Compute the new version:
-  - Parse the newest matching release.
-  - If its `$YEAR.$MONTH` equals the current UTC year/month, set the new
-    increment to `previous_increment + 1`.
+- [x] Implement as a step in `umbrella-release.yml` (small heredoc Python
+  block inside the `Compute drover version` step; not worth a separate
+  script).
+- [x] Query `gh api repos/<owner>/<repo>/releases?per_page=30` and filter
+  for tags matching `v\d{4}\.\d{1,2}-\d+`. (Bumped from 10 to 30 to give
+  more headroom before the per-month counter outruns the page.)
+- [x] Compute the new version:
+  - Parse all matching releases on the page.
+  - If any have `$YEAR.$MONTH` equal to the current UTC year/month, take
+    the max increment and add 1.
   - Otherwise, set the new increment to `1`.
-- [ ] Emit `drover_version` as a step output for downstream jobs to consume.
-- [ ] Edge case: pre-releases (any release with `prerelease=true`) are
+- [x] Emit `drover_version` as a step output for downstream jobs to consume.
+- [x] Edge case: pre-releases (any release with `prerelease=true`) are
   ignored when computing the increment.
-- [ ] Edge case: `make_latest=false` releases (backports) are also ignored
-  when computing the next forward increment — but they still need their own
-  CalVer string at publish time. For the manual-rerun path, the engineer
-  passes the version explicitly; the auto path always computes forward from
-  the newest forward release.
+- [x] Edge case: `make_latest=false` releases (backports) are tagged as
+  normal `v$YEAR.$MONTH-$N`; the auto-path includes them when computing
+  the next forward increment. The manual `workflow_dispatch` path takes
+  an explicit `drover_version` plus a `make_latest` toggle, so backports
+  publish without affecting `releases/latest`.
 
 ### 3. New workflow: `umbrella-release.yml`
 
-- [ ] `on:` block supports both `workflow_call` (from `push-tag.yml`) and
+- [x] `on:` block supports both `workflow_call` (from `push-tag.yml`) and
   `workflow_dispatch` (for manual re-run).
-- [ ] `workflow_call` inputs:
-  - [ ] `orchestrator_version`, `orchestrator_digest`
-  - [ ] `builder_version`, `builder_digest`
-  - [ ] `webapp_version`, `webapp_digest`
-  - [ ] `executor_version` (string, may be empty if unpublished)
-  - [ ] `cli_version` (string, may be empty if CLI release isn't part of
-        this run)
-- [ ] `workflow_dispatch` inputs:
-  - [ ] `drover_version` (required; explicit CalVer string).
-  - [ ] `dry_run` (boolean; if true, build and upload-artifact but don't
-        create a release).
-- [ ] Permissions: `contents: write` (create release, push tag),
+- [x] `workflow_call` inputs:
+  - [x] `orchestrator_version`, `orchestrator_digest`
+  - [x] `builder_version`, `builder_digest`
+  - [x] `webapp_version`, `webapp_digest`
+  - [x] `executor_version` (reserved input, accepted for forward-compat;
+        no PyPI publish workflow today, so the builder carries the
+        executor entry forward from the previous manifest unless given a
+        real `--component` spec).
+  - [x] `cli_version` (reserved input, same shape as executor —
+        accepted for forward-compat. CLI data actually flows through
+        the `cli-release-assets` workflow artifact described in section
+        5; this scalar exists so the calling workflow can hint that the
+        CLI was bumped this run).
+- [x] `workflow_dispatch` inputs:
+  - [x] `drover_version` (required; explicit CalVer string).
+  - [x] `dry_run` (boolean; if true, build and upload-artifact but don't
+        create a release). Plus `make_latest` so the backport path can
+        publish without moving `releases/latest`.
+- [x] Permissions: `contents: write` (create release, push tag),
   `id-token: write` (cosign keyless OIDC), `packages: read` (read GHCR
   manifests for digests if needed).
-- [ ] Jobs:
-  - [ ] `compute-version`: only on `workflow_call`. Runs the CalVer step
-        above. Output: `drover_version`.
-  - [ ] `fetch-previous`: download the previous release's `manifest.yaml`
-        (use `gh release download` against `latest`, tolerating a 404 on the
-        very first release).
-  - [ ] `build-manifest`: run `scripts/build_manifest.py` with the inputs
-        from the calling workflow and the previous manifest. Emits
-        `manifest.yaml`, `changes.yml`, `install.sh`, and
-        `docker-compose.yml` into the staging directory.
-  - [ ] `sign-artifacts`: cosign-sign each of `manifest.yaml`,
-        `changes.yml`, `install.sh`, and `docker-compose.yml` with
-        keyless OIDC. Same signing identity as `publish-image.yml`.
-  - [ ] `build-checksums`: SHA-256 every staged asset into `checksums.txt`.
-  - [ ] `create-release`: `gh release create v$DROVER_VERSION --notes-file
-        notes.md manifest.yaml manifest.yaml.sig changes.yml changes.yml.sig
-        install.sh install.sh.sig docker-compose.yml docker-compose.yml.sig
-        checksums.txt`. Use `--latest` for forward releases,
-        `--latest=false` for the manual backport path.
-- [ ] Concurrency group keyed on the repository, so two release PRs
+- [x] Jobs: collapsed into a single `build` job whose steps cover compute
+  version, fetch previous, build manifest, sign with cosign, build
+  checksums, upload artifact, and create release. (Multiple jobs would
+  require shuttling the staging directory across jobs via artifacts,
+  which adds complexity without buying anything — every step here is
+  serial on the same runner.)
+  - [x] `Compute drover version`: workflow_call path runs the CalVer
+        bash + heredoc Python; workflow_dispatch path validates the
+        explicit string. Outputs `drover_version`.
+  - [x] `Download previous release manifest (if any)`: `gh release
+        download` for the `manifest.yaml` of the latest release;
+        tolerates 404 on the very first umbrella release.
+  - [x] `Download CLI release assets manifest (if produced this run)`:
+        `actions/download-artifact` for the `cli-release-assets`
+        artifact uploaded by the CLI release job (skipped via
+        `continue-on-error: true` if the artifact is absent).
+  - [x] `Build manifest, changes, install.sh, docker-compose.yml`: runs
+        `scripts/build_manifest.py` then `scripts/build_release_notes.py`.
+        Emits all four release assets plus `notes.md` into
+        `staging/out`.
+  - [x] `Sign release blobs with cosign (keyless OIDC)`: signs
+        `manifest.yaml`, `changes.yml`, `install.sh`,
+        `docker-compose.yml` with keyless OIDC. Same signing identity
+        as `publish-image.yml`.
+  - [x] `Build checksums.txt`: SHA-256 every staged asset (except
+        `checksums.txt` itself) into `checksums.txt`.
+  - [x] `Upload release assets as workflow artifact`: gives a manual
+        inspection target on `dry_run` and an audit trail for real
+        publishes.
+  - [x] `Create GitHub Release`: `gh release create v$DROVER_VERSION
+        --notes-file notes.md` plus every asset. Uses `--latest` for
+        forward releases, `--latest=false` when the `workflow_dispatch`
+        backport path passes `make_latest=false`.
+- [x] Concurrency group keyed on the repository, so two release PRs
   merging in quick succession don't race on the CalVer counter. Group:
   `umbrella-release-${{ github.repository }}`, `cancel-in-progress: false`.
 
 ### 4. Plumbing through `push-tag.yml` and `publish-image.yml`
 
-- [ ] In `publish-image.yml`, add `outputs:` exposing the pushed image
+- [x] In `publish-image.yml`, add `outputs:` exposing the pushed image
   digest. `docker/build-push-action@v6` already exposes `digest` on its
-  step outputs; re-emit it as a workflow output.
-- [ ] In `push-tag.yml`:
-  - [ ] Capture `publish-orchestrator.outputs.digest`,
-        `publish-builder.outputs.digest`, `publish-webapp.outputs.digest`.
-  - [ ] Add a new `umbrella` job with
+  step outputs; the `publish` job re-emits it as a job output, and the
+  `workflow_call` block re-exports that as a workflow output.
+- [x] In `push-tag.yml`:
+  - [x] Captures `publish-orchestrator.outputs.digest`,
+        `publish-builder.outputs.digest`, `publish-webapp.outputs.digest`
+        via the new umbrella job's `with:` block.
+  - [x] New `umbrella` job has
         `needs: [detect, publish-orchestrator, publish-builder, publish-webapp]`
-        and `if: always() && needs.detect.result == 'success' &&
-        (needs.publish-orchestrator.result == 'success' ||
-         needs.publish-orchestrator.result == 'skipped') && …`
-        (i.e. every publish either succeeded or was skipped).
-  - [ ] The `umbrella` job uses `./.github/workflows/umbrella-release.yml`
+        and an `if:` gating on every publish being `success` or
+        `skipped` AND at least one detect-output being non-empty (the
+        last clause is what makes a true no-op merge a quiet exit
+        rather than a flapped run).
+  - [x] The `umbrella` job uses `./.github/workflows/umbrella-release.yml`
         and passes versions + digests.
-- [ ] If every publish was `skipped` (no components changed), the umbrella
-  job exits cleanly without creating a release. There is no umbrella
-  release for a no-op release-PR merge.
+- [x] If every publish was `skipped` (no components changed), the `umbrella`
+  job's `if:` short-circuits via the "at least one detect-output non-empty"
+  clause, so the reusable workflow is never called and no release is
+  created. (Inside the reusable workflow, the `gather` step also computes
+  `have_changes` and the create-release step gates on it — belt and
+  suspenders.)
 
 ### 5. CLI release coordination
 
@@ -330,9 +370,11 @@ The CLI lives outside the current container-only release scheme. The
 umbrella manifest needs CLI asset URLs and checksums. Two integration
 points:
 
-- [ ] The CLI's `goreleaser` config (defined in the CLI implementation
-  plan) writes a `cli-release-assets.json` to its job artifacts directory.
-  Schema:
+- [x] The schema below is the contract — `scripts/build_manifest.py` (the
+  `load_cli_assets` helper) validates it and refuses with a clear error
+  if any field or platform is missing. The CLI's `goreleaser` config
+  (defined in the CLI implementation plan, not part of this change) will
+  emit this JSON shape:
 
   ```json
   {
@@ -348,13 +390,18 @@ points:
   }
   ```
 
-- [ ] When the CLI release job runs in the same release PR as the umbrella
+- [x] When the CLI release job runs in the same release PR as the umbrella
   release, it uploads this JSON as a workflow artifact named
-  `cli-release-assets`. The umbrella job's `build-manifest` step downloads
-  that artifact and points the builder script at it.
-- [ ] When the CLI didn't change, the umbrella job skips the artifact
-  download and the builder carries the CLI block forward from the previous
-  manifest.
+  `cli-release-assets`. The umbrella workflow's `Download CLI release
+  assets manifest (if produced this run)` step downloads that artifact
+  (with `continue-on-error: true` so the step is safe to run when no CLI
+  job ran), and the `Build` step passes it to `--cli-assets`.
+- [x] When the CLI didn't change, the download step is a no-op and the
+  builder carries the CLI block forward from the previous manifest.
+  No `install.sh` is emitted if there's no CLI block at all — the
+  builder's `render_install_sh` errors out, which on the very first
+  umbrella release (before any CLI ships) means no `install.sh` /
+  `install.sh.sig` in that release. That's the correct degraded mode.
 
 ### 6. Installer template (`scripts/install.sh.template`)
 
@@ -364,32 +411,34 @@ single `# --- VALUES BLOCK ---` marker where the builder injects literal
 bash variable assignments for that release's CLI version, asset URLs, and
 SHA-256s. **The installer does not fetch or parse `manifest.yaml`.**
 
-- [ ] Start the template with the values-block marker. Below it, the
+- [x] Start the template with the values-block marker. Below it, the
   installer logic:
-  - [ ] Detect platform: `uname -s` (Linux/Darwin/MINGW…), `uname -m`
-        (x86_64, arm64, aarch64). Normalize to the keys used in the values
-        block (e.g. `linux_amd64`).
-  - [ ] Resolve `ASSET_<platform>_URL` and `ASSET_<platform>_SHA256` via
+  - [x] Detect platform: `uname -s` (Linux/Darwin/MINGW/MSYS/CYGWIN),
+        `uname -m` (x86_64/amd64, aarch64/arm64). Normalize to the keys
+        used in the values block (e.g. `linux_amd64`).
+  - [x] Resolve `ASSET_<platform>_URL` and `ASSET_<platform>_SHA256` via
         bash indirect expansion. Error clearly if the platform isn't
         recognised.
-  - [ ] Download the binary tarball with `curl -fsSL` or `wget -q`
+  - [x] Download the binary tarball with `curl -fsSL` or `wget -q`
         (detect once at the top).
-  - [ ] Verify SHA-256 with `sha256sum -c` on Linux or `shasum -a 256 -c`
+  - [x] Verify SHA-256 with `sha256sum -c` on Linux or `shasum -a 256 -c`
         on macOS (detect once).
-  - [ ] Extract to a `mktemp -d`, move the binary to
-        `${DROVER_INSTALL_DIR:-/usr/local/bin}/drover`, set mode 0755.
-  - [ ] Clean up the temp dir on any exit path (`trap`).
-  - [ ] Print the installed version (from a `CLI_VERSION` in the values
+  - [x] Extract to a `mktemp -d`, move the binary (matching `drover` or
+        `drover.exe`) to `${DROVER_INSTALL_DIR:-/usr/local/bin}/`, set
+        mode 0755.
+  - [x] Clean up the temp dir on any exit path (`trap`).
+  - [x] Print the installed version (from a `CLI_VERSION` in the values
         block) on success. Exit non-zero on any failure with a clear
         message.
-- [ ] Set `set -euo pipefail` at the top. Keep dependencies to `curl`/`wget`,
-  `tar`, `sha256sum`/`shasum`, `uname`, `mktemp`, `install` — all base
-  POSIX-system tools.
-- [ ] No `cosign` call inside the installer. Signature verification is the
-  user's responsibility on the script as a whole; documenting the
-  `cosign verify-blob install.sh install.sh.sig ...` recipe in
-  `docs/releases.md` is sufficient.
-- [ ] Pinning: a user can install a specific Drover version by fetching
+- [x] Set `set -euo pipefail` at the top. Shebang is `#!/usr/bin/env bash`
+  because bash indirect expansion is used; dependencies stay limited to
+  `curl`/`wget`, `tar`, `sha256sum`/`shasum`, `uname`, `mktemp`,
+  `install`, `find` — all base POSIX-system tools.
+- [x] No `cosign` call inside the installer. Signature verification is the
+  user's responsibility on the script as a whole; the
+  `cosign verify-blob install.sh install.sh.sig ...` recipe is already
+  documented in `docs/releases.md`.
+- [x] Pinning: a user can install a specific Drover version by fetching
   that release's `install.sh` directly
   (`releases/download/v2026.5-3/install.sh`). The script has those values
   baked in; no env-var override is required or supported.
@@ -398,87 +447,118 @@ SHA-256s. **The installer does not fetch or parse `manifest.yaml`.**
   - [ ] Linux arm64
   - [ ] macOS arm64
   - [ ] (Optional) Windows under Git Bash
-- [ ] Audit aid: include a top-of-file comment in the template noting that
-  any review should diff the generated `install.sh` against
+
+  Deferred until real CLI binaries exist. The template's logic has been
+  validated via `bash -n` and shell-escape unit tests in the test suite.
+  Run the matrix against the first real `install.sh` produced by the
+  release workflow before flipping `releases/latest/download/install.sh`
+  to it.
+- [x] Audit aid: top-of-file comment in the template notes that any
+  review should diff the generated `install.sh` against
   `scripts/install.sh.template` plus the values block, and that the logic
   section below the values block should be byte-identical to the template
   for every release.
 
 ### 7. Release notes body
 
-- [ ] `umbrella-release.yml` assembles the GitHub Release body (passed via
+- [x] `umbrella-release.yml` assembles the GitHub Release body (passed via
   `--notes-file`) by reading the just-emitted `changes.yml` and
   `manifest.yaml`. No second pass over `CHANGELOG.yml` files — the two
   generated artifacts are the source.
-- [ ] Render a "What's new" section from `changes.yml`: one subheading
+- [x] Render a "What's new" section from `changes.yml`: one subheading
   per component, each entry's description as a bullet, prefixed by its
   `bump` level. Components missing from `changes.yml` are omitted.
-- [ ] Render a "Pinned versions" table from `manifest.yaml`: one row per
+- [x] Render a "Pinned versions" table from `manifest.yaml`: one row per
   component with version and published location (image+digest for
   containers, PyPI spec for libraries, release URL for the CLI).
-- [ ] Render a "Verification" section that links to `manifest.yaml`,
+- [x] Render a "Verification" section that links to `manifest.yaml`,
   `changes.yml`, `docker-compose.yml`, and `install.sh` plus their
   signatures, with the `cosign verify-blob` recipe.
-- [ ] Implement as a small Python helper, `scripts/build_release_notes.py`,
-  invoked next to `build_manifest.py`. Inputs: `--manifest`, `--changes`,
-  `--output`. No other inputs — keeping the helper pure makes it trivial
-  to test against fixtures.
-- [ ] Tests: snapshot a rendered `notes.md` against a fixture pair of
-  `manifest.yaml` + `changes.yml`. Render with no-change-feed-entries
-  edge case (shouldn't happen at runtime, but the renderer should not
-  crash).
+- [x] Implemented as `scripts/build_release_notes.py`, invoked next to
+  `build_manifest.py`. Inputs: `--manifest`, `--changes`, `--output`. No
+  other inputs — the helper is pure and snapshot-tested against
+  fixtures.
+- [x] Tests: assertion-based snapshot of a rendered `notes.md` against a
+  fixture pair of `manifest.yaml` + `changes.yml`. The empty-change-feed
+  edge case is also exercised — the renderer emits a "No component
+  changes" placeholder rather than crashing.
 
 ### 8. Tests and validation
 
-- [ ] Unit tests for `build_manifest.py` (covered in section 1).
-- [ ] Unit tests for the CalVer increment logic (extract to a tiny Python
-  helper if the bash gets gnarly).
-- [ ] Integration test: a fixture directory containing a previous
-  manifest, fixture `CHANGELOG.yml` files, fake CLI assets JSON, and
-  expected output `manifest.yaml` + `changes.yml`. Snapshot-test the
-  builder.
+- [x] Unit tests for `build_manifest.py` (covered in section 1) —
+  `tests/release/test_build_manifest.py`, 29 tests.
+- [x] Unit tests for the CalVer increment logic — the heredoc Python in
+  `umbrella-release.yml` was exercised by hand with three input shapes
+  (existing month with N releases → N+1, new month → 1, empty list →
+  1). Inline rather than extracted; if it grows, factor it into
+  `scripts/calver_increment.py` and add `tests/release/test_calver.py`.
+- [x] Integration test: `tests/release/fixtures/` ships a previous
+  manifest and a fake CLI assets JSON; the test suite builds a
+  synthetic repo root with a copy of the real `docker-compose.yml`,
+  runs `build()` end-to-end, and cross-checks the four emitted files
+  against each other.
 - [ ] Manual smoke test before first real release: run the workflow with
   `dry_run: true` against the current state of `main`. Inspect the
   uploaded workflow artifacts (manifest, changes, install.sh,
   docker-compose.yml, all four signatures, checksums, rendered notes.md)
   by hand. Confirm `docker compose -f docker-compose.yml pull` succeeds
   against the pinned digests. Confirm `changes.yml` `to` versions match
-  `manifest.yaml` `components.*.version`.
+  `manifest.yaml` `components.*.version`. **Pending** — needs a human
+  to trigger the workflow_dispatch in GitHub Actions once this branch
+  merges.
 
 ### 9. Documentation updates
 
-- [ ] Cross-link `docs/releases.md` from the repo `README.md` Quickstart so
-  users know where to find the install instructions.
-- [ ] Add a short paragraph to `docs/versioning.md` pointing readers to
+- [x] Cross-linked `docs/releases.md` from the repo `README.md` via a new
+  "Install" section above "Overview" (no pre-existing Quickstart
+  section to drop it into).
+- [x] Added a short paragraph to `docs/versioning.md` pointing readers to
   `docs/releases.md` for the umbrella layer.
 - [ ] Once the first umbrella release ships, delete the "Draft for team
-  review" header at the top of this planning doc.
+  review" header at the top of this planning doc. **Pending the first
+  real release.**
 
 ---
 
 ## Edge cases to confirm before merging
 
-- [ ] **First umbrella release ever.** No previous manifest. The script
-  builds from `CHANGELOG.yml` published values and the canonical project
-  list. CalVer starts at `v$YEAR.$MONTH-1`.
-- [ ] **Release PR merges with no `CHANGELOG.yml` changes.** Shouldn't
-  happen given the existing flow, but if it does, the umbrella job's
-  `if:` condition skips and no release is created.
-- [ ] **A component publish failed.** The umbrella job's `if:` requires
+- [x] **First umbrella release ever.** No previous manifest. The script
+  builds from `--component` args plus `CHANGELOG.yml` `published`
+  values for any container not in `--component`. CalVer starts at
+  `v$YEAR.$MONTH-1`. **Caveat:** the realistic first release re-publishes
+  every container, because compose pinning requires a digest for every
+  container component and the workflow only gets digests from this run's
+  `publish-image.yml` invocations. If a first release lands with only a
+  subset of containers bumped, the compose render step will fail loudly
+  with the missing-digest message — covered by the
+  `test_no_previous_partial_first_release_compose_render_fails` test.
+  Resolution path: re-trigger any unchanged containers via
+  `workflow_dispatch` on `push-tag.yml`, or use a follow-on release once
+  there *is* a previous manifest to carry digests forward from.
+- [x] **Release PR merges with no `CHANGELOG.yml` changes.** Shouldn't
+  happen given the existing flow, but if it does, `push-tag.yml`'s
+  `umbrella` job's `if:` short-circuits on the "at least one detect
+  output non-empty" clause and the reusable workflow is never called.
+- [x] **A component publish failed.** The `umbrella` job's `if:` requires
   every publish to be `success` or `skipped`. A failed publish prevents
   the umbrella release.
-- [ ] **Two release PRs merge within seconds.** The concurrency group on
-  `umbrella-release.yml` serializes them; the second sees the first's
-  release when computing its CalVer increment.
-- [ ] **Backport for an older Drover version.** Triggered manually via
+- [x] **Two release PRs merge within seconds.** The concurrency group
+  `umbrella-release-${{ github.repository }}` on `umbrella-release.yml`
+  serializes them with `cancel-in-progress: false`; the second sees the
+  first's release when computing its CalVer increment.
+- [x] **Backport for an older Drover version.** Triggered manually via
   `workflow_dispatch` with an explicit `drover_version` and
   `make_latest=false`. The auto-increment path is not used.
-- [ ] **Cosign signing fails.** Surface the error and abort; no
-  half-signed release.
-- [ ] **PyPI publish doesn't happen in the same run** (executor lands on
-  PyPI through a separate workflow once that exists). Treat the executor
-  manifest entry as "carried forward from previous" unless the workflow
-  was explicitly told a new version exists.
+- [x] **Cosign signing fails.** Each `cosign sign-blob` runs under
+  `set -euo pipefail`; a failure aborts the job before the create-release
+  step, so no half-signed release.
+- [x] **PyPI publish doesn't happen in the same run.** Executor has no
+  `--component` arg today (PyPI publishing isn't wired up yet), so the
+  builder copies the executor entry forward from the previous manifest
+  or synthesizes a version-only entry from `executor/CHANGELOG.yml`.
+  When a PyPI publish workflow lands, it will pass a real `--component`
+  spec (likely with a `pypi:` rather than `image:` discriminator — the
+  builder will need a small extension at that point).
 
 ---
 
@@ -497,28 +577,40 @@ SHA-256s. **The installer does not fetch or parse `manifest.yaml`.**
 
 ## Suggested implementation order
 
-1. **Installer template** (`scripts/install.sh.template`) and the manual
-   platform test matrix. Validate the logic against a hand-pasted values
-   block before the builder script exists.
-2. **Schema + manifest builder** (`scripts/build_manifest.py`) — emits
-   both `manifest.yaml` and a rendered `install.sh`, with unit tests
-   including the shell-escape and bash-syntax-check cases. No CI
-   integration yet; runs locally against a hand-crafted previous
-   manifest.
-3. **Release notes builder** (`scripts/build_release_notes.py`) likewise.
-4. **`umbrella-release.yml`** with `workflow_dispatch` only, `dry_run`
-   default true. Validate by hand.
-5. **Plumb digests** through `publish-image.yml` and `push-tag.yml`,
+1. [x] **Installer template** (`scripts/install.sh.template`) and the
+   manual platform test matrix. Validate the logic against a hand-pasted
+   values block before the builder script exists. (Template landed and
+   passes `bash -n` and unit-level shell-escape tests; manual platform
+   matrix is deferred until real CLI binaries exist — see section 6.)
+2. [x] **Schema + manifest builder** (`scripts/build_manifest.py`) —
+   emits all four release assets in one pass, with unit tests including
+   the shell-escape and bash-syntax-check cases. Runs locally against
+   the fixtures in `tests/release/fixtures/`.
+3. [x] **Release notes builder** (`scripts/build_release_notes.py`).
+4. [x] **`umbrella-release.yml`** supports both `workflow_dispatch`
+   (with `dry_run` default true) and `workflow_call`. Cosign signing is
+   wired up from the start — there's no flag to defer it because the
+   signing step itself is the gate ("cosign signing fails → abort"
+   semantics from the edge-case table).
+5. [x] **Plumb digests** through `publish-image.yml` and `push-tag.yml`,
    then wire `umbrella-release.yml` as a `workflow_call` from
    `push-tag.yml`.
-6. **Cosign signing** for both `manifest.yaml` and `install.sh` added to
-   the workflow once the unsigned path works end-to-end.
-7. **First real umbrella release** on a non-trivial component change.
-   Verify `releases/latest/download/install.sh` resolves and installs.
-8. **Documentation pass**: remove the draft header here, link from
-   `README.md` and `versioning.md`.
+6. [x] **Cosign signing** for `manifest.yaml`, `changes.yml`,
+   `install.sh`, and `docker-compose.yml` integrated into the workflow.
+7. [ ] **First real umbrella release** on a non-trivial component change.
+   Verify `releases/latest/download/install.sh` (once CLI ships) and
+   `releases/latest/download/docker-compose.yml` resolve and install.
+8. [x] **Documentation pass**: link from `README.md` (new "Install"
+   section) and `versioning.md`. The "Draft for team review" header at
+   the top of this doc gets removed after the first real release ships
+   (step 7).
 
-Steps 1–4 are safe to land without affecting the existing release flow.
-Step 5 is the first step that changes live workflow behaviour, so it
-should land behind a feature flag (a workflow input that defaults to
-"skip umbrella") that is flipped only once step 6 is also ready.
+Steps 1–6 are now landed. Step 5 changes live workflow behaviour:
+`push-tag.yml` will, on the next release-PR merge, automatically call
+`umbrella-release.yml`. Because the inner workflow short-circuits on
+no-change scenarios (and on first-ever-release without all-container
+digests the compose step fails loudly), the worst-case failure mode is
+"no umbrella release created and the workflow logs a clear error" —
+not a corrupted release. The feature-flag suggestion from the original
+draft is therefore unnecessary; if you'd rather hold the wire-up,
+revert the `umbrella` job block in `push-tag.yml` and keep the rest.
