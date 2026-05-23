@@ -120,13 +120,11 @@ The CLI exits when the matching `status: complete` frame arrives, propagating it
 
 **SDK library only, no CLI** — A Python or JS client library is probably the right abstraction layer eventually, but a CLI is more immediately useful for humans and is easy to build on top of the same library.
 
-**Config file for auth (e.g. `~/.drover/config`)** — More ergonomic for switching profiles, but adds complexity (file format, multi-profile support, precedence rules). Env vars are simpler and already standard for this kind of tool. Can revisit if multi-environment use becomes common.
+**Config file for auth (e.g. `~/.drover/config`)** — More ergonomic for switching profiles, but adds complexity (file format, multi-profile support, precedence rules). Env vars are simpler and already standard for this kind of tool.
 
 ---
 
 ## Key Decisions
-
-**Python + Click** is the natural fit: the orchestrator is already Python, the team knows it, and Click produces good UX without much boilerplate. If the CLI ever needs to be distributed as a standalone binary, PyInstaller or similar can wrap it.
 
 **`drover start` not `drover run`** — "run" implies synchronous execution. Starting a container is an async operation that hands back a container ID; the caller decides what to do next. "Start" is more accurate.
 
@@ -150,31 +148,11 @@ Errors are also emitted as JSON on stderr (`{"error": "...", "detail": "..."}`) 
 
 The CLI would live in a new top-level directory (e.g. `cli/`) and be a separate installable package. It talks to the orchestrator REST API for control-plane operations and the per-container WebSocket endpoint for exec output streaming — no direct database or socket access.
 
-Rough structure:
-```
-cli/
-  drover/
-    __init__.py
-    main.py          # Click group
-    client.py        # HTTP client wrapper (httpx)
-    commands/
-      images.py
-      containers.py
-      exec.py
-  pyproject.toml
-```
-
-The HTTP client layer wraps httpx, reads `DROVER_API_URL`/`DROVER_API_KEY` from the environment, and handles error responses uniformly (print the `detail` field and exit non-zero).
+The HTTP client layer reads `DROVER_API_URL`/`DROVER_API_KEY` from the environment, and handles error responses uniformly (print the `detail` field and exit non-zero).
 
 For exec streaming, the client opens a WebSocket to `/containers/{id}/ws`, filters incoming messages by the `command_id` returned from the `POST /containers/{id}/execs` call, and writes each matching frame to stdout as a newline-delimited JSON object (no re-shaping — the orchestrator's frame is the contract). It exits when the matching `status: complete` frame arrives, propagating `exit_code` as the process exit code. Non-matching frames (other `command_id`s, container `log` frames) are dropped.
 
-For the lifecycle commands (`drover start`, `drover stop`, `drover destroy`), the initial POST response includes `transition_timeout_seconds`; the client reads that value, then polls `GET /containers/{id}` every `--interval` seconds for up to that many seconds (wall-clock) until the container reaches the terminal state (`running` / `stopped` / `destroyed`). The interval is sleep-between-requests, so request latency doesn't shorten the budget. On timeout the client writes `{"error": "timeout", "id": "...", "status": "<transitional>"}` to stderr and exits non-zero. `drover start` additionally treats the `error` state as a non-timeout failure and exits non-zero with `{"error": "start_failed", ...}` on stderr. The polling logic should live in a single helper in `client.py` rather than being copy-pasted into each command. If a transition endpoint ever returns `transition_timeout_seconds: null` (e.g. an older orchestrator), the CLI should treat that as `--no-wait` and surface a clear warning to stderr, since it has no defensible default to invent.
-
----
-
-## Risks and Mitigations
-
-**Auth token in process list** — If `DROVER_API_KEY` ever gets passed as a CLI flag instead of an env var, it would appear in `ps` output. Env vars are safer. Keep it env-only.
+For the lifecycle commands (`drover start`, `drover stop`, `drover destroy`), the initial POST response includes `transition_timeout_seconds`; the client reads that value, then polls `GET /containers/{id}` every `--interval` seconds for up to that many seconds (wall-clock) until the container reaches the terminal state (`running` / `stopped` / `destroyed`). The interval is sleep-between-requests, so request latency doesn't shorten the budget. On timeout the client writes `{"error": "timeout", "id": "...", "status": "<transitional>"}` to stderr and exits non-zero. `drover start` additionally treats the `error` state as a non-timeout failure and exits non-zero with `{"error": "start_failed", ...}` on stderr. If a transition endpoint ever returns `transition_timeout_seconds: null` (e.g. an older orchestrator), the CLI should treat that as `--no-wait` and surface a clear warning to stderr, since it has no defensible default to invent.
 
 ---
 
