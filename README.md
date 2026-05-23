@@ -17,27 +17,6 @@ Think of it something like a function-as-a-service where the functions are light
 
 ---
 
-## Install
-
-The recommended path is the published Drover release. Pinned compose stacks
-and an installer for the CLI live there:
-
-```sh
-# Pinned-by-digest compose stack for the orchestrator + webapp + builder image.
-curl -fsSL -O https://github.com/saibotsivad/drover/releases/latest/download/docker-compose.yml
-docker compose up -d
-
-# CLI (once published):
-curl -fsSL https://github.com/saibotsivad/drover/releases/latest/download/install.sh | sh
-```
-
-See [`docs/releases.md`](docs/releases.md) for the full release contract:
-the cross-link manifest, cosign verification recipes, and the version
-scheme. For per-component versioning (the `<project>-v<version>` git tags
-and the `changes/` workflow), see [`docs/versioning.md`](docs/versioning.md).
-
----
-
 ## Overview
 
 The orchestrator is the core application, it runs as a Docker container on the host. It exposes a REST API for callers to create, command, stop, resume, and destroy micro-containers. Each micro-container is an instance of an operator-managed image, launched on demand, communicated with via a Unix socket, and stopped or destroyed when no longer needed.

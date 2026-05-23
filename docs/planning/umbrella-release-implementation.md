@@ -509,9 +509,12 @@ SHA-256s. **The installer does not fetch or parse `manifest.yaml`.**
 
 ### 9. Documentation updates
 
-- [x] Cross-linked `docs/releases.md` from the repo `README.md` via a new
-  "Install" section above "Overview" (no pre-existing Quickstart
-  section to drop it into).
+- [ ] Cross-link `docs/releases.md` from the repo `README.md`. **Deferred
+  by request** — an "Install" section was added then reverted: the
+  primary install is the Docker image / compose stack, with the CLI as
+  an optional terminal helper, and the README framing needs more thought
+  before it advertises release URLs. Circle back when the install story
+  (image-first, CLI-optional) is settled.
 - [x] Added a short paragraph to `docs/versioning.md` pointing readers to
   `docs/releases.md` for the umbrella layer.
 - [ ] Once the first umbrella release ships, delete the "Draft for team
