@@ -102,6 +102,8 @@ class ContainerResponse(BaseModel):
     last_seen: datetime | None = None
     # Populated only when status == 'error'; identifies the failure cause.
     error_code: str | None = None
+    # Populated only on lifecycle transition endpoints (create/resume/stop/destroy).
+    transition_timeout_seconds: int | None = None
 
 
 # --- Exec models ---
