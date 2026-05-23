@@ -9,8 +9,7 @@ Emits four files into the output directory:
     docker-compose.yml  Operator compose with every image: pinned by digest.
 
 All four are generated from the same component data in one pass, so
-they cannot drift. See docs/releases.md and the implementation plan
-under docs/planning/umbrella-release-implementation.md for the contract.
+they cannot drift. See docs/releases.md for the contract.
 
 Usage example (from CI):
 

@@ -1,8 +1,7 @@
 name: Umbrella release
 
 # Builds and publishes a GitHub Release whose body is a cross-link
-# manifest. See docs/releases.md and the implementation plan under
-# docs/planning/umbrella-release-implementation.md for the contract.
+# manifest. See docs/releases.md for the contract.
 
 on:
   workflow_call:
