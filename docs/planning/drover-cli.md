@@ -36,15 +36,15 @@ The CLI errors clearly on startup if either is missing. This keeps the tool stat
 ### Command Surface
 
 ```
-drover images                              List available images
-drover image <name>                        Show details for an image
+drover images                                  List available images
+drover image <name>                            Show details for an image
 
-drover ps                                  List micro-containers
-drover start <image-name> [flags]          Launch a micro-container
-drover stop <container-id>                 Stop a running container
-drover destroy <container-id>             Destroy a container
+drover ps                                      List micro-containers
+drover start <image-name> [flags]              Launch a micro-container
+drover (stop|destroy) <container-id> [flags]   Stop or destroy a container
+                                               (blocks until terminal state by default)
 
-drover exec <container-id> [command...]    Run a command (or drop into interactive)
+drover exec <container-id> -- <command...>     Run a command in a container
 ```
 
 #### `drover images` / `drover image <name>`
@@ -70,15 +70,38 @@ On success, prints a JSON object `{"id": "<container-id>"}` so the ID can be cap
 
 #### `drover (stop|destroy) <container-id>`
 
-POST to the appropriate stop/destroy endpoint. Returns a JSON object describing the resulting state (e.g. `{"id": "...", "status": "stopped"}`).
+POST to the appropriate stop/destroy endpoint. The orchestrator returns immediately with the container in `stopping` / `destroying`; by default the CLI then polls `GET /containers/{id}` until the container reaches the terminal state (`stopped` / `destroyed`) and prints a JSON object describing the resulting state, e.g. `{"id": "...", "status": "stopped"}`.
 
-#### `drover exec <container-id> [command...]`
+Flags:
 
-This is the interesting one — see Open Questions below.
+| Flag | Default | Notes |
+|---|---|---|
+| `--no-wait` | off | Return as soon as the transition is accepted. The printed JSON reflects the transitional state (`"stopping"` / `"destroying"`). |
+| `--timeout <seconds>` | 30 (`stop`), 60 (`destroy`) | Maximum time to wait for the terminal state. On timeout, exit non-zero and write a JSON error to stderr, e.g. `{"error": "timeout", "id": "...", "status": "stopping"}`. |
+| `--interval <seconds>` | 1 | Seconds between poll requests while waiting. Ignored with `--no-wait`. |
 
-**Non-interactive** (`drover exec <id> git clone ...`): Posts to `POST /containers/{id}/execs` with the joined command string, then streams output to the terminal as it arrives. `stdout` and `stderr` chunks are forwarded to the corresponding CLI streams as raw bytes (not wrapped in JSON) so that command output remains pipeable as-is. The process exits with the command's exit code. (See Open Questions on whether a `--json` mode that wraps the stream in newline-delimited JSON frames is worth adding.)
+#### `drover exec <container-id> -- <command...>`
 
-**Interactive** (`drover exec <id>` with no command): Would drop the user into an interactive shell inside the container. This requires PTY support in the orchestrator, which doesn't exist yet.
+The command to run inside the container is separated from `drover`'s own arguments by `--`. Everything after `--` is forwarded verbatim, so caller-side flags and quoting can't be misinterpreted as CLI flags (matches the convention used by `kubectl exec`, `docker exec`, `cargo run`, etc.).
+
+The CLI posts to `POST /containers/{id}/execs` with the joined command string, opens the per-container WebSocket at `/containers/{id}/ws`, filters incoming frames by the returned `command_id`, and writes each matching frame to stdout as newline-delimited JSON exactly as it arrives from the orchestrator — i.e. one frame per line, of the form:
+
+```jsonc
+{"type": "output", "command_id": "...", "stream": "stdout", "data": "..."}
+{"type": "output", "command_id": "...", "stream": "stderr", "data": "..."}
+{"type": "status", "command_id": "...", "status": "complete", "exit_code": 0}
+```
+
+This keeps the CLI a thin pass-through over the WebSocket: no re-shaping, no demultiplexing into the CLI's own stdout/stderr, no base64 unwrapping. Consumers reconstruct the command's stdout/stderr with `jq`:
+
+```sh
+drover exec $id -- ls -la \
+  | jq -r 'select(.type=="output" and .stream=="stdout") | .data'
+```
+
+The CLI exits when the matching `status: complete` frame arrives, propagating its `exit_code` as the process exit code. Container-wide `log` frames and frames for other `command_id`s are dropped (use a future `drover logs` command for those).
+
+**Interactive mode is explicitly out of scope for v1.** Bare `drover exec <id>` (no `--` and no command) errors with a clear "interactive exec not yet supported" message. When interactive lands later, that same `--`-less form will be the trigger, so reserving the syntax now keeps the future addition non-breaking.
 
 ---
 
@@ -98,7 +121,9 @@ This is the interesting one — see Open Questions below.
 
 **`drover start` not `drover run`** — "run" implies synchronous execution. Starting a container is an async operation that hands back a container ID; the caller decides what to do next. "Start" is more accurate.
 
-**Exec streaming uses the WebSocket endpoint** — The polling exec API works today but would feel broken in a CLI (you'd have to wait for the full command to finish before seeing any output). The CLI uses the per-container WebSocket endpoint (`/containers/{id}/ws`) to receive output frames as they arrive and forwards them to stdout/stderr.
+**Exec streaming uses the WebSocket endpoint, and frames are passed through as-is** — The polling exec API works today but would feel broken in a CLI (you'd have to wait for the full command to finish before seeing any output). The CLI uses the per-container WebSocket endpoint (`/containers/{id}/ws`) to receive output frames as they arrive. Each frame is already a JSON object (e.g. `{"type": "output", "stream": "stdout", "data": "..."}`), and the CLI writes them to stdout as newline-delimited JSON without re-shaping. This keeps `exec`'s output contract consistent with the "everything is JSON" decision below, and avoids the CLI having to guess how callers want stdout/stderr framing handled.
+
+**`drover (stop|destroy)` blocks by default** — These endpoints transition the container to `stopping` / `destroying` and return immediately. The CLI polls `GET /containers/{id}` until the terminal state is reached so that `drover stop X && drover destroy X` and similar compositions do the obvious thing without callers having to write their own `until` loops. `--no-wait` is the escape hatch for fire-and-forget scripting, and `--timeout` / `--interval` give callers control over the polling loop's bounds. The shape of the returned JSON is the same in both modes — only the `status` field differs (terminal vs. transitional).
 
 **All control-plane output is JSON** — Every command that returns data (everything except `exec`'s streamed output) prints a single JSON value to stdout. Even commands that conceptually return a single scalar — `drover start` returning a container ID, `drover stop` returning a status — emit a JSON object (`{"id": "..."}`, `{"id": "...", "status": "stopped"}`) rather than a bare string. This is deliberate:
 
@@ -112,29 +137,17 @@ Errors are also emitted as JSON on stderr (`{"error": "...", "detail": "..."}`) 
 
 ## Open Questions
 
-**1. Interactive exec: should we support it in v1?**
-
-`drover exec <id>` with no command argument dropping into an interactive shell is the most compelling developer experience, but it needs:
-- PTY allocation at the orchestrator level (not currently planned)
-- Bidirectional stdin streaming (also not planned)
-- Raw terminal mode handling in the CLI
-
-Interactive shell support over the WebSocket transport is listed as a future consideration in the [WebSocket ADR](../decisions/2026-04-11-websockets-for-streaming.md); the current endpoint is one-way (server → client only). The question is whether we want to scope interactive into the CLI v1 or ship non-interactive exec first and revisit.
-
-Options:
-- **a)** Non-interactive only in v1. No-arg `drover exec` errors with a clear "not yet supported" message.
-- **b)** Interactive in v1, which means PTY support and bidirectional stdin need to be designed and implemented on the orchestrator side first — probably a meaningful addition to the orchestrator scope.
-- **c)** Non-interactive now, interactive as a fast follow once orchestrator-side stdin/PTY work lands.
-
-Option (c) seems most pragmatic but the team should confirm.
-
-**2. Exec output framing**
-
-Control-plane output is JSON (see Key Decisions), but `drover exec` streams raw bytes so its output is directly pipeable. Should there also be an opt-in `--json` mode for `exec` that wraps each chunk in a newline-delimited JSON frame (e.g. `{"stream": "stdout", "data": "..."}` ... `{"exit_code": 0}`)? Useful for callers that want structured access to exit codes and stream separation without parsing the raw byte stream. Defer until there's a concrete need.
-
-**3. Container ID prefix matching**
+**1. Container ID prefix matching**
 
 Typing full container IDs is painful. Should the CLI accept unambiguous prefixes (like Docker does)? Straightforward to implement but slightly more complexity in the client.
+
+---
+
+## Resolved Questions
+
+**Interactive exec is out of scope for v1.** Non-interactive only. The `--`-less form (`drover exec <id>`) is reserved for interactive in a future version — until then it errors with a clear "not yet supported" message. Interactive lands as a fast follow once orchestrator-side PTY and bidirectional stdin support exist (currently the WebSocket is one-way, per the [WebSocket ADR](../decisions/2026-04-11-websockets-for-streaming.md)).
+
+**Exec output framing: pass through WebSocket frames as NDJSON.** The orchestrator already emits structured JSON frames over the WebSocket; the CLI writes them to stdout one per line without transformation. Callers reconstruct stdout/stderr (or pluck out `exit_code`) with `jq`. This avoids a second framing decision in the CLI and keeps `exec` consistent with the rest of the JSON-output contract.
 
 ---
 
@@ -158,7 +171,9 @@ cli/
 
 The HTTP client layer wraps httpx, reads `DROVER_API_URL`/`DROVER_API_KEY` from the environment, and handles error responses uniformly (print the `detail` field and exit non-zero).
 
-For exec streaming, the client opens a WebSocket to `/containers/{id}/ws`, filters incoming messages by the `command_id` returned from the `POST /containers/{id}/execs` call, and forwards `output` chunks to stdout/stderr as they arrive. It exits when the matching `status: complete` message arrives, propagating `exit_code`.
+For exec streaming, the client opens a WebSocket to `/containers/{id}/ws`, filters incoming messages by the `command_id` returned from the `POST /containers/{id}/execs` call, and writes each matching frame to stdout as a newline-delimited JSON object (no re-shaping — the orchestrator's frame is the contract). It exits when the matching `status: complete` frame arrives, propagating `exit_code` as the process exit code. Non-matching frames (other `command_id`s, container `log` frames) are dropped.
+
+For `drover (stop|destroy)`, after the initial POST the client polls `GET /containers/{id}` every `--interval` seconds until the container reaches the terminal state or `--timeout` is hit. The timeout is wall-clock; the interval is sleep-between-requests, so request latency doesn't shorten it. On timeout the client writes `{"error": "timeout", "id": "...", "status": "<transitional>"}` to stderr and exits non-zero.
 
 ---
 
