@@ -41,6 +41,7 @@ drover image <name>                            Show details for an image
 
 drover ps                                      List micro-containers
 drover start <image-name> [flags]              Launch a micro-container
+                                               (blocks until running by default)
 drover (stop|destroy) <container-id> [flags]   Stop or destroy a container
                                                (blocks until terminal state by default)
 
@@ -57,16 +58,28 @@ Lists containers from `GET /containers`. Returns a JSON array of container objec
 
 #### `drover start <image-name>`
 
-Maps to `POST /containers`. Flags:
+Maps to `POST /containers`. The orchestrator returns immediately with the container in `initializing`; by default the CLI then polls `GET /containers/{id}` until the container reaches `running` and prints a JSON object describing the resulting state, e.g. `{"id": "...", "status": "running"}`. The ID can be captured with `id=$(drover start myimage | jq -r .id)`.
+
+If the container transitions to `error` instead of `running`, the CLI exits non-zero and writes a JSON error to stderr, e.g. `{"error": "start_failed", "id": "...", "status": "error"}`.
+
+Container-creation flags (forwarded to the API):
 
 | Flag | API field | Notes |
 |---|---|---|
 | `--privileged` | `privileged: true` | Boolean flag |
 | `--label <label>` | `label` | Arbitrary string |
 | `--env KEY=VALUE` | `env` dict | Repeatable |
-| `--timeout <seconds>` | `timeout_seconds` | Default: server default (300s) |
+| `--container-timeout <seconds>` | `timeout_seconds` | Server-side container lifetime cap. Default: server default (300s). |
 
-On success, prints a JSON object `{"id": "<container-id>"}` so the ID can be captured: `id=$(drover start myimage | jq -r .id)`.
+Polling flags (CLI-side, same shape as `stop`/`destroy`):
+
+| Flag | Default | Notes |
+|---|---|---|
+| `--no-wait` | off | Return as soon as the container is created. The printed JSON reflects the transitional state (`"initializing"`). |
+| `--timeout <seconds>` | 60 | Maximum time to wait for `running`. On timeout, exit non-zero and write `{"error": "timeout", "id": "...", "status": "initializing"}` to stderr. |
+| `--interval <seconds>` | 1 | Seconds between poll requests while waiting. Ignored with `--no-wait`. |
+
+Note that `--timeout` here is the CLI's wait-for-`running` timeout, distinct from the server-side container lifetime which is set via `--container-timeout`. The rename avoids the name collision that the previous spec had.
 
 #### `drover (stop|destroy) <container-id>`
 
@@ -123,7 +136,9 @@ The CLI exits when the matching `status: complete` frame arrives, propagating it
 
 **Exec streaming uses the WebSocket endpoint, and frames are passed through as-is** — The polling exec API works today but would feel broken in a CLI (you'd have to wait for the full command to finish before seeing any output). The CLI uses the per-container WebSocket endpoint (`/containers/{id}/ws`) to receive output frames as they arrive. Each frame is already a JSON object (e.g. `{"type": "output", "stream": "stdout", "data": "..."}`), and the CLI writes them to stdout as newline-delimited JSON without re-shaping. This keeps `exec`'s output contract consistent with the "everything is JSON" decision below, and avoids the CLI having to guess how callers want stdout/stderr framing handled.
 
-**`drover (stop|destroy)` blocks by default** — These endpoints transition the container to `stopping` / `destroying` and return immediately. The CLI polls `GET /containers/{id}` until the terminal state is reached so that `drover stop X && drover destroy X` and similar compositions do the obvious thing without callers having to write their own `until` loops. `--no-wait` is the escape hatch for fire-and-forget scripting, and `--timeout` / `--interval` give callers control over the polling loop's bounds. The shape of the returned JSON is the same in both modes — only the `status` field differs (terminal vs. transitional).
+**Lifecycle commands block until the terminal state by default** — `drover start`, `drover stop`, and `drover destroy` all hit endpoints that transition the container (`initializing`, `stopping`, `destroying`) and return immediately. The CLI polls `GET /containers/{id}` until the terminal state (`running`, `stopped`, `destroyed`) is reached so that compositions like `id=$(drover start img) && drover exec $id -- ...` and `drover stop X && drover destroy X` do the obvious thing without callers having to write their own `until` loops. All three commands share the same flag trio for controlling the wait: `--no-wait` (fire-and-forget), `--timeout` (wall-clock cap, exit non-zero on expiry), and `--interval` (seconds between polls). The shape of the returned JSON is the same in both modes — only the `status` field differs (terminal vs. transitional).
+
+One naming wrinkle worth flagging: the original spec had `--timeout` on `drover start` mean "server-side container lifetime cap" (the `timeout_seconds` API field). To keep `--timeout` consistent across the three lifecycle commands as the CLI-side wait timeout, the server-side cap is renamed to `--container-timeout` on `drover start`.
 
 **All control-plane output is JSON** — Every command that returns data (everything except `exec`'s streamed output) prints a single JSON value to stdout. Even commands that conceptually return a single scalar — `drover start` returning a container ID, `drover stop` returning a status — emit a JSON object (`{"id": "..."}`, `{"id": "...", "status": "stopped"}`) rather than a bare string. This is deliberate:
 
@@ -173,7 +188,7 @@ The HTTP client layer wraps httpx, reads `DROVER_API_URL`/`DROVER_API_KEY` from 
 
 For exec streaming, the client opens a WebSocket to `/containers/{id}/ws`, filters incoming messages by the `command_id` returned from the `POST /containers/{id}/execs` call, and writes each matching frame to stdout as a newline-delimited JSON object (no re-shaping — the orchestrator's frame is the contract). It exits when the matching `status: complete` frame arrives, propagating `exit_code` as the process exit code. Non-matching frames (other `command_id`s, container `log` frames) are dropped.
 
-For `drover (stop|destroy)`, after the initial POST the client polls `GET /containers/{id}` every `--interval` seconds until the container reaches the terminal state or `--timeout` is hit. The timeout is wall-clock; the interval is sleep-between-requests, so request latency doesn't shorten it. On timeout the client writes `{"error": "timeout", "id": "...", "status": "<transitional>"}` to stderr and exits non-zero.
+For the lifecycle commands (`drover start`, `drover stop`, `drover destroy`), after the initial POST the client polls `GET /containers/{id}` every `--interval` seconds until the container reaches the terminal state (`running` / `stopped` / `destroyed`) or `--timeout` is hit. The timeout is wall-clock; the interval is sleep-between-requests, so request latency doesn't shorten it. On timeout the client writes `{"error": "timeout", "id": "...", "status": "<transitional>"}` to stderr and exits non-zero. `drover start` additionally treats the `error` state as a non-timeout failure and exits non-zero with `{"error": "start_failed", ...}` on stderr. The polling logic should live in a single helper in `client.py` rather than being copy-pasted into each command.
 
 ---
 
