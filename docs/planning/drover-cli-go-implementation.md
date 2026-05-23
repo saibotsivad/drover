@@ -468,6 +468,16 @@ step.
 auto-generated help outweigh the dependency cost. Cobra is the closest
 thing Go has to a default for tools shaped like ours.
 
+**Unknown flags are a hard error.** Cobra's underlying `pflag` parser
+rejects unrecognised flags by default (`Error: unknown flag: --foo`,
+non-zero exit), and we keep that default everywhere. No command sets
+`FParseErrWhitelist.UnknownFlags = true`. A typo in a script should
+fail loudly rather than silently changing behaviour. For `drover exec`
+the `SetInterspersed(false)` setting still applies — anything after
+`--` is forwarded verbatim and never flag-parsed, so `drover exec $id
+-- foo --bar` passes `--bar` through cleanly while `drover exec
+--bogus $id -- foo` fails with "unknown flag: --bogus".
+
 **No config file, no profiles.** Inherited from the parent plan; restated
 here because it constrains the architecture (no `viper`, no precedence
 rules, no profile-switching code paths).
