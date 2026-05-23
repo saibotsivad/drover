@@ -39,20 +39,24 @@ runs after those finish. Its inputs are:
 - The previous release on GitHub (used to compute the new increment and to
   carry forward unchanged components).
 
-The work breaks into six concerns:
+The work breaks into seven concerns:
 
-1. **Schema & helper script** — define `manifest.yaml`, write a Python
-   script that assembles it, renders `install.sh` from a template, and
-   renders a pinned `docker-compose.yml` from the repo-root file.
+1. **Schema & helper script** — define `manifest.yaml` and `changes.yml`,
+   write a Python script that assembles both, renders `install.sh` from a
+   template, and renders a pinned `docker-compose.yml` from the repo-root
+   file.
 2. **Workflow wiring** — add `umbrella-release.yml`, call it from
    `push-tag.yml`, plumb digests through.
-3. **Signing** — cosign-sign `manifest.yaml`, `install.sh`, and
-   `docker-compose.yml`.
+3. **Signing** — cosign-sign `manifest.yaml`, `changes.yml`,
+   `install.sh`, and `docker-compose.yml`.
 4. **Installer template** — write `scripts/install.sh.template`, the
    stable logic that the builder injects values into.
 5. **Pinned compose generator** — text-substitution logic in the builder
    script, with snapshot tests against the repo-root compose file.
-6. **Manual re-run path** — `workflow_dispatch` entrypoint for recovery.
+6. **Release notes from `changes.yml`** — the human-readable release
+   body is rendered from the same `changes.yml` the workflow emits; no
+   second pass over `CHANGELOG.yml` files.
+7. **Manual re-run path** — `workflow_dispatch` entrypoint for recovery.
 
 ---
 
@@ -60,10 +64,11 @@ The work breaks into six concerns:
 
 ```
 .github/workflows/umbrella-release.yml     New. workflow_call + workflow_dispatch.
-scripts/build_manifest.py                  New. Assembles manifest.yaml, renders install.sh, renders pinned docker-compose.yml.
+scripts/build_manifest.py                  New. Assembles manifest.yaml and changes.yml, renders install.sh, renders pinned docker-compose.yml.
 scripts/install.sh.template                New. Stable installer logic; release workflow generates install.sh from this.
 scripts/release_assets/                    New folder; staging area used in CI.
 docker-compose.yml                         Already exists at repo root. Becomes the source for the released pinned compose.
+*/CHANGELOG.yml                            Already exist per project. Source data for changes.yml (newest entry of each changed file).
 docs/releases.md                           Already exists; reference doc.
 docs/decisions/2026-05-23-github-release-as-manifest.md   Already exists; ADR.
 ```
@@ -106,6 +111,26 @@ manifest and copying their entries forward.
 
 ---
 
+## Change feed schema
+
+The full schema is documented in [`docs/releases.md`](../releases.md). For
+implementation purposes:
+
+- Top-level keys: `drover` (CalVer), `previous_drover` (CalVer or
+  `null`), `released` (ISO 8601 UTC), `changes` (object).
+- `changes` is a map of `<project>` → `{from, to, bump, entries}`.
+- `from` is the version that project had in the previous Drover
+  release's manifest, or `null` if there was no previous release or the
+  project didn't exist in it.
+- `to` is the version being released now.
+- `bump` at the component level is the highest bump across that
+  component's `entries` (`major` > `minor` > `patch`).
+- `entries` is a list of `{bump, description}` objects, copied verbatim
+  from the newest block of the project's `CHANGELOG.yml`.
+- Only projects that bumped in this release appear under `changes`.
+
+---
+
 ## Implementation checklists
 
 ### 1. Manifest builder script (`scripts/build_manifest.py`)
@@ -132,6 +157,28 @@ manifest and copying their entries forward.
 - [ ] Write `manifest.yaml` with deterministic key ordering (use
   `yaml.safe_dump(..., sort_keys=False)` and an explicit dict order so
   diffs between releases stay readable).
+- [ ] Assemble `changes.yml`:
+  - [ ] For each project named in `--component`, load its
+        `CHANGELOG.yml` and find the entry whose `version` equals the
+        project's new version. Lift its `entries` verbatim.
+  - [ ] Set `from` from the previous manifest's
+        `components.<project>.version`, or `null` if absent (first
+        release ever, or new project).
+  - [ ] Set `to` from the new version. Compute `bump` at the component
+        level as `max(entries[].bump)` under the ordering
+        `major > minor > patch`.
+  - [ ] `previous_drover` comes from the previous manifest's `drover`
+        field, or `null` if there was no previous manifest.
+  - [ ] Refuse to render if `--component` is empty (a no-op release —
+        same condition that prevents the umbrella job from creating a
+        release at all).
+  - [ ] Refuse to render if any project's `CHANGELOG.yml` lacks an entry
+        matching the released version. That would mean the release PR
+        was constructed incorrectly upstream; the workflow should fail
+        loudly rather than emit an empty `changes` block for that
+        component.
+  - [ ] Write `changes.yml` with the same deterministic key-ordering
+        convention as `manifest.yaml`.
 - [ ] Render a pinned `docker-compose.yml` from the repo-root
   `docker-compose.yml`:
   - [ ] Read the source compose file as raw text. Do **not** YAML-parse
@@ -185,6 +232,16 @@ manifest and copying their entries forward.
   - [ ] Missing-image guard: if the source compose lacks an `image:`
         line for an expected component, the builder errors with the
         component name.
+  - [ ] `changes.yml`: first-ever release sets `from` and
+        `previous_drover` to `null`.
+  - [ ] `changes.yml`: component bump rolls up correctly when a project
+        has multiple entries (`major` wins over `minor` and `patch`).
+  - [ ] `changes.yml`: only components named in `--component` appear;
+        unchanged components are absent.
+  - [ ] `changes.yml`: missing CHANGELOG entry for the released version
+        causes the builder to fail with the project name.
+  - [ ] `changes.yml` and `manifest.yaml` agree on every `to` version
+        (cross-check fixture).
 
 ### 2. CalVer version computation
 
@@ -232,17 +289,17 @@ manifest and copying their entries forward.
         very first release).
   - [ ] `build-manifest`: run `scripts/build_manifest.py` with the inputs
         from the calling workflow and the previous manifest. Emits
-        `manifest.yaml`, `install.sh`, and `docker-compose.yml` into the
-        staging directory.
+        `manifest.yaml`, `changes.yml`, `install.sh`, and
+        `docker-compose.yml` into the staging directory.
   - [ ] `sign-artifacts`: cosign-sign each of `manifest.yaml`,
-        `install.sh`, and `docker-compose.yml` with keyless OIDC. Same
-        signing identity as `publish-image.yml`.
+        `changes.yml`, `install.sh`, and `docker-compose.yml` with
+        keyless OIDC. Same signing identity as `publish-image.yml`.
   - [ ] `build-checksums`: SHA-256 every staged asset into `checksums.txt`.
   - [ ] `create-release`: `gh release create v$DROVER_VERSION --notes-file
-        notes.md manifest.yaml manifest.yaml.sig install.sh install.sh.sig
-        docker-compose.yml docker-compose.yml.sig checksums.txt`. Use
-        `--latest` for forward releases, `--latest=false` for the manual
-        backport path.
+        notes.md manifest.yaml manifest.yaml.sig changes.yml changes.yml.sig
+        install.sh install.sh.sig docker-compose.yml docker-compose.yml.sig
+        checksums.txt`. Use `--latest` for forward releases,
+        `--latest=false` for the manual backport path.
 - [ ] Concurrency group keyed on the repository, so two release PRs
   merging in quick succession don't race on the CalVer counter. Group:
   `umbrella-release-${{ github.repository }}`, `cancel-in-progress: false`.
@@ -350,16 +407,26 @@ SHA-256s. **The installer does not fetch or parse `manifest.yaml`.**
 ### 7. Release notes body
 
 - [ ] `umbrella-release.yml` assembles the GitHub Release body (passed via
-  `--notes-file`) by:
-  - [ ] Including a "What's new" section that aggregates each component's
-        new CHANGELOG entries for this release (read the per-project
-        `CHANGELOG.yml` and emit the entries from the newest version block
-        only).
-  - [ ] Including a "Pinned versions" table (one row per component).
-  - [ ] Linking to the manifest and signature.
+  `--notes-file`) by reading the just-emitted `changes.yml` and
+  `manifest.yaml`. No second pass over `CHANGELOG.yml` files — the two
+  generated artifacts are the source.
+- [ ] Render a "What's new" section from `changes.yml`: one subheading
+  per component, each entry's description as a bullet, prefixed by its
+  `bump` level. Components missing from `changes.yml` are omitted.
+- [ ] Render a "Pinned versions" table from `manifest.yaml`: one row per
+  component with version and published location (image+digest for
+  containers, PyPI spec for libraries, release URL for the CLI).
+- [ ] Render a "Verification" section that links to `manifest.yaml`,
+  `changes.yml`, `docker-compose.yml`, and `install.sh` plus their
+  signatures, with the `cosign verify-blob` recipe.
 - [ ] Implement as a small Python helper, `scripts/build_release_notes.py`,
-  invoked next to `build_manifest.py`. Output to `notes.md` in the staging
-  dir.
+  invoked next to `build_manifest.py`. Inputs: `--manifest`, `--changes`,
+  `--output`. No other inputs — keeping the helper pure makes it trivial
+  to test against fixtures.
+- [ ] Tests: snapshot a rendered `notes.md` against a fixture pair of
+  `manifest.yaml` + `changes.yml`. Render with no-change-feed-entries
+  edge case (shouldn't happen at runtime, but the renderer should not
+  crash).
 
 ### 8. Tests and validation
 
@@ -367,13 +434,16 @@ SHA-256s. **The installer does not fetch or parse `manifest.yaml`.**
 - [ ] Unit tests for the CalVer increment logic (extract to a tiny Python
   helper if the bash gets gnarly).
 - [ ] Integration test: a fixture directory containing a previous
-  manifest, fake CLI assets JSON, and expected output `manifest.yaml`.
-  Snapshot-test the builder.
+  manifest, fixture `CHANGELOG.yml` files, fake CLI assets JSON, and
+  expected output `manifest.yaml` + `changes.yml`. Snapshot-test the
+  builder.
 - [ ] Manual smoke test before first real release: run the workflow with
   `dry_run: true` against the current state of `main`. Inspect the
-  uploaded workflow artifacts (manifest, install.sh, docker-compose.yml,
-  all three signatures, checksums) by hand. Confirm `docker compose -f
-  docker-compose.yml pull` succeeds against the pinned digests.
+  uploaded workflow artifacts (manifest, changes, install.sh,
+  docker-compose.yml, all four signatures, checksums, rendered notes.md)
+  by hand. Confirm `docker compose -f docker-compose.yml pull` succeeds
+  against the pinned digests. Confirm `changes.yml` `to` versions match
+  `manifest.yaml` `components.*.version`.
 
 ### 9. Documentation updates
 

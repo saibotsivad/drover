@@ -45,23 +45,28 @@ Every Drover release has the same shape:
 |---|---|
 | `manifest.yaml` | The full cross-link manifest. Machine-readable source of truth for which component versions belong to this release. |
 | `manifest.yaml.sig` | Cosign signature over `manifest.yaml`. |
+| `changes.yml` | Aggregated change feed: every entry that landed in this Drover release, grouped by component, with the from/to version and per-entry bump level. The human-readable release description is rendered from this file. |
+| `changes.yml.sig` | Cosign signature over `changes.yml`. |
 | `install.sh` | CLI installer. Generated per release from a stable template plus this release's component data; carries the CLI binary URLs and SHA-256s as literal variable assignments at the top of the script. Does not parse `manifest.yaml`. |
 | `install.sh.sig` | Cosign signature over `install.sh`. Verifying this covers every URL and checksum the installer will use. |
 | `docker-compose.yml` | Operator-ready compose stack with every `image:` pinned to `<name>:<version>@sha256:<digest>` for this release. Generated from the root `docker-compose.yml` in the repo by substituting only the `image:` lines, so all comments and structure are preserved byte-for-byte. |
 | `docker-compose.yml.sig` | Cosign signature over `docker-compose.yml`. |
 | `checksums.txt` | SHA-256 of every asset attached to this release. |
 
-`install.sh`, `manifest.yaml`, and `docker-compose.yml` are generated
-from the same component data in the same workflow step, so they cannot
-drift. Consumers verifying an install use `install.sh.sig`; operators
-deploying the stack verify `docker-compose.yml.sig`; consumers verifying
-any other use of the release data use `manifest.yaml.sig`.
+`install.sh`, `manifest.yaml`, `changes.yml`, and `docker-compose.yml`
+are generated from the same component data in the same workflow step,
+so they cannot drift. Consumers verifying an install use
+`install.sh.sig`; operators deploying the stack verify
+`docker-compose.yml.sig`; tooling consuming the change feed verifies
+`changes.yml.sig`; consumers verifying any other use of the release
+data use `manifest.yaml.sig`.
 
 **Body of the release:**
 
-- A human-readable changelog aggregating each component's new entries for
-  this release.
-- A pinned-versions table (component → version → published location).
+- A human-readable changelog rendered from `changes.yml` (the same data,
+  formatted for humans).
+- A pinned-versions table (component → version → published location)
+  rendered from `manifest.yaml`.
 
 **Not in the release:**
 
@@ -113,14 +118,73 @@ Every component present in the repo appears in `components`, whether or not
 it changed in this release. Unchanged components carry forward the previous
 release's values.
 
+## Change feed (`changes.yml`)
+
+`changes.yml` is the programmatic counterpart to the human-readable
+release description. It lists every change that landed in this Drover
+release, grouped by component, with from/to versions and per-entry bump
+levels. Downstream tooling (notification bots, dependabot-style
+updaters, deploy gates that block on `major`) can subscribe to it
+without scraping HTML.
+
+Shape:
+
+```yaml
+drover: v2026.5-3
+previous_drover: v2026.5-2
+released: 2026-05-23T18:42:11Z
+changes:
+  orchestrator:
+    from: 1.2.3
+    to: 1.2.4
+    bump: patch
+    entries:
+      - bump: patch
+        description: |
+          Fixed crash on malformed input in the executor loop.
+  webapp:
+    from: 1.9.0
+    to: 2.0.0
+    bump: major
+    entries:
+      - bump: major
+        description: |
+          Renamed /api/orchestrator/* proxy endpoints to /api/v2/*.
+      - bump: minor
+        description: |
+          Added a new dashboard view for container logs.
+```
+
+Notes:
+
+- Only components that bumped in this release appear under `changes`. To
+  enumerate every component's current version, read `manifest.yaml`
+  instead.
+- `from` is the version recorded for that component in the previous
+  Drover release's manifest. On the very first umbrella release, or for
+  a component that did not exist in the previous release, `from` is
+  `null`.
+- `bump` at the component level is the highest bump among its `entries`
+  (the same "highest bump wins" rule documented in
+  [`versioning.md`](./versioning.md)).
+- Entries are listed in the order they appeared in the per-project
+  `CHANGELOG.yml`. The data is identical to that file; the change feed
+  just aggregates across components for one release.
+
 ## Commitments
 
 - **Stable install URL.** `https://github.com/saibotsivad/drover/releases/latest/download/install.sh`
   is a permanent link to the latest installer. Likewise `manifest.yaml`,
-  `manifest.yaml.sig`, and `checksums.txt`.
-- **Signed manifest.** Every release's `manifest.yaml` is cosign-signed
-  (keyless OIDC). A consumer can verify it before trusting any of the
-  cross-links inside.
+  `changes.yml`, `docker-compose.yml`, their signatures, and
+  `checksums.txt`.
+- **Signed manifest, change feed, and compose.** Every release's
+  `manifest.yaml`, `changes.yml`, and `docker-compose.yml` are
+  cosign-signed (keyless OIDC). A consumer can verify each before
+  trusting it.
+- **Stable change-feed schema.** The shape of `changes.yml` is part of
+  the release contract. Additive changes (new optional keys) may be
+  introduced without notice; breaking changes follow an announce-then-ship
+  cycle on a forward release.
 - **Pinned by digest.** Container references in the manifest always include
   a `sha256:` digest. Consumers can pull by digest for byte-identical
   reproducibility, independent of any mutable tag.
