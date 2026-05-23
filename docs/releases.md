@@ -43,10 +43,17 @@ Every Drover release has the same shape:
 
 | Asset | Purpose |
 |---|---|
-| `manifest.yaml` | The full cross-link manifest. Source of truth for which component versions belong to this release. |
+| `manifest.yaml` | The full cross-link manifest. Machine-readable source of truth for which component versions belong to this release. |
 | `manifest.yaml.sig` | Cosign signature over `manifest.yaml`. |
+| `install.sh` | CLI installer. Generated per release from a stable template plus this release's component data; carries the CLI binary URLs and SHA-256s as literal variable assignments at the top of the script. Does not parse `manifest.yaml`. |
+| `install.sh.sig` | Cosign signature over `install.sh`. Verifying this covers every URL and checksum the installer will use. |
 | `checksums.txt` | SHA-256 of every asset attached to this release. |
-| `install.sh` | CLI installer. Reads `manifest.yaml`, downloads the right CLI binary, verifies its checksum. |
+
+`install.sh` and `manifest.yaml` are generated from the same component
+data in the same workflow step, so they cannot drift. Consumers verifying
+an install use `install.sh.sig`; consumers verifying a container
+deployment or any other non-install use of the release data use
+`manifest.yaml.sig`.
 
 **Body of the release:**
 
@@ -153,11 +160,24 @@ curl -fsSL https://github.com/saibotsivad/drover/releases/latest/download/instal
 `install.sh`:
 
 1. Detects OS and arch.
-2. Downloads `manifest.yaml` from the same release it was downloaded from.
-3. Verifies `manifest.yaml.sig` against the published cosign identity.
-4. Reads `components.cli.assets[<os>-<arch>]` to find the binary URL and SHA-256.
-5. Downloads the binary, verifies its checksum, extracts it, and installs to
-   `/usr/local/bin/drover` (or `$DROVER_INSTALL_DIR`).
+2. Reads the matching binary URL and SHA-256 from the literal variable
+   assignments at the top of its own script body. No second network fetch,
+   no YAML parsing.
+3. Downloads the binary, verifies its SHA-256, extracts it, and installs
+   to `/usr/local/bin/drover` (or `$DROVER_INSTALL_DIR`).
+
+Supply-chain-conscious users can verify the installer before running it:
+
+```sh
+curl -fsSL -O https://github.com/saibotsivad/drover/releases/latest/download/install.sh
+curl -fsSL -O https://github.com/saibotsivad/drover/releases/latest/download/install.sh.sig
+cosign verify-blob install.sh --signature install.sh.sig \
+  --certificate-identity ... --certificate-oidc-issuer ...
+sh install.sh
+```
+
+Because the URLs and checksums are baked into the script body,
+`install.sh.sig` covers everything the installer will fetch.
 
 Container operators pin to a Drover version by reading the manifest:
 

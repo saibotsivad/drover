@@ -42,11 +42,12 @@ runs after those finish. Its inputs are:
 The work breaks into five concerns:
 
 1. **Schema & helper script** — define `manifest.yaml`, write a Python
-   script that assembles it.
+   script that assembles it and renders `install.sh` from a template.
 2. **Workflow wiring** — add `umbrella-release.yml`, call it from
    `push-tag.yml`, plumb digests through.
-3. **Signing** — cosign-sign the manifest.
-4. **Installer** — write `scripts/install.sh` that consumes the manifest.
+3. **Signing** — cosign-sign both `manifest.yaml` and `install.sh`.
+4. **Installer template** — write `scripts/install.sh.template`, the
+   stable logic that the builder injects values into.
 5. **Manual re-run path** — `workflow_dispatch` entrypoint for recovery.
 
 ---
@@ -55,12 +56,16 @@ The work breaks into five concerns:
 
 ```
 .github/workflows/umbrella-release.yml     New. workflow_call + workflow_dispatch.
-scripts/build_manifest.py                  New. Assembles manifest.yaml.
-scripts/install.sh                         New. Consumer-facing installer.
+scripts/build_manifest.py                  New. Assembles manifest.yaml AND renders install.sh.
+scripts/install.sh.template                New. Stable installer logic; release workflow generates install.sh from this.
 scripts/release_assets/                    New folder; staging area used in CI.
 docs/releases.md                           Already exists; reference doc.
 docs/decisions/2026-05-23-github-release-as-manifest.md   Already exists; ADR.
 ```
+
+`install.sh` itself is **not** checked into the repo — it's a generated
+per-release artifact. `install.sh.template` is the stable, reviewable
+logic; the builder script substitutes a values block into it at the top.
 
 `publish-image.yml` is updated to emit the pushed image digest as a job
 output. `push-tag.yml` is updated to call `umbrella-release.yml` after the
@@ -115,6 +120,20 @@ manifest and copying their entries forward.
 - [ ] Write `manifest.yaml` with deterministic key ordering (use
   `yaml.safe_dump(..., sort_keys=False)` and an explicit dict order so
   diffs between releases stay readable).
+- [ ] Render `install.sh` from `scripts/install.sh.template`:
+  - [ ] Read the template.
+  - [ ] Build a values block — a sequence of literal bash variable
+        assignments derived from the same component data used to write
+        `manifest.yaml`. Per-platform CLI variables are flat names like
+        `ASSET_linux_amd64_URL`, `ASSET_linux_amd64_SHA256`.
+  - [ ] Shell-escape every value (use `shlex.quote` and wrap in double
+        quotes in the rendered output) so a future malformed input cannot
+        break out of the assignment.
+  - [ ] Substitute the values block into the template at a single marker
+        (e.g. `# --- VALUES BLOCK ---`). Reject the rendering if the
+        marker appears zero or more than one times.
+  - [ ] Add a generated-at timestamp and the Drover version as a comment
+        header so the rendered script is self-describing.
 - [ ] Unit tests under `tests/release/test_build_manifest.py`:
   - [ ] No previous manifest, one component changed.
   - [ ] Previous manifest, no components changed (no-op release, should
@@ -122,6 +141,12 @@ manifest and copying their entries forward.
   - [ ] Previous manifest, one container changed, CLI unchanged.
   - [ ] Previous manifest, CLI changed, containers unchanged.
   - [ ] Schema validation against a vendored JSON schema.
+  - [ ] Rendered `install.sh` parses under `bash -n` (syntax check).
+  - [ ] Rendered `install.sh` and `manifest.yaml` agree on every CLI URL
+        and SHA-256 (cross-check fixture).
+  - [ ] Shell escaping: feed a value containing `"`, `$`, and backticks
+        through the renderer and confirm the resulting `install.sh` still
+        parses and exposes the literal string.
 
 ### 2. CalVer version computation
 
@@ -168,14 +193,17 @@ manifest and copying their entries forward.
         (use `gh release download` against `latest`, tolerating a 404 on the
         very first release).
   - [ ] `build-manifest`: run `scripts/build_manifest.py` with the inputs
-        from the calling workflow and the previous manifest.
-  - [ ] `sign-manifest`: `cosign sign-blob --yes manifest.yaml > manifest.yaml.sig`
-        using keyless OIDC. Same signing identity as `publish-image.yml`.
+        from the calling workflow and the previous manifest. Emits both
+        `manifest.yaml` and `install.sh` into the staging directory.
+  - [ ] `sign-artifacts`: cosign-sign both files with keyless OIDC
+        (`cosign sign-blob --yes manifest.yaml > manifest.yaml.sig` and
+        the same for `install.sh`). Same signing identity as
+        `publish-image.yml`.
   - [ ] `build-checksums`: SHA-256 every staged asset into `checksums.txt`.
   - [ ] `create-release`: `gh release create v$DROVER_VERSION --notes-file
-        notes.md manifest.yaml manifest.yaml.sig checksums.txt install.sh`.
-        Use `--latest` for forward releases, `--latest=false` for the
-        manual backport path.
+        notes.md manifest.yaml manifest.yaml.sig install.sh install.sh.sig
+        checksums.txt`. Use `--latest` for forward releases,
+        `--latest=false` for the manual backport path.
 - [ ] Concurrency group keyed on the repository, so two release PRs
   merging in quick succession don't race on the CalVer counter. Group:
   `umbrella-release-${{ github.repository }}`, `cancel-in-progress: false`.
@@ -232,33 +260,53 @@ points:
   download and the builder carries the CLI block forward from the previous
   manifest.
 
-### 6. Installer (`scripts/install.sh`)
+### 6. Installer template (`scripts/install.sh.template`)
 
-- [ ] Detect platform: `uname -s` (Linux/Darwin/MINGW…), `uname -m` (x86_64,
-  arm64, aarch64). Normalize to the manifest's `<os>-<arch>` keys.
-- [ ] Download `manifest.yaml` and `manifest.yaml.sig` from the same
-  release the script came from. Determine "same release" via:
-  - When invoked via `releases/latest/download/install.sh`, hard-code the
-    URL `https://github.com/<owner>/<repo>/releases/latest/download/manifest.yaml`.
-  - Allow override via `$DROVER_RELEASE` (a tag like `v2026.5-3`) for
-    pinning.
-- [ ] Verify the signature with `cosign verify-blob --certificate-identity
-  ... --certificate-oidc-issuer ...`. Skip with a clear warning if `cosign`
-  isn't installed and `$DROVER_SKIP_SIG_VERIFY=1` is set; otherwise error.
-- [ ] Parse `components.cli.assets[$os-$arch].url` and `.sha256`. Avoid
-  taking a hard dependency on `yq` — the manifest is constrained enough
-  that a small `awk`/`grep` parser works, but if `yq` is available prefer
-  it. (Make a deliberate call here; document the choice in the script
-  header.)
-- [ ] Download the binary tarball, verify SHA-256, extract to a temp dir,
-  move the binary to `${DROVER_INSTALL_DIR:-/usr/local/bin}/drover`.
-- [ ] Print the installed version on success. Exit non-zero on any failure
-  with a clear message.
+The shipped `install.sh` is generated per release by the builder script
+(section 1). The template is the stable, reviewable logic; it contains a
+single `# --- VALUES BLOCK ---` marker where the builder injects literal
+bash variable assignments for that release's CLI version, asset URLs, and
+SHA-256s. **The installer does not fetch or parse `manifest.yaml`.**
+
+- [ ] Start the template with the values-block marker. Below it, the
+  installer logic:
+  - [ ] Detect platform: `uname -s` (Linux/Darwin/MINGW…), `uname -m`
+        (x86_64, arm64, aarch64). Normalize to the keys used in the values
+        block (e.g. `linux_amd64`).
+  - [ ] Resolve `ASSET_<platform>_URL` and `ASSET_<platform>_SHA256` via
+        bash indirect expansion. Error clearly if the platform isn't
+        recognised.
+  - [ ] Download the binary tarball with `curl -fsSL` or `wget -q`
+        (detect once at the top).
+  - [ ] Verify SHA-256 with `sha256sum -c` on Linux or `shasum -a 256 -c`
+        on macOS (detect once).
+  - [ ] Extract to a `mktemp -d`, move the binary to
+        `${DROVER_INSTALL_DIR:-/usr/local/bin}/drover`, set mode 0755.
+  - [ ] Clean up the temp dir on any exit path (`trap`).
+  - [ ] Print the installed version (from a `CLI_VERSION` in the values
+        block) on success. Exit non-zero on any failure with a clear
+        message.
+- [ ] Set `set -euo pipefail` at the top. Keep dependencies to `curl`/`wget`,
+  `tar`, `sha256sum`/`shasum`, `uname`, `mktemp`, `install` — all base
+  POSIX-system tools.
+- [ ] No `cosign` call inside the installer. Signature verification is the
+  user's responsibility on the script as a whole; documenting the
+  `cosign verify-blob install.sh install.sh.sig ...` recipe in
+  `docs/releases.md` is sufficient.
+- [ ] Pinning: a user can install a specific Drover version by fetching
+  that release's `install.sh` directly
+  (`releases/download/v2026.5-3/install.sh`). The script has those values
+  baked in; no env-var override is required or supported.
 - [ ] Manual test matrix before first release:
   - [ ] Linux amd64
   - [ ] Linux arm64
   - [ ] macOS arm64
   - [ ] (Optional) Windows under Git Bash
+- [ ] Audit aid: include a top-of-file comment in the template noting that
+  any review should diff the generated `install.sh` against
+  `scripts/install.sh.template` plus the values block, and that the logic
+  section below the values block should be byte-identical to the template
+  for every release.
 
 ### 7. Release notes body
 
@@ -339,25 +387,28 @@ points:
 
 ## Suggested implementation order
 
-1. **Schema + manifest builder** (`scripts/build_manifest.py`) with unit
-   tests. No CI integration yet; the script runs locally against a
-   hand-crafted previous manifest.
-2. **Release notes builder** (`scripts/build_release_notes.py`) likewise.
-3. **`umbrella-release.yml`** with `workflow_dispatch` only, `dry_run`
+1. **Installer template** (`scripts/install.sh.template`) and the manual
+   platform test matrix. Validate the logic against a hand-pasted values
+   block before the builder script exists.
+2. **Schema + manifest builder** (`scripts/build_manifest.py`) — emits
+   both `manifest.yaml` and a rendered `install.sh`, with unit tests
+   including the shell-escape and bash-syntax-check cases. No CI
+   integration yet; runs locally against a hand-crafted previous
+   manifest.
+3. **Release notes builder** (`scripts/build_release_notes.py`) likewise.
+4. **`umbrella-release.yml`** with `workflow_dispatch` only, `dry_run`
    default true. Validate by hand.
-4. **Plumb digests** through `publish-image.yml` and `push-tag.yml`,
+5. **Plumb digests** through `publish-image.yml` and `push-tag.yml`,
    then wire `umbrella-release.yml` as a `workflow_call` from
    `push-tag.yml`.
-5. **Cosign signing** added to the workflow once the unsigned path works
-   end-to-end.
-6. **Installer** (`scripts/install.sh`) and the manual platform test
-   matrix.
+6. **Cosign signing** for both `manifest.yaml` and `install.sh` added to
+   the workflow once the unsigned path works end-to-end.
 7. **First real umbrella release** on a non-trivial component change.
    Verify `releases/latest/download/install.sh` resolves and installs.
 8. **Documentation pass**: remove the draft header here, link from
    `README.md` and `versioning.md`.
 
-Steps 1–3 are safe to land without affecting the existing release flow.
-Step 4 is the first step that changes live workflow behaviour, so it
+Steps 1–4 are safe to land without affecting the existing release flow.
+Step 5 is the first step that changes live workflow behaviour, so it
 should land behind a feature flag (a workflow input that defaults to
-"skip umbrella") that is flipped only once steps 5–6 are also ready.
+"skip umbrella") that is flipped only once step 6 is also ready.
