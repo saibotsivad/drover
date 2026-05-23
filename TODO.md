@@ -20,3 +20,12 @@ log retention as a feature.
 ## Container API data model refinement
 
 The Pydantic models in `models.py` cover the initial contract but will need adjustment to add pagination to container listings, richer error responses, and possibly additional metadata fields.
+
+## Document API response models
+
+There is no reference document describing the JSON response shapes for the REST API endpoints. We should add a doc (e.g. `docs/api-responses.md`) that covers at minimum:
+
+- `ContainerResponse` — fields returned by all container endpoints, including which fields are only populated on lifecycle-transition endpoints (e.g. `transition_timeout_seconds`) vs. always present
+- `ExecResponse` / `ExecStatusResponse` / `CommandSummary` / `CommandMessage`
+- `ImageSummary` / `ImageDetail`
+- Error response shapes (4xx / 5xx)

@@ -55,7 +55,13 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _row_to_response(row) -> ContainerResponse:
+# Matches the default timeout passed to Docker's stop API (SIGTERM wait before SIGKILL).
+_DOCKER_STOP_TIMEOUT = 10
+
+
+def _row_to_response(
+    row, transition_timeout_seconds: int | None = None
+) -> ContainerResponse:
     return ContainerResponse(
         id=row["id"],
         image=row["image"],
@@ -67,6 +73,7 @@ def _row_to_response(row) -> ContainerResponse:
         stopped_at=row["stopped_at"],
         last_seen=row["last_seen"],
         error_code=row["error_code"],
+        transition_timeout_seconds=transition_timeout_seconds,
     )
 
 
@@ -340,7 +347,7 @@ class ContainerManager:
         row = await self._db.fetchone(
             "SELECT * FROM containers WHERE id = ?", (container_id,)
         )
-        return _row_to_response(row)
+        return _row_to_response(row, self._config.init_timeout_seconds)
 
     # -- background init ---------------------------------------------------
 
@@ -631,7 +638,7 @@ class ContainerManager:
         row = await self._db.fetchone(
             "SELECT * FROM containers WHERE id = ?", (container_id,)
         )
-        return _row_to_response(row)
+        return _row_to_response(row, _DOCKER_STOP_TIMEOUT)
 
     # -- resume -------------------------------------------------------------
 
@@ -678,7 +685,7 @@ class ContainerManager:
         row = await self._db.fetchone(
             "SELECT * FROM containers WHERE id = ?", (container_id,)
         )
-        return _row_to_response(row)
+        return _row_to_response(row, self._config.init_timeout_seconds)
 
     async def _resume_container_async(
         self, container_id: str, docker_id: str
@@ -778,7 +785,7 @@ class ContainerManager:
         row = await self._db.fetchone(
             "SELECT * FROM containers WHERE id = ?", (container_id,)
         )
-        return _row_to_response(row)
+        return _row_to_response(row, _DOCKER_STOP_TIMEOUT)
 
     # -- exec ---------------------------------------------------------------
 
