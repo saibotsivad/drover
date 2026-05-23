@@ -154,6 +154,7 @@ async def test_create_container_returns_initializing(manager, docker, sockets, d
     assert resp.privileged is False
     assert resp.timeout_seconds == 300
     assert resp.error_code is None
+    assert resp.transition_timeout_seconds == 20  # init_timeout_seconds from config
 
     # Phase 1 looked the image up by its drover.name label synchronously.
     docker.list_images.assert_called_once_with(name="python-runner")
@@ -352,6 +353,7 @@ async def test_stop_container(manager, docker, sockets, db):
     stopped = await manager.stop_container(resp.id)
     assert stopped.status == ContainerStatus.stopped
     assert stopped.stopped_at is not None
+    assert stopped.transition_timeout_seconds == 10
     sockets.close_socket.assert_called_once_with(resp.id)
     docker.stop_container.assert_called_once()
 
@@ -389,6 +391,7 @@ async def test_resume_container_returns_resuming(manager, docker, sockets, db):
 
     resumed = await manager.resume_container(resp.id)
     assert resumed.status == ContainerStatus.resuming
+    assert resumed.transition_timeout_seconds == 20  # init_timeout_seconds from config
 
     # Drain the background resume task and cancel its watchdog so the
     # event loop has nothing pending when the test exits.  Status remains
@@ -441,6 +444,7 @@ async def test_destroy_running_container(manager, docker, sockets, db):
     resp = await _create_running(manager, db, image="test-img")
     destroyed = await manager.destroy_container(resp.id)
     assert destroyed.status == ContainerStatus.destroyed
+    assert destroyed.transition_timeout_seconds == 10
     sockets.destroy_socket.assert_called_once_with(resp.id)
     docker.remove_container.assert_called_once()
 
