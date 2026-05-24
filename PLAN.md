@@ -49,7 +49,7 @@
 | 5 | Wait helper + lifecycle (`start`/`stop`/`destroy`) ✅ | 3 | no |
 | 6 | WebSocket exec streaming ✅ | 3 | no |
 | 7 | Linting + test CI ✅ | 1 (grows w/ 2–6) | no |
-| 8 | Release pipeline (GoReleaser, `publish-cli.yml`, tag wiring) | 6, 7 | **yes (first release)** |
+| 8 | Release pipeline (GoReleaser, `publish-cli.yml`, tag wiring) ✅ | 6, 7 | **yes (first release)** |
 | 9 | Umbrella coordination (`cli-release-assets.json`) | 8 + umbrella step 5 | yes |
 | 10 | E2E scenario | 6 | no |
 | 11 | Docs + ADRs | 6 (final pass after 9) | no |
@@ -416,53 +416,49 @@ commands exist. See impl §"Linting" + §"CI workflows" (1).
 
 ---
 
-## Phase 8 — Release pipeline (GoReleaser + `publish-cli.yml` + tag wiring)
+## Phase 8 — Release pipeline — ✅ DONE (authored; needs first-run validation)
 
 **Goal:** the CLI can be published as a per-component GitHub Release. **This
 is the first phase that can produce a release.** Depends on 6 + 7. See impl
 §"Build & distribution", §"CI workflows" (2)(3), §"Versioning slot".
 
-*(can split: GoReleaser config → reusable workflow → push-tag wiring →
-versioning doc)*
+- [x] `cli/.goreleaser.yaml` (GoReleaser **v2** schema):
+  - [x] `CGO_ENABLED=0` builds for linux/amd64, linux/arm64, darwin/amd64,
+        darwin/arm64, windows/amd64 (windows/arm64 ignored).
+  - [x] Archives `.tar.gz` (unix) / `.zip` (windows) via `format_overrides`;
+        default `files` bundles README + CHANGELOG (no LICENSE file exists).
+  - [x] `checksums.txt`.
+  - [x] `release.make_latest: false` (umbrella owns `releases/latest`).
+  - [x] ldflags inject `version.Version/Commit/Date` (same path as Phase 2).
+  - [x] Cosign keyless `sign-blob` over the checksums file.
+  - [x] `monorepo.tag_prefix: cli-` strips the `cli-` from the
+        `cli-v<version>` tag so the version parses as semver.
+  - [ ] **Deferred:** release notes from `cli/CHANGELOG.yml` — using
+        GoReleaser's default git-based notes for now (umbrella owns the
+        human changelog). Low priority.
+- [x] Archive `name_template: drover-{{.Os}}-{{.Arch}}` →
+      `drover-linux-amd64.tar.gz` etc., matching the `cli-release-assets.json`
+      platform keys and umbrella `install.sh` (docs/releases.md).
+- [x] `.github/workflows/publish-cli.yml` — reusable (`workflow_call`), input
+      `version`, perms `contents: write` + `id-token: write`, runs
+      `goreleaser release` with `workdir: cli` and
+      `GORELEASER_CURRENT_TAG: cli-v<version>`; emits `version` output.
+      (`cli-release-assets.json` step added in Phase 9.)
+- [x] Extended `.github/workflows/push-tag.yml`: `cli` added to the
+      `workflow_dispatch` choices and both `scan` branches; `cli_version`
+      output; `publish-cli` job gated on `cli_version != ''`.
+- [x] `docs/versioning.md` "Versioned projects" table gains the `cli` row.
 
-- [ ] `cli/.goreleaser.yaml`:
-  - [ ] Builds `CGO_ENABLED=0` for linux/amd64, linux/arm64, darwin/amd64,
-        darwin/arm64, windows/amd64.
-  - [ ] Archives `.tar.gz` (unix) / `.zip` (windows), each bundling binary +
-        README + LICENSE.
-  - [ ] Single `checksums.txt`.
-  - [ ] Release marked **`make_latest: false`** (umbrella owns
-        `releases/latest`).
-  - [ ] ldflags inject `version.Version/Commit/Date` (same path as Phase 2).
-  - [ ] Cosign keyless signing of `checksums.txt` (mirror the Docker publish
-        cosign step).
-  - [ ] Release notes sourced from newest `cli/CHANGELOG.yml` entry.
-- [ ] Naming/format of archives matches what the umbrella `install.sh`
-      generator expects (coordinate with `docs/releases.md` →
-      `cli-release-assets.json` platform keys: `linux-amd64`, `linux-arm64`,
-      `darwin-amd64`, `darwin-arm64`, `windows-amd64`).
-- [ ] `.github/workflows/publish-cli.yml` — reusable (`workflow_call`),
-      input `version` (bare semver). Permissions `contents: write`,
-      `id-token: write`. Runs `goreleaser release`. Emits `version` as a
-      workflow output. *(the `cli-release-assets.json` step is Phase 9.)*
-- [ ] Extend `.github/workflows/push-tag.yml`:
-  - [ ] Add a `cli` case to the `scan` step (alongside
-        orchestrator/builder/webapp) — `cli/CHANGELOG.yml` change → push
-        `cli-v<version>` tag, emit `cli_version`.
-  - [ ] Add `detect.outputs.cli_version`.
-  - [ ] Add a `publish-cli` job: `uses: ./.github/workflows/publish-cli.yml`,
-        gated `if: needs.detect.outputs.cli_version != ''`.
-- [ ] Update `docs/versioning.md`: add the `cli` row to the "Versioned
-      projects" table (per impl §"Versioning slot").
-- [ ] `make snapshot` (`goreleaser release --snapshot --clean`) produces all
-      archives locally for manual review.
-
-**DoD:**
-- `make snapshot` builds every target archive + checksums locally.
-- A dry-run / test tag exercises `publish-cli.yml` end-to-end (or a
-  `workflow_dispatch` against a scratch tag) producing a `cli-v<version>`
-  release with `make_latest:false` and signed checksums.
-- `push-tag.yml` emits `cli_version` when `cli/CHANGELOG.yml` changes.
+**DoD:** ⚠️ authored, **not yet executed** (goreleaser/cosign not available in
+this environment):
+- All workflow + goreleaser YAML parses (validated with a YAML loader).
+- [ ] `make snapshot` builds every target archive locally — **run on a
+      machine with goreleaser before first release.**
+- [ ] A `workflow_dispatch` against a scratch `cli-v…` tag exercises
+      `publish-cli.yml` (cosign keyless, `make_latest:false`).
+- [ ] **Validate `goreleaser check`** — especially the v2 `formats` keys and
+      that `monorepo.tag_prefix` parses `cli-v<version>` (this is the highest-
+      risk untested assumption).
 - **Release gate:** first real release preceded by a manual `make snapshot`
   review by ≥1 teammate (impl §"Risks").
 

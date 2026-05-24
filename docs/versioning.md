@@ -17,6 +17,7 @@ and the cosign-signed install/compose assets — see
 | `builder` | `builder/` | GHCR Docker image (`ghcr.io/<owner>/drover-builder`) |
 | `webapp` | `webapp/` | GHCR Docker image (`ghcr.io/<owner>/drover-webapp`) |
 | `executor` | `executor/` | Not published — git tags only |
+| `cli` | `cli/` | Per-component GitHub Release with cross-compiled binaries (via GoReleaser, `make_latest: false`); cross-linked from the umbrella release manifest |
 
 Each project owns a `CHANGELOG.yml` at its top level. That file is the authoritative version record for that project.
 

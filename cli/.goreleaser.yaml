@@ -1,0 +1,67 @@
+# GoReleaser config for the drover CLI. Runs with workdir=cli, so paths are
+# relative to cli/. The per-component git tag is `cli-v<version>`; tag_prefix
+# strips the `cli-` so the version parses as semver.
+#
+# NOTE: goreleaser is not run in local dev here — validate with
+# `goreleaser check` and a `make snapshot` before the first real release
+# (see PLAN.md Phase 8 DoD).
+version: 2
+
+project_name: drover
+
+monorepo:
+  tag_prefix: cli-
+
+builds:
+  - id: drover
+    main: ./cmd/drover
+    binary: drover
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ignore:
+      - goos: windows
+        goarch: arm64
+    ldflags:
+      - -s -w
+      - -X github.com/saibotsivad/drover/cli/internal/version.Version={{ .Version }}
+      - -X github.com/saibotsivad/drover/cli/internal/version.Commit={{ .ShortCommit }}
+      - -X github.com/saibotsivad/drover/cli/internal/version.Date={{ .Date }}
+
+archives:
+  - id: drover
+    # Produces drover-linux-amd64.tar.gz, drover-windows-amd64.zip, etc.
+    # These names match the platform keys in cli-release-assets.json and the
+    # umbrella install.sh (docs/releases.md).
+    name_template: "drover-{{ .Os }}-{{ .Arch }}"
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+
+checksum:
+  name_template: checksums.txt
+
+# Per-component release: the umbrella release owns releases/latest, so this
+# one must not claim it.
+release:
+  make_latest: false
+
+# Cosign keyless (OIDC) signature over the checksums file — mirrors the Docker
+# image signing so verification policy is unified.
+signs:
+  - cmd: cosign
+    artifacts: checksum
+    signature: "${artifact}.sig"
+    args:
+      - sign-blob
+      - "--yes"
+      - "--output-signature=${signature}"
+      - "${artifact}"
+    output: true

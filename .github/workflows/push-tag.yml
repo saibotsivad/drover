@@ -13,6 +13,7 @@ on:
           - orchestrator
           - builder
           - webapp
+          - cli
       version:
         description: "Version to publish (e.g. 1.2.3). Tag must already exist."
         required: true
@@ -32,6 +33,7 @@ jobs:
       orchestrator_version: ${{ steps.scan.outputs.orchestrator_version }}
       builder_version:      ${{ steps.scan.outputs.builder_version }}
       webapp_version:       ${{ steps.scan.outputs.webapp_version }}
+      cli_version:          ${{ steps.scan.outputs.cli_version }}
     steps:
       - name: Checkout merge commit
         uses: actions/checkout@v4
@@ -59,12 +61,14 @@ jobs:
           orchestrator_version=""
           builder_version=""
           webapp_version=""
+          cli_version=""
 
           if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
             case "${{ inputs.project }}" in
               orchestrator) orchestrator_version="${{ inputs.version }}" ;;
               builder)      builder_version="${{ inputs.version }}" ;;
               webapp)       webapp_version="${{ inputs.version }}" ;;
+              cli)          cli_version="${{ inputs.version }}" ;;
             esac
           else
             changed=$(git diff --name-only HEAD~1 HEAD -- '*/CHANGELOG.yml' || true)
@@ -76,6 +80,7 @@ jobs:
                   orchestrator) orchestrator_version="$version" ;;
                   builder)      builder_version="$version" ;;
                   webapp)       webapp_version="$version" ;;
+                  cli)          cli_version="$version" ;;
                   *)            echo "No publish target for project '$project'; only the git tag will be created." ;;
                 esac
                 tag="${project}-v${version}"
@@ -93,6 +98,7 @@ jobs:
           echo "orchestrator_version=$orchestrator_version" >> "$GITHUB_OUTPUT"
           echo "builder_version=$builder_version"           >> "$GITHUB_OUTPUT"
           echo "webapp_version=$webapp_version"             >> "$GITHUB_OUTPUT"
+          echo "cli_version=$cli_version"                   >> "$GITHUB_OUTPUT"
 
   publish-orchestrator:
     needs: detect
@@ -138,6 +144,16 @@ jobs:
       dockerfile: ./webapp/Dockerfile
       version: ${{ needs.detect.outputs.webapp_version }}
       mark_latest: true
+
+  publish-cli:
+    needs: detect
+    if: needs.detect.outputs.cli_version != ''
+    permissions:
+      contents: write
+      id-token: write
+    uses: ./.github/workflows/publish-cli.yml
+    with:
+      version: ${{ needs.detect.outputs.cli_version }}
 
   umbrella:
     needs: [detect, publish-orchestrator, publish-builder, publish-webapp]

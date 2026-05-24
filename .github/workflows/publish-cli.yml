@@ -1,0 +1,47 @@
+name: Publish CLI (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: "Bare semver (e.g. 0.2.0). The tag cli-v<version> must already exist."
+        required: true
+        type: string
+    outputs:
+      version:
+        description: "The published CLI version (echoes the input), for the umbrella job."
+        value: ${{ inputs.version }}
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # create the per-component GitHub Release
+      id-token: write # cosign keyless signing
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # GoReleaser needs full history and tags
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+          cache-dependency-path: cli/go.sum
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+
+      - name: Run GoReleaser
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          version: "~> v2"
+          args: release --clean
+          workdir: cli
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Force the tag GoReleaser builds from; tag_prefix (cli-) in
+          # .goreleaser.yaml strips the prefix so the version parses as semver.
+          GORELEASER_CURRENT_TAG: cli-v${{ inputs.version }}
+
+      # cli-release-assets.json generation + upload is added in Phase 9.
