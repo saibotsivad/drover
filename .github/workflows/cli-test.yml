@@ -22,7 +22,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version: "1.23"
           cache-dependency-path: cli/go.sum
@@ -35,7 +35,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version: "1.23"
           cache-dependency-path: cli/go.sum
@@ -51,19 +51,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0 # snapshot/monorepo resolution wants full history + tags
-      - uses: actions/setup-go@v5
+          fetch-depth: 0 # snapshot version resolution wants full history
+      - uses: actions/setup-go@v6
         with:
           go-version: "1.23"
           cache-dependency-path: cli/go.sum
       - name: GoReleaser config check
-        uses: goreleaser/goreleaser-action@v6
+        uses: goreleaser/goreleaser-action@v7
         with:
           version: "~> v2"
           args: check
           workdir: cli
       - name: GoReleaser snapshot release (archives + checksums, no publish)
-        uses: goreleaser/goreleaser-action@v6
+        uses: goreleaser/goreleaser-action@v7
         with:
           version: "~> v2"
           args: release --snapshot --clean

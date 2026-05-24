@@ -431,8 +431,13 @@ is the first phase that can produce a release.** Depends on 6 + 7. See impl
   - [x] `release.make_latest: false` (umbrella owns `releases/latest`).
   - [x] ldflags inject `version.Version/Commit/Date` (same path as Phase 2).
   - [x] Cosign keyless `sign-blob` over the checksums file.
-  - [x] `monorepo.tag_prefix: cli-` strips the `cli-` from the
-        `cli-v<version>` tag so the version parses as semver.
+  - [x] **Tag/version handling (OSS-safe):** GoReleaser's `monorepo`
+        tag_prefix is **Pro-only** (`goreleaser check` rejects it in OSS), so
+        instead the clean version is passed via the `CLI_VERSION` env var
+        (baked into ldflags; falls back to `.Version` in snapshot/local), and
+        `publish-cli.yml` runs `release --skip=validate` with
+        `GORELEASER_CURRENT_TAG=cli-v<version>` so the non-semver tag doesn't
+        abort while the release is still created on `cli-v<version>`.
   - [ ] **Deferred:** release notes from `cli/CHANGELOG.yml` — using
         GoReleaser's default git-based notes for now (umbrella owns the
         human changelog). Low priority.
@@ -456,9 +461,15 @@ this environment):
       machine with goreleaser before first release.**
 - [ ] A `workflow_dispatch` against a scratch `cli-v…` tag exercises
       `publish-cli.yml` (cosign keyless, `make_latest:false`).
-- [ ] **Validate `goreleaser check`** — especially the v2 `formats` keys and
-      that `monorepo.tag_prefix` parses `cli-v<version>` (this is the highest-
-      risk untested assumption).
+- [x] **`goreleaser check` + snapshot** run in `cli-test.yml` (build-matrix)
+      on every PR and via `workflow_dispatch` — validates the config schema
+      and the full archive/checksum build with no publish. (`monorepo` removal
+      was driven by this check failing.)
+- [ ] **Release path still first-run only:** `--skip=validate` +
+      `GORELEASER_CURRENT_TAG` + `CLI_VERSION` ldflags fallback are not
+      exercisable without a real `cli-v…` tag. Confirm the produced release
+      lands on the `cli-v<version>` tag and `drover --version` reports the
+      clean version.
 - **Release gate:** first real release preceded by a manual `make snapshot`
   review by ≥1 teammate (impl §"Risks").
 

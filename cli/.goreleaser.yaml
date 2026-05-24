@@ -1,16 +1,20 @@
 # GoReleaser config for the drover CLI. Runs with workdir=cli, so paths are
-# relative to cli/. The per-component git tag is `cli-v<version>`; tag_prefix
-# strips the `cli-` so the version parses as semver.
+# relative to cli/.
 #
-# NOTE: goreleaser is not run in local dev here — validate with
-# `goreleaser check` and a `make snapshot` before the first real release
-# (see PLAN.md Phase 8 DoD).
+# Tag handling: the per-component git tag is `cli-v<version>`, which is not a
+# bare semver, and GoReleaser's monorepo tag_prefix feature is Pro-only. So
+# the OSS release path (publish-cli.yml) instead passes the clean version via
+# the CLI_VERSION env var (used in ldflags below) and runs with
+# `--skip=validate` so the non-semver tag doesn't abort. Archive names don't
+# embed the version, so nothing else needs it. In snapshot/local builds
+# CLI_VERSION is unset and ldflags fall back to GoReleaser's `.Version`.
+#
+# NOTE: the release path is exercised end-to-end only on a real tag; validate
+# with `goreleaser check` + `make snapshot` (both run in cli-test.yml) before
+# the first release (see PLAN.md Phase 8 DoD).
 version: 2
 
 project_name: drover
-
-monorepo:
-  tag_prefix: cli-
 
 builds:
   - id: drover
@@ -30,7 +34,7 @@ builds:
         goarch: arm64
     ldflags:
       - -s -w
-      - -X github.com/saibotsivad/drover/cli/internal/version.Version={{ .Version }}
+      - -X github.com/saibotsivad/drover/cli/internal/version.Version={{ if index .Env "CLI_VERSION" }}{{ .Env.CLI_VERSION }}{{ else }}{{ .Version }}{{ end }}
       - -X github.com/saibotsivad/drover/cli/internal/version.Commit={{ .ShortCommit }}
       - -X github.com/saibotsivad/drover/cli/internal/version.Date={{ .Date }}
 

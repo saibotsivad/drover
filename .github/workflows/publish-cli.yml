@@ -22,9 +22,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0 # GoReleaser needs full history and tags
+          fetch-depth: 0 # GoReleaser needs full history
+          fetch-tags: true
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version: "1.23"
           cache-dependency-path: cli/go.sum
@@ -33,15 +34,19 @@ jobs:
         uses: sigstore/cosign-installer@v3
 
       - name: Run GoReleaser
-        uses: goreleaser/goreleaser-action@v6
+        uses: goreleaser/goreleaser-action@v7
         with:
           version: "~> v2"
-          args: release --clean
+          # --skip=validate: the current tag is cli-v<version>, not a bare
+          # semver, so GoReleaser's tag validation would abort. The clean
+          # version is supplied via CLI_VERSION (baked into ldflags by
+          # .goreleaser.yaml); the release is still created on the cli-v<version>
+          # tag via GORELEASER_CURRENT_TAG.
+          args: release --clean --skip=validate
           workdir: cli
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Force the tag GoReleaser builds from; tag_prefix (cli-) in
-          # .goreleaser.yaml strips the prefix so the version parses as semver.
+          CLI_VERSION: ${{ inputs.version }}
           GORELEASER_CURRENT_TAG: cli-v${{ inputs.version }}
 
       # Sidecar consumed by the umbrella release to populate the cli manifest
