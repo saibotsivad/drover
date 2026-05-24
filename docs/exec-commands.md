@@ -97,6 +97,10 @@ The caller gets a command ID back immediately and polls `GET /containers/{id}/ex
 
 A WebSocket endpoint at `GET /containers/{id}/ws` pushes exec output (`{"type": "output", ...}`) and command-complete events (`{"type": "status", "status": "complete", ...}`) as they happen, alongside container Docker logs. Use it for long-running commands where polling would be wasteful. The polling endpoint above is still the only way to fetch historical output for a command — the WebSocket only carries new messages from the moment the client connects. See [WebSocket stream in the orchestrator README](../orchestrator/README.md#containers) for the message schema, auth options, and a minimal client.
 
+### How the CLI consumes the stream
+
+`drover exec <id> -- <cmd...>` is the reference streaming client. It POSTs to `/containers/{id}/execs` to get a `command_id`, then opens the per-container WebSocket `/containers/{id}/ws`. It filters incoming frames by that `command_id` (dropping frames for other commands and the container's own Docker logs) and passes each matching frame through to stdout verbatim — one JSON object per line, no re-marshalling. When the matching `status:complete` frame arrives, the CLI exits with the command's `exit_code`. See [`docs/cli.md`](cli.md) for the user-facing behaviour.
+
 ### Socket protocol is newline-delimited JSON
 
 One JSON object per line over the Unix socket at `/run/orchestrator.sock` inside the micro-container. The orchestrator creates the socket file before starting the micro-container. The guest agent connects once at startup and maintains a persistent connection.

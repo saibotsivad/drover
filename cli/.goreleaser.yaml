@@ -1,0 +1,72 @@
+# GoReleaser config for the drover CLI. Runs with workdir=cli, so paths are
+# relative to cli/.
+#
+# Tag handling: the per-component git tag is `cli-v<version>`, which is not a
+# bare semver, and GoReleaser's monorepo tag_prefix feature is Pro-only. So
+# the OSS release path (publish-cli.yml) instead passes the clean version via
+# the CLI_VERSION env var (used in ldflags below) and runs with
+# `--skip=validate` so the non-semver tag doesn't abort. Archive names don't
+# embed the version, so nothing else needs it. In snapshot/local builds
+# CLI_VERSION is unset and ldflags fall back to GoReleaser's `.Version`.
+#
+# NOTE: the release path is exercised end-to-end only on a real tag; validate
+# with `goreleaser check` + `make snapshot` (both run in cli-test.yml) before
+# the first release.
+version: 2
+
+project_name: drover
+
+builds:
+  - id: drover
+    main: ./cmd/drover
+    binary: drover
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ignore:
+      - goos: windows
+        goarch: arm64
+    ldflags:
+      - -s -w
+      - -X github.com/saibotsivad/drover/cli/internal/version.Version={{ if index .Env "CLI_VERSION" }}{{ .Env.CLI_VERSION }}{{ else }}{{ .Version }}{{ end }}
+      - -X github.com/saibotsivad/drover/cli/internal/version.Commit={{ .ShortCommit }}
+      - -X github.com/saibotsivad/drover/cli/internal/version.Date={{ .Date }}
+
+archives:
+  - id: drover
+    # Produces drover-linux-amd64.tar.gz, drover-windows-amd64.zip, etc.
+    # These names match the platform keys in cli-release-assets.json and the
+    # umbrella install.sh (docs/releases.md).
+    name_template: "drover-{{ .Os }}-{{ .Arch }}"
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+
+checksum:
+  name_template: checksums.txt
+
+# Per-component release: the umbrella release owns releases/latest, so this
+# one must not claim it. make_latest is a templateable string in GoReleaser,
+# so it must be quoted ("false"), not a YAML boolean.
+release:
+  make_latest: "false"
+
+# Cosign keyless (OIDC) signature over the checksums file — mirrors the Docker
+# image signing so verification policy is unified.
+signs:
+  - cmd: cosign
+    artifacts: checksum
+    signature: "${artifact}.sig"
+    args:
+      - sign-blob
+      - "--yes"
+      - "--output-signature=${signature}"
+      - "${artifact}"
+    output: true

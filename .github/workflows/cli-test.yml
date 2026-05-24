@@ -1,0 +1,73 @@
+name: CLI Test
+
+on:
+  pull_request:
+    paths:
+      - "cli/**"
+      - ".github/workflows/cli-test.yml"
+  push:
+    branches: [main]
+    paths:
+      - "cli/**"
+      - ".github/workflows/cli-test.yml"
+  # Run the full validate + build (lint, race tests, GoReleaser config check
+  # and snapshot release) on demand from any branch — no publish.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.23"
+          cache-dependency-path: cli/go.sum
+      - uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.5.0
+          working-directory: cli
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.23"
+          cache-dependency-path: cli/go.sum
+      - name: Test
+        working-directory: cli
+        run: go test ./... -race -cover
+
+  # Validates the GoReleaser config and exercises the full build/archive/
+  # checksum pipeline in snapshot mode (no publish, no signing). Catches
+  # config-schema and cross-compile problems before a real release.
+  build-matrix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # snapshot version resolution wants full history
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.23"
+          cache-dependency-path: cli/go.sum
+      - name: GoReleaser config check
+        uses: goreleaser/goreleaser-action@v7
+        with:
+          version: "~> v2"
+          args: check
+          workdir: cli
+      - name: GoReleaser snapshot release (archives + checksums, no publish)
+        uses: goreleaser/goreleaser-action@v7
+        with:
+          version: "~> v2"
+          # Snapshot skips publish; --skip=sign also skips the cosign step
+          # (signing needs OIDC and isn't meaningful for a validation build,
+          # and cosign isn't installed in this job).
+          args: release --snapshot --clean --skip=sign
+          workdir: cli

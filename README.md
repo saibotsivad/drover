@@ -25,6 +25,16 @@ This is conceptually similar to AWS Lambda: a caller creates an image and sends 
 
 ---
 
+## Command-Line Client
+
+The `drover` CLI is a single-binary client for the orchestrator REST API. It lets you list images, launch and manage micro-containers, and run exec commands from a terminal or script without hand-writing HTTP requests. It authenticates through the `DROVER_API_URL` and `DROVER_API_KEY` environment variables, prints JSON to stdout so output composes with `jq`, and ships as a cross-compiled binary installed via the umbrella release's `install.sh`.
+
+- Usage reference (commands, flags, JSON output, exit codes): [docs/cli.md](docs/cli.md)
+- Installation: see [docs/releases.md](docs/releases.md#installation)
+- Contributing (build/test/lint, layout): [cli/README.md](cli/README.md)
+
+---
+
 ## Host Setup
 
 To run this system, the host requires:

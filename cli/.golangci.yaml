@@ -1,0 +1,26 @@
+version: "2"
+
+linters:
+  enable:
+    - errcheck    # no silently ignored errors
+    - govet       # correctness
+    - staticcheck # correctness
+    - revive      # style (default rules)
+    - unused      # dead code
+
+  # Test HTTP/WebSocket handlers routinely ignore Write/Close errors and have
+  # unused (w, r) parameters; relax the boilerplate-only checks in tests.
+  exclusions:
+    rules:
+      - path: _test\.go
+        linters:
+          - errcheck
+      - path: _test\.go
+        text: unused-parameter
+        linters:
+          - revive
+
+formatters:
+  enable:
+    - gofmt
+    - goimports

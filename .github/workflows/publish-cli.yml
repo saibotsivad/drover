@@ -1,0 +1,107 @@
+name: Publish CLI (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: "Bare semver (e.g. 0.2.0). The tag cli-v<version> must already exist."
+        required: true
+        type: string
+    outputs:
+      version:
+        description: "The published CLI version (echoes the input), for the umbrella job."
+        value: ${{ inputs.version }}
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # create the per-component GitHub Release
+      id-token: write # cosign keyless signing
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # GoReleaser needs full history
+          fetch-tags: true
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.23"
+          cache-dependency-path: cli/go.sum
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+
+      - name: Run GoReleaser
+        uses: goreleaser/goreleaser-action@v7
+        with:
+          version: "~> v2"
+          # --skip=validate: the current tag is cli-v<version>, not a bare
+          # semver, so GoReleaser's tag validation would abort. The clean
+          # version is supplied via CLI_VERSION (baked into ldflags by
+          # .goreleaser.yaml); the release is still created on the cli-v<version>
+          # tag via GORELEASER_CURRENT_TAG.
+          args: release --clean --skip=validate
+          workdir: cli
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CLI_VERSION: ${{ inputs.version }}
+          GORELEASER_CURRENT_TAG: cli-v${{ inputs.version }}
+
+      # Sidecar consumed by the umbrella release to populate the cli manifest
+      # entry and bake binary URLs + SHA-256s into install.sh. Schema is the
+      # workflow-to-workflow contract in docs/releases.md ("CLI release
+      # assets"); changing it requires a matching change in the umbrella
+      # workflow.
+      - name: Generate cli-release-assets.json
+        working-directory: cli
+        env:
+          REPO: ${{ github.repository }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, os
+          repo, version = os.environ["REPO"], os.environ["VERSION"]
+          tag = f"cli-v{version}"
+          base = f"https://github.com/{repo}/releases/download/{tag}"
+          arts = json.load(open("dist/artifacts.json"))
+          sums = {}
+          for line in open("dist/checksums.txt"):
+              line = line.strip()
+              if not line:
+                  continue
+              h, name = line.split(None, 1)
+              sums[name] = h
+          assets = {}
+          for a in arts:
+              if a.get("type") != "Archive":
+                  continue
+              plat = f"{a['goos']}-{a['goarch']}"
+              name = a["name"]
+              assets[plat] = {"url": f"{base}/{name}", "sha256": sums.get(name, "")}
+          missing = [p for p, v in assets.items() if not v["sha256"]]
+          if missing or not assets:
+              raise SystemExit(f"missing checksums or no archives: assets={assets}")
+          out = {
+              "version": version,
+              "release_url": f"https://github.com/{repo}/releases/tag/{tag}",
+              "assets": assets,
+          }
+          json.dump(out, open("dist/cli-release-assets.json", "w"), indent=2)
+          print(json.dumps(out, indent=2))
+          PY
+
+      - name: Attach cli-release-assets.json to the release
+        working-directory: cli
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "cli-v${{ inputs.version }}" dist/cli-release-assets.json --repo "${{ github.repository }}" --clobber
+
+      - name: Upload cli-release-assets workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cli-release-assets
+          path: cli/dist/cli-release-assets.json
+          if-no-files-found: error

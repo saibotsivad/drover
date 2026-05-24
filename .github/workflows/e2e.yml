@@ -14,6 +14,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # The CLI e2e test (e2e/tests/07-cli.sh) builds the `drover` Go binary
+      # from cli/ and drives the live orchestrator through it. Set up the Go
+      # toolchain here; the test script owns the actual `go build` (mirroring
+      # how it owns invoking the binary), so nothing else in the workflow
+      # changes. Cache keyed on cli/go.sum so the module download is warm.
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.23"
+          cache-dependency-path: cli/go.sum
+
       - name: Install gVisor (runsc)
         run: |
           set -e
