@@ -43,7 +43,7 @@
 |---|---|---|---|
 | 0 | Decisions to lock before coding ✅ | — | n/a |
 | 1 | Scaffolding ✅ | 0 | no |
-| 2 | Config + version | 1 | no |
+| 2 | Config + version ✅ | 1 | no |
 | 3 | API client | 2 | no |
 | 4 | Read-only commands (`images`, `image`, `ps`) | 3 | no |
 | 5 | Wait helper + lifecycle (`start`/`stop`/`destroy`) | 3 | no |
@@ -192,29 +192,36 @@ before any logic lands. See impl §"Folder structure under `/cli`".
 
 ---
 
-## Phase 2 — Config + version
+## Phase 2 — Config + version — ✅ DONE
 
 **Goal:** `drover` reads/validates env and reports build metadata.
 See impl §"Build & distribution" (ldflags) and parent §"Authentication".
 
-- [ ] `internal/config/config.go`: `Load()` reads `DROVER_API_URL` /
-      `DROVER_API_KEY`; returns a clear error and **exit code 2** when either
-      is missing/blank. Trims/validates URL shape minimally (scheme + host).
-- [ ] `internal/version/version.go`: package vars `Version`, `Commit`,
-      `Date` set via `-ldflags -X`. The ldflags path must match exactly:
+- [x] `internal/config/config.go`: `Load()` reads `DROVER_API_URL` /
+      `DROVER_API_KEY`; returns an `*output.Failure` with **exit code 2** when
+      either is missing/blank, and `invalid_configuration` (also exit 2) when
+      the URL has no http(s) scheme or host. Trailing slash trimmed.
+- [x] `internal/version/version.go`: package vars `Version`, `Commit`,
+      `Date` set via `-ldflags -X`. The ldflags path matches exactly:
       ```
       -X github.com/saibotsivad/drover/cli/internal/version.Version=$(VERSION)
       ```
-- [ ] Wire `--version` in `root.go` to print `Version`, `Commit`, `Date`.
-- [ ] `make build` injects `git describe --tags --dirty --always` for
-      non-release builds.
-- [ ] Unit tests: missing var → exit 2 + stderr JSON; present vars → config
-      populated; `--version` output shape.
+- [x] `--version` wired in `root.go` (`SetVersionTemplate`) → prints
+      `Version`, `Commit`, `Date`.
+- [x] `make build` injects `git describe --tags --dirty --always`.
+- [x] **`internal/output/output.go` landed here (pulled forward from Phase 4):**
+      `PrintJSON(w, v)`, `PrintError(w, err) int`, and the `Failure` error type
+      carrying the exit code + JSON body. Established now because exit-code
+      handling is foundational; `Execute` renders all errors through it.
+- [x] Unit tests: config table (missing/blank/invalid → exit 2; valid →
+      populated), output (PrintJSON shape, PrintError for Failure/plain/wrapped),
+      version string shape.
 
-**DoD:**
-- Running with neither var set exits `2` and prints
-  `{"error": ...}` to stderr.
+**DoD:** ✅
+- With neither var set, a command that calls `config.Load` exits `2` with a
+  JSON error on stderr.
 - `make build && ./bin/drover --version` shows the git-derived version.
+- `go test ./...`, `gofmt -l .`, `go vet ./...` clean.
 
 ---
 
@@ -253,9 +260,10 @@ yet. See impl §"HTTP client" and §"Risks" (explicit structs, not maps).
 **Goal:** first user-visible behaviour. End-to-end against a fake server.
 See parent §"`drover images`…/`drover ps`", impl §"Testing strategy".
 
-- [ ] `internal/output/output.go`: `PrintJSON(any)` (compact + trailing `\n`
-      to stdout) and `PrintError(err) int` (`{"error","detail"}` to stderr,
-      returns exit code). Used by all commands.
+- [x] `internal/output/output.go` — **done in Phase 2.** `PrintJSON(w, v)`
+      (compact + trailing `\n`) and `PrintError(w, err) int` (JSON to stderr,
+      returns exit code). Writers are passed in (from `cmd.OutOrStdout()` /
+      `ErrOrStderr()`) so command output is capturable in tests.
 - [ ] `internal/commands/images.go` → array JSON from `GET /images`.
 - [ ] `internal/commands/image.go` → single object from `GET /images/{name}`.
 - [ ] `internal/commands/ps.go` → array JSON from `GET /containers`.

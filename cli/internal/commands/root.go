@@ -5,11 +5,9 @@
 package commands
 
 import (
-	"fmt"
-	"os"
-
 	"github.com/spf13/cobra"
 
+	"github.com/saibotsivad/drover/cli/internal/output"
 	"github.com/saibotsivad/drover/cli/internal/version"
 )
 
@@ -33,12 +31,12 @@ func newRootCmd() *cobra.Command {
 }
 
 // Execute builds the command tree, runs it, and returns the process exit
-// code. Exit-code mapping per command is filled in as the commands land; for
-// now any error is a generic failure (1).
+// code. Errors are rendered as JSON to stderr and mapped to their exit code
+// by output.PrintError (see the exit-code table in PLAN.md).
 func Execute() int {
-	if err := newRootCmd().Execute(); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		return 1
+	root := newRootCmd()
+	if err := root.Execute(); err != nil {
+		return output.PrintError(root.ErrOrStderr(), err)
 	}
 	return 0
 }
