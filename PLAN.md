@@ -51,8 +51,8 @@
 | 7 | Linting + test CI ✅ | 1 (grows w/ 2–6) | no |
 | 8 | Release pipeline (GoReleaser, `publish-cli.yml`, tag wiring) ✅ | 6, 7 | **yes (first release)** |
 | 9 | Umbrella coordination (`cli-release-assets.json`) ◑ producer done | 8 + umbrella step 5 | yes |
-| 10 | E2E scenario | 6 | no |
-| 11 | Docs + ADRs | 6 (final pass after 9) | no |
+| 10 | E2E scenario ✅ | 6 | no |
+| 11 | Docs + ADRs ✅ | 6 (final pass after 9) | no |
 
 ---
 
@@ -506,55 +506,71 @@ consumer + a real release:
 
 ---
 
-## Phase 10 — E2E scenario
+## Phase 10 — E2E scenario — ✅ DONE (authored; not run here)
 
 **Goal:** the single CI integration point where the binary talks to a real
 orchestrator. Depends on Phase 6. See impl §"CI workflows" (4) and the
 existing harness under `e2e/`.
 
-- [ ] Build the `drover` binary in an e2e setup step.
-- [ ] New scenario script under `e2e/tests/` (mirror the existing
-      `0N-*.sh` numbered style; reuse `e2e/lib/*.sh` helpers): drive
-      `drover ps → start → exec → stop` against the live orchestrator from
-      `e2e/docker-compose.e2e.yml`.
-- [ ] Assert: `start` reaches `running`, `exec` streams expected stdout,
-      `stop` reaches `stopped`, exit codes correct.
-- [ ] Wire into `.github/workflows/e2e.yml`.
+- [x] `e2e/tests/07-cli.sh` (next number after 06; sources `lib/common.sh`,
+      uses the real `step_begin/step_end/assert_*` helpers — all verified to
+      exist). The test owns building the binary
+      (`cd cli && go build -o bin/drover ./cmd/drover`), matching the
+      repo convention.
+- [x] Drives `drover ps → start builder --privileged → exec … -- echo hello
+      → stop → destroy` against the live stack. Uses the **privileged** path
+      (like test 06) so it needs no gVisor. Env: `DROVER_API_URL=$ORCHESTRATOR_URL`,
+      `DROVER_API_KEY` from `.env.test`.
+- [x] Asserts: `ps` emits a JSON array; `start` returns an `.id` and reaches
+      `running`; `exec` streams `hello` on stdout and propagates exit 0
+      (both the process code and the status-frame `exit_code`); `stop`→
+      `stopped`; `destroy`→`destroyed`. `EXIT` trap best-effort destroys.
+- [x] `.github/workflows/e2e.yml` gains `actions/setup-go@v5` (1.23, cache on
+      `cli/go.sum`); `run.sh` auto-discovers `tests/*.sh` so no list edit; `jq`
+      already installed by the workflow.
 
-**DoD:**
-- The CLI e2e scenario passes in CI against a real orchestrator.
+**DoD:** ⚠️ authored, **not run here** (no Docker/gVisor/orchestrator in this
+env). `bash -n` clean; helper names + env vars verified against `e2e/lib` and
+`.env.test`.
+- [ ] Run the scenario in CI (`e2e.yml` is `workflow_dispatch`) against a real
+      orchestrator and confirm green.
 
 ---
 
-## Phase 11 — Docs + ADRs
+## Phase 11 — Docs + ADRs — ✅ DONE
 
 **Goal:** make the CLI discoverable and the decisions durable. Final pass
 after Phase 9. See impl §"Documentation Impact".
 
-- [ ] `cli/README.md` — contributor quickstart: build/test locally, package
-      layout map, how to add a new subcommand.
-- [ ] `docs/cli.md` — **end-user usage** (commands, flags, JSON output, exec
-      streaming, exit codes). **Installation lives in `docs/releases.md`** —
-      link to it, don't duplicate.
-- [ ] `docs/versioning.md` "Versioned projects" table updated (if not already
-      done in Phase 8).
-- [ ] Root `README.md` — list the CLI alongside orchestrator/builder/webapp.
-- [ ] Update `docs/exec-commands.md` with a note on how the CLI's streaming
-      maps to the exec flow (parent plan Documentation Impact).
-- [ ] ADRs under `docs/decisions/` (short — rationale lives in the planning
-      docs; ADR captures the durable outcome + a pointer back):
-  - [ ] "Use Go for the Drover CLI"
-  - [ ] "Cobra as the CLI framework"
-  - [ ] "Single Go module under `cli/`, `internal/`-only packages"
-  - [ ] *(No ADR needed for GoReleaser/per-component release — it's a
-        mechanical consequence of the existing umbrella-release ADR
-        `docs/decisions/2026-05-23-github-release-as-manifest.md`.)*
+- [x] `cli/README.md` — finalized contributor quickstart: build/test/lint via
+      the Makefile, accurate `internal/` layout, add-a-subcommand steps tied
+      to real symbols (`newRootCmd`, `clientFromEnv`, `runLifecycle`,
+      `output.Failure`).
+- [x] `docs/cli.md` — end-user usage: config, JSON output contract, all 7
+      commands with HTTP mappings (incl. `destroy = DELETE`), flag tables,
+      lifecycle polling semantics, exec streaming + `jq` reconstruction +
+      interactive error, and the full exit-code table. Links to
+      `docs/releases.md#installation` rather than duplicating install.
+- [x] `docs/versioning.md` "Versioned projects" table — done in Phase 8.
+- [x] Root `README.md` — added a "Command-Line Client" section linking
+      `docs/cli.md`, the release install flow, and `cli/README.md`.
+- [x] `docs/exec-commands.md` — appended a note on how the CLI consumes the
+      stream (POST execs → WS, filter by `command_id`, verbatim frames, exit
+      with the command's code).
+- [x] ADRs under `docs/decisions/` (match the repo's `YYYY-MM-DD-kebab.md` +
+      `# ADR:` / `**Date:**` / `**Status:** Accepted` format; each points back
+      to the planning doc):
+  - [x] `2026-05-24-go-for-the-cli.md`
+  - [x] `2026-05-24-cobra-cli-framework.md`
+  - [x] `2026-05-24-single-go-module-internal-packages.md`
+  - [x] *(No GoReleaser ADR — mechanical consequence of the umbrella-release
+        ADR, as noted.)*
 
-**DoD:**
-- A new contributor can go from clone → `make test`/`make build` using only
-  `cli/README.md`.
-- An end user can find usage in `docs/cli.md` and install via the
-  `docs/releases.md` flow.
+**DoD:** ✅
+- Contributor can go clone → `make build`/`make test` from `cli/README.md`.
+- End user finds usage in `docs/cli.md` and installs via `docs/releases.md`.
+- Facts in the docs were cross-checked against the source (exit codes,
+  `DELETE` destroy, interactive error string, links all verified).
 
 ---
 
