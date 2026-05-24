@@ -45,7 +45,7 @@
 | 1 | Scaffolding ✅ | 0 | no |
 | 2 | Config + version ✅ | 1 | no |
 | 3 | API client ✅ | 2 | no |
-| 4 | Read-only commands (`images`, `image`, `ps`) | 3 | no |
+| 4 | Read-only commands (`images`, `image`, `ps`) ✅ | 3 | no |
 | 5 | Wait helper + lifecycle (`start`/`stop`/`destroy`) | 3 | no |
 | 6 | WebSocket exec streaming | 3 | no |
 | 7 | Linting + test CI | 1 (grows w/ 2–6) | no |
@@ -267,7 +267,7 @@ yet. See impl §"HTTP client" and §"Risks" (explicit structs, not maps).
 
 ---
 
-## Phase 4 — Read-only commands: `images`, `image`, `ps`
+## Phase 4 — Read-only commands: `images`, `image`, `ps` — ✅ DONE
 
 **Goal:** first user-visible behaviour. End-to-end against a fake server.
 See parent §"`drover images`…/`drover ps`", impl §"Testing strategy".
@@ -276,19 +276,25 @@ See parent §"`drover images`…/`drover ps`", impl §"Testing strategy".
       (compact + trailing `\n`) and `PrintError(w, err) int` (JSON to stderr,
       returns exit code). Writers are passed in (from `cmd.OutOrStdout()` /
       `ErrOrStderr()`) so command output is capturable in tests.
-- [ ] `internal/commands/images.go` → array JSON from `GET /images`.
-- [ ] `internal/commands/image.go` → single object from `GET /images/{name}`.
-- [ ] `internal/commands/ps.go` → array JSON from `GET /containers`.
-- [ ] Register the three commands in `root.go`.
-- [ ] Goldenfiles under `cli/testdata/ps/` (+ images) for table-driven tests;
-      add the `-update` flag wiring (Phase 0 policy) so fixtures regenerate.
-- [ ] Command-level tests against `httptest`: assert exit code, stdout JSON
-      (goldenfile), and stderr on the API-error path (exit 1).
+- [x] `internal/commands/images.go` → array JSON from `GET /images`.
+- [x] `internal/commands/image.go` → single object from `GET /images/{name}`.
+- [x] `internal/commands/ps.go` → array JSON from `GET /containers`.
+- [x] Registered all three in `root.go`; added `clientFromEnv` helper and a
+      testable `execute(root)` split out of `Execute`.
+- [x] Goldenfiles + `-update` flag wiring. **Relocated to package-local
+      `internal/commands/testdata/*.golden`** (idiomatic Go — `go test`
+      auto-ignores `testdata/` and tests resolve `./testdata`) rather than a
+      top-level `cli/testdata/`. The `cli/testdata/{ps,exec}` layout in the
+      impl doc is superseded by per-package `testdata/`.
+- [x] Command-level tests against `httptest`: exit code, stdout goldenfile,
+      API-error path (exit 1, empty stdout, `api_error` on stderr), plus
+      missing-config (exit 2) and unknown-flag (exit 1) cases.
 
-**DoD:**
-- `drover ps`, `drover images`, `drover image <name>` print valid JSON
-  pipeable into `jq` against the fake server.
-- API-error path exits `1` with `{"error","detail"}` on stderr.
+**DoD:** ✅
+- `drover ps`, `drover images`, `drover image <name>` print valid passthrough
+  JSON against the fake server; `--help` now lists the commands.
+- API-error path exits `1` with the JSON error on stderr; `go test ./... -race`,
+  `gofmt`, `go vet` clean.
 
 ---
 
