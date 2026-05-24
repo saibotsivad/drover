@@ -13,7 +13,7 @@ audiences:
 - **Installation**: see the release flow in
   [`docs/releases.md`](../docs/releases.md). For end users it's a single
   `curl … | sh`.
-- **Design & build plan**: [`PLAN.md`](../PLAN.md) and
+- **Design & rationale**:
   [`docs/planning/drover-cli-go-implementation.md`](../docs/planning/drover-cli-go-implementation.md).
 
 ## Requirements

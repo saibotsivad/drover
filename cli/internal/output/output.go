@@ -1,7 +1,7 @@
 // Package output provides the stdout/stderr JSON emission helpers shared by
 // every command, plus the structured error type that carries process exit
 // codes. All control-plane output is JSON: success values to stdout, errors
-// as a JSON object to stderr (see PLAN.md "Exit codes").
+// as a JSON object to stderr (see docs/cli.md "Exit codes").
 package output
 
 import (

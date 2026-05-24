@@ -11,7 +11,7 @@
 #
 # NOTE: the release path is exercised end-to-end only on a real tag; validate
 # with `goreleaser check` + `make snapshot` (both run in cli-test.yml) before
-# the first release (see PLAN.md Phase 8 DoD).
+# the first release.
 version: 2
 
 project_name: drover
