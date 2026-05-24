@@ -1,5 +1,5 @@
 - project: cli
-  bump: minor
+  bump: patch
   description: |
     Initial release of the `drover` command-line client — a single
     statically-linked Go binary over the orchestrator REST API. Commands:
