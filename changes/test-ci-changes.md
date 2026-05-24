@@ -1,4 +1,4 @@
 - project: cli
   bump: patch
   description: |
-    Validating recent CI changes
+    Validating recent CI changes.
