@@ -42,7 +42,7 @@
 | # | Phase | Depends on | Lands a release? |
 |---|---|---|---|
 | 0 | Decisions to lock before coding ✅ | — | n/a |
-| 1 | Scaffolding | 0 | no |
+| 1 | Scaffolding ✅ | 0 | no |
 | 2 | Config + version | 1 | no |
 | 3 | API client | 2 | no |
 | 4 | Read-only commands (`images`, `image`, `ps`) | 3 | no |
@@ -155,32 +155,40 @@ Phase 1.
 
 ---
 
-## Phase 1 — Scaffolding *(can split: tree vs. Makefile/CI-less build)*
+## Phase 1 — Scaffolding — ✅ DONE *(can split: tree vs. Makefile/CI-less build)*
 
 **Goal:** an empty-but-building Go module. A reviewer learns the layout
 before any logic lands. See impl §"Folder structure under `/cli`".
 
-- [ ] `cli/go.mod` with module path + pinned Go version; `cli/go.sum`.
-- [ ] `cli/cmd/drover/main.go` — wires root command, calls `Execute()`,
+- [x] `cli/go.mod` with module path + pinned Go version (`go 1.23`); `cli/go.sum`.
+- [x] `cli/cmd/drover/main.go` — wires root command, calls `Execute()`,
       nothing else.
-- [ ] Empty `internal/` packages with a one-line package doc each:
-      `api/`, `ws/`, `commands/`, `output/`, `wait/`, `config/`, `version/`.
-- [ ] `internal/commands/root.go` — root `*cobra.Command`, registers
-      (initially empty) subcommands, global flags, `--version` plumbing.
-- [ ] Add `github.com/spf13/cobra` and `github.com/coder/websocket` to
-      `go.mod` (no other deps — impl §"Dependencies").
-- [ ] `cli/Makefile` with targets `test lint build install release snapshot`
+- [x] Empty `internal/` packages with a one-line package doc each
+      (`doc.go`): `api/`, `ws/`, `output/`, `wait/`, `config/`. (`commands/`
+      and `version/` carry their docs on `root.go` / `version.go`.)
+- [x] `internal/commands/root.go` — root `*cobra.Command`, `--version`
+      plumbing, `SilenceUsage/Errors`; subcommand registration point marked
+      (commands land in later phases).
+- [x] Add `github.com/spf13/cobra` to `go.mod`. **`github.com/coder/websocket`
+      deferred to Phase 6** — `go mod tidy` prunes any dependency nothing
+      imports, so it is added when `ws/stream.go` first uses it rather than
+      carried as a phantom require (impl §"Dependencies" still holds: final
+      dep set is cobra + coder/websocket + stdlib).
+- [x] `cli/Makefile` with targets `test lint build install release snapshot`
       (impl §"Makefile"). `build`/`install` inject version via `-ldflags`.
-- [ ] `cli/CHANGELOG.yml` seeded `published: "0.0.0"`, `changes: []`
+- [x] `cli/CHANGELOG.yml` seeded `published: "0.0.0"`, `changes: []`
       (matches existing projects; see `orchestrator/CHANGELOG.yml`).
-- [ ] `cli/README.md` skeleton (quickstart + layout map; fill in Phase 11).
-- [ ] `cli/.gitignore` for `bin/` and `dist/`.
+- [x] `cli/README.md` skeleton (quickstart + layout map; fill in Phase 11).
+- [x] `cli/.gitignore` for `bin/` and `dist/`.
 
-**DoD:**
-- `cd cli && make build` produces `cli/bin/drover`; `./bin/drover --help`
-  prints root help; `./bin/drover --version` runs (value can be `(devel)`).
-- `make test` passes on the empty tree (zero tests is fine).
-- `internal/` packages compile. **No business logic** in this PR.
+**DoD:** ✅
+- `make build` produces `cli/bin/drover`; `./bin/drover --version` prints the
+  git-derived version; `./bin/drover --help` exits 0. *(Note: Cobra omits the
+  Usage/Flags block until the root has subcommands or a Run — full help
+  renders automatically once Phase 4 registers commands. Correct Cobra
+  behaviour, not a gap.)*
+- `make test` passes on the empty tree; `gofmt -l .` and `go vet ./...` clean.
+- `internal/` packages compile. No business logic.
 
 ---
 
@@ -305,6 +313,8 @@ propagation and clean Ctrl-C. **Depends on Phase 3.** See parent
 §"`drover exec`", impl §"WebSocket exec streaming" + §"Key Decisions"
 (unknown-flag handling).
 
+- [ ] Add `github.com/coder/websocket` to `go.mod` (deferred from Phase 1;
+      this is the phase that first imports it).
 - [ ] `internal/ws/stream.go`: dial `WS /containers/{id}/ws` with
       `coder/websocket`; loop read → inspect `type`/`command_id` → write
       matching `output`/`status` frames **raw + `\n`** to stdout → return
