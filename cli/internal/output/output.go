@@ -39,7 +39,7 @@ func (e *SilentExit) ExitCode() int { return e.Code }
 
 // PrintError writes err to w as a single JSON object and returns the process
 // exit code. A SilentExit prints nothing. Other errors that marshal to a JSON
-// object (Failure, api.APIError) are emitted as-is; anything else is wrapped
+// object (Failure, api.Error) are emitted as-is; anything else is wrapped
 // as {"error": "<message>"}. The exit code comes from an exitCoder in the
 // chain, defaulting to 1.
 func PrintError(w io.Writer, err error) int {
@@ -60,7 +60,7 @@ func PrintError(w io.Writer, err error) int {
 			Error string `json:"error"`
 		}{err.Error()})
 	}
-	fmt.Fprintf(w, "%s\n", body)
+	_, _ = fmt.Fprintf(w, "%s\n", body)
 	return code
 }
 

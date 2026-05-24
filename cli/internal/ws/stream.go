@@ -52,7 +52,7 @@ func Stream(ctx context.Context, wsURL, apiKey, commandID string, out io.Writer)
 	if err != nil {
 		return 0, err
 	}
-	defer conn.CloseNow()
+	defer func() { _ = conn.CloseNow() }()
 	conn.SetReadLimit(readLimit)
 
 	for {

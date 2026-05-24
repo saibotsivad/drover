@@ -28,21 +28,21 @@ func New(baseURL, apiKey string) *Client {
 	}
 }
 
-// do issues a request and returns the response body for 2xx, or an *APIError
+// do issues a request and returns the response body for 2xx, or an *Error
 // for transport failures and non-2xx responses.
 func (c *Client) do(ctx context.Context, method, path string, body any) ([]byte, error) {
 	var reader io.Reader
 	if body != nil {
 		b, err := json.Marshal(body)
 		if err != nil {
-			return nil, &APIError{Kind: "request_failed", Detail: err.Error()}
+			return nil, &Error{Kind: "request_failed", Detail: err.Error()}
 		}
 		reader = bytes.NewReader(b)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, reader)
 	if err != nil {
-		return nil, &APIError{Kind: "request_failed", Detail: err.Error()}
+		return nil, &Error{Kind: "request_failed", Detail: err.Error()}
 	}
 	req.Header.Set("Authorization", "Bearer "+c.apiKey)
 	req.Header.Set("Accept", "application/json")
@@ -52,16 +52,16 @@ func (c *Client) do(ctx context.Context, method, path string, body any) ([]byte,
 
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return nil, &APIError{Kind: "request_failed", Detail: err.Error()}
+		return nil, &Error{Kind: "request_failed", Detail: err.Error()}
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, &APIError{Kind: "request_failed", Detail: err.Error()}
+		return nil, &Error{Kind: "request_failed", Detail: err.Error()}
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, parseAPIError(resp.StatusCode, data)
+		return nil, parseError(resp.StatusCode, data)
 	}
 	return data, nil
 }

@@ -16,7 +16,7 @@ func (c *Client) CreateExec(ctx context.Context, id, command string) (string, er
 	}
 	var r ExecResponse
 	if err := json.Unmarshal(data, &r); err != nil {
-		return "", &APIError{Kind: "decode_error", Detail: err.Error()}
+		return "", &Error{Kind: "decode_error", Detail: err.Error()}
 	}
 	return r.CommandID, nil
 }

@@ -48,7 +48,7 @@
 | 4 | Read-only commands (`images`, `image`, `ps`) ✅ | 3 | no |
 | 5 | Wait helper + lifecycle (`start`/`stop`/`destroy`) ✅ | 3 | no |
 | 6 | WebSocket exec streaming ✅ | 3 | no |
-| 7 | Linting + test CI | 1 (grows w/ 2–6) | no |
+| 7 | Linting + test CI ✅ | 1 (grows w/ 2–6) | no |
 | 8 | Release pipeline (GoReleaser, `publish-cli.yml`, tag wiring) | 6, 7 | **yes (first release)** |
 | 9 | Umbrella coordination (`cli-release-assets.json`) | 8 + umbrella step 5 | yes |
 | 10 | E2E scenario | 6 | no |
@@ -384,27 +384,35 @@ propagation and clean Ctrl-C. **Depends on Phase 3.** See parent
 
 ---
 
-## Phase 7 — Linting + test CI
+## Phase 7 — Linting + test CI — ✅ DONE (lint verified locally; CI authored)
 
 **Goal:** CI guards the dev loop. Grows alongside Phases 2–6; finalise once
 commands exist. See impl §"Linting" + §"CI workflows" (1).
 
-- [ ] `cli/.golangci.yaml`: `gofmt`, `goimports`, `govet`, `staticcheck`,
-      `errcheck`, `revive` (default rules).
-- [ ] `make lint` runs `golangci-lint run`; passes clean on current tree.
-- [ ] `.github/workflows/cli-test.yml`, `paths: cli/**`, on PR + push to
-      `main`. Jobs:
-  - [ ] `lint` via `golangci/golangci-lint-action`.
-  - [ ] `test` via `go test ./... -race -cover`.
-  - [ ] `build-matrix` via `goreleaser build --snapshot --clean` (compiles
-        every target arch; **no artefacts uploaded**). *(this job depends on
-        Phase 8's `.goreleaser.yaml`; until then, a `go build` cross-compile
-        matrix is an acceptable placeholder — note which is in use.)*
-- [ ] Uses `actions/setup-go` module cache; total budget < ~3 min.
+- [x] `cli/.golangci.yaml` — **golangci-lint v2 format** (`version: "2"`).
+      Linters: `errcheck`, `govet`, `staticcheck`, `revive`, `unused`;
+      formatters: `gofmt`, `goimports`. Test-only exclusions relax `errcheck`
+      and revive `unused-parameter` for HTTP/WS handler boilerplate.
+- [x] `make lint` runs `golangci-lint run`; **verified clean (0 issues)**
+      locally with golangci-lint v2.5.0. Fixed real findings: unchecked
+      `Close`/`Fprintf` errors in production code; renamed `api.APIError` →
+      `api.Error` (stutter) and `parseAPIError` → `parseError`; added const-
+      block comment.
+- [x] `.github/workflows/cli-test.yml`, `paths: cli/**`, on PR + push to
+      `main`. Jobs: `lint` (golangci-lint-action, pinned v2.5.0), `test`
+      (`go test ./... -race -cover`), `build-matrix`
+      (`goreleaser build --snapshot --clean` — cross-compiles all targets and
+      validates `.goreleaser.yaml`; no artefacts).
+- [x] Uses `actions/setup-go` module cache (`cache-dependency-path: cli/go.sum`).
 
 **DoD:**
-- A PR touching `cli/**` triggers `cli-test.yml`; all jobs green.
-- A deliberate lint/format violation fails CI (verify once).
+- [x] Lint passes clean locally; a deliberate violation fails it (errcheck
+      caught the real ones above).
+- [ ] **Not yet observed in CI** (no PR opened; this branch isn't `main`, so
+      the workflow hasn't been triggered). `build-matrix` depends on the
+      Phase 8 `.goreleaser.yaml`, which lands on the same branch — verify both
+      green on the first PR. golangci-lint-action ↔ linter v2 version pin may
+      need a nudge in CI.
 
 ---
 

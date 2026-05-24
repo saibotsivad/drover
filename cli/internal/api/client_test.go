@@ -36,12 +36,12 @@ func TestErrorDetailString(t *testing.T) {
 		w.Write([]byte(`{"detail":"container not found"}`))
 	})
 	_, err := c.GetContainer(context.Background(), "missing")
-	ae, ok := err.(*APIError)
+	ae, ok := err.(*Error)
 	if !ok {
-		t.Fatalf("err type = %T, want *APIError", err)
+		t.Fatalf("err type = %T, want *Error", err)
 	}
 	if ae.Status != 404 || ae.Detail != "container not found" || ae.ExitCode() != 1 {
-		t.Errorf("APIError = %+v (exit %d)", ae, ae.ExitCode())
+		t.Errorf("Error = %+v (exit %d)", ae, ae.ExitCode())
 	}
 	if !IsNotFound(err) {
 		t.Errorf("IsNotFound = false, want true")
@@ -54,7 +54,7 @@ func TestErrorDetailValidationList(t *testing.T) {
 		w.Write([]byte(`{"detail":[{"loc":["body","image"],"msg":"field required"}]}`))
 	})
 	_, err := c.GetContainer(context.Background(), "x")
-	ae := err.(*APIError)
+	ae := err.(*Error)
 	if !strings.Contains(ae.Detail, "field required") {
 		t.Errorf("detail = %q, want it to contain the validation message", ae.Detail)
 	}
@@ -66,7 +66,7 @@ func TestErrorNonJSONBody(t *testing.T) {
 		w.Write([]byte("upstream boom"))
 	})
 	_, err := c.GetContainer(context.Background(), "x")
-	ae := err.(*APIError)
+	ae := err.(*Error)
 	if ae.Detail != "upstream boom" {
 		t.Errorf("detail = %q", ae.Detail)
 	}
@@ -78,8 +78,8 @@ func TestTransportError(t *testing.T) {
 	srv.Close() // close so the connection is refused
 	c := New(url, "sk-test")
 	_, err := c.ListContainers(context.Background())
-	ae, ok := err.(*APIError)
+	ae, ok := err.(*Error)
 	if !ok || ae.Kind != "request_failed" {
-		t.Fatalf("err = %v (%T), want request_failed APIError", err, err)
+		t.Fatalf("err = %v (%T), want request_failed Error", err, err)
 	}
 }

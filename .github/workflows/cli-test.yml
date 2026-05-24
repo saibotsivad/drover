@@ -1,0 +1,57 @@
+name: CLI Test
+
+on:
+  pull_request:
+    paths:
+      - "cli/**"
+      - ".github/workflows/cli-test.yml"
+  push:
+    branches: [main]
+    paths:
+      - "cli/**"
+      - ".github/workflows/cli-test.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+          cache-dependency-path: cli/go.sum
+      - uses: golangci/golangci-lint-action@v6
+        with:
+          version: v2.5.0
+          working-directory: cli
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+          cache-dependency-path: cli/go.sum
+      - name: Test
+        working-directory: cli
+        run: go test ./... -race -cover
+
+  # Confirms every release target still cross-compiles and validates the
+  # GoReleaser config. No artefacts are uploaded.
+  build-matrix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+          cache-dependency-path: cli/go.sum
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          version: "~> v2"
+          args: build --snapshot --clean
+          workdir: cli

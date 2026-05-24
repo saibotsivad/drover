@@ -43,7 +43,7 @@ func runLifecycle(cmd *cobra.Command, noWait bool, interval int, do action, spec
 		return output.PrintJSON(cmd.OutOrStdout(), res.Raw)
 	}
 	if res.TransitionTimeoutSeconds == nil {
-		fmt.Fprintln(cmd.ErrOrStderr(), `{"warning":"orchestrator returned no transition_timeout_seconds; returning without waiting"}`)
+		_, _ = fmt.Fprintln(cmd.ErrOrStderr(), `{"warning":"orchestrator returned no transition_timeout_seconds; returning without waiting"}`)
 		return output.PrintJSON(cmd.OutOrStdout(), res.Raw)
 	}
 

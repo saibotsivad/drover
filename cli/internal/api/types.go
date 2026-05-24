@@ -10,6 +10,7 @@ import "encoding/json"
 // Status mirrors orchestrator ContainerStatus.
 type Status string
 
+// Container status values, mirroring orchestrator ContainerStatus.
 const (
 	StatusInitializing Status = "initializing"
 	StatusRunning      Status = "running"

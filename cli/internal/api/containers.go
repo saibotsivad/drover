@@ -53,7 +53,7 @@ func (c *Client) DestroyContainer(ctx context.Context, id string) (*ContainerRes
 func decodeContainer(data []byte) (*ContainerResult, error) {
 	var ct Container
 	if err := json.Unmarshal(data, &ct); err != nil {
-		return nil, &APIError{Kind: "decode_error", Detail: err.Error()}
+		return nil, &Error{Kind: "decode_error", Detail: err.Error()}
 	}
 	return &ContainerResult{Container: ct, Raw: data}, nil
 }
