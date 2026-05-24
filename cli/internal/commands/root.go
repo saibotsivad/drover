@@ -32,6 +32,9 @@ func newRootCmd() *cobra.Command {
 		newImagesCmd(),
 		newImageCmd(),
 		newPsCmd(),
+		newStartCmd(),
+		newStopCmd(),
+		newDestroyCmd(),
 	)
 
 	return root

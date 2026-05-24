@@ -46,7 +46,7 @@
 | 2 | Config + version ✅ | 1 | no |
 | 3 | API client ✅ | 2 | no |
 | 4 | Read-only commands (`images`, `image`, `ps`) ✅ | 3 | no |
-| 5 | Wait helper + lifecycle (`start`/`stop`/`destroy`) | 3 | no |
+| 5 | Wait helper + lifecycle (`start`/`stop`/`destroy`) ✅ | 3 | no |
 | 6 | WebSocket exec streaming | 3 | no |
 | 7 | Linting + test CI | 1 (grows w/ 2–6) | no |
 | 8 | Release pipeline (GoReleaser, `publish-cli.yml`, tag wiring) | 6, 7 | **yes (first release)** |
@@ -298,37 +298,43 @@ See parent §"`drover images`…/`drover ps`", impl §"Testing strategy".
 
 ---
 
-## Phase 5 — Wait helper + lifecycle: `start`, `stop`, `destroy`
+## Phase 5 — Wait helper + lifecycle: `start`, `stop`, `destroy` — ✅ DONE
 
 **Goal:** the polling lifecycle commands. **Depends on Phase 3** (not 4, but
 reuse Phase 4's `output`). See parent §"`drover start`/`stop`/`destroy`" and
 impl §"Output and exit codes".
 
-- [ ] `internal/wait/wait.go`: `Wait(ctx, interval, deadline, fetchFn, doneFn)`.
-      Interval is **sleep-between-requests** (request latency doesn't shrink
-      the budget). Deadline derived from `transition_timeout_seconds`.
-- [ ] `internal/commands/start.go`:
-  - [ ] Flags: `--privileged` (bool), `--label` (string),
-        `--env KEY=VALUE` (**`StringArrayVar`**, repeatable; KEY=VALUE
-        parsed in the command for specific errors), `--timeout` (int,
-        server-side cap), `--no-wait` (bool), `--interval` (int, default 1).
-  - [ ] POST, read `transition_timeout_seconds`, poll `GET` to `running`.
-  - [ ] `error` state → exit **4** with `{"error":"start_failed",...}`.
-  - [ ] timeout → exit **3** with `{"error":"timeout","status":"initializing"}`.
-  - [ ] `--no-wait` → print transitional state, exit 0.
-- [ ] `internal/commands/stop.go` / `destroy.go`: `--no-wait`, `--interval`;
-      poll to `stopped` / `destroyed`; timeout → exit **3** with transitional
-      status in the JSON.
-- [ ] Handle `transition_timeout_seconds: null` → behave as `--no-wait` +
-      stderr warning.
-- [ ] Register commands. Tests via `httptest` driving a status sequence
-      (e.g. `initializing→running`, `initializing→error`, never-terminal→timeout).
+- [x] `internal/wait/wait.go`: generic `Wait[T](ctx, interval, deadline,
+      fetch, done)`. Interval is **sleep-between-requests**; clamps to 1s if
+      ≤0. Returns the last fetched value with `ErrTimeout` so callers can
+      report the transitional status. Unit-tested directly (done-first,
+      done-after-N, timeout, fetch error, ctx-cancel) with ms intervals.
+- [x] `internal/commands/start.go`:
+  - [x] Flags: `--privileged`, `--label`, `--env KEY=VALUE`
+        (`StringArrayVar`, repeatable; parsed in `parseEnv` for specific
+        errors), `--timeout` (0 = server default via omitempty), `--no-wait`,
+        `--interval` (default 1).
+  - [x] POST, read `transition_timeout_seconds`, poll `GET` to `running`.
+  - [x] `error` state → exit **4** `{"error":"start_failed",...}`.
+  - [x] timeout → exit **3** `{"error":"timeout","status":"initializing"}`.
+  - [x] `--no-wait` → print transitional state, exit 0 (verified GET not polled).
+- [x] `internal/commands/stop.go` / `destroy.go`: `--no-wait`, `--interval`;
+      poll to `stopped` / `destroyed`; share `runLifecycle`. Destroy uses
+      `DELETE`.
+- [x] `transition_timeout_seconds: null` → JSON warning to stderr + print
+      transitional + exit 0 (behaves as `--no-wait`).
+- [x] Registered all three. `httptest` tests drive status sequences
+      (`initializing→running`, `→error`, zero-deadline→timeout); tests avoid
+      real sleeps via terminal-on-first-poll / zero deadline.
 
-**DoD:**
-- `start` blocks to `running`, returns `{"id","status":"running"}`;
-  composition `id=$(drover start img | jq -r .id)` works against fake server.
-- Each failure mode returns its mandated exit code (3/4) with correct JSON.
-- `--no-wait` returns immediately with transitional status.
+**DoD:** ✅
+- `start` blocks to `running` and prints the full container JSON (incl. `id`),
+  so `id=$(drover start img | jq -r .id)` works against the fake server.
+- Failure modes return their mandated exit codes (3 timeout / 4 start_failed)
+  with correct JSON; `--no-wait` returns the transitional status immediately.
+- `go test ./... -race`, `gofmt`, `go vet` clean.
+- *(Note: `context.Canceled` is already mapped to exit 130 in `runLifecycle`;
+  the signal context that triggers it is wired in Phase 6.)*
 
 ---
 
