@@ -49,9 +49,10 @@ checksum:
   name_template: checksums.txt
 
 # Per-component release: the umbrella release owns releases/latest, so this
-# one must not claim it.
+# one must not claim it. make_latest is a templateable string in GoReleaser,
+# so it must be quoted ("false"), not a YAML boolean.
 release:
-  make_latest: false
+  make_latest: "false"
 
 # Cosign keyless (OIDC) signature over the checksums file — mirrors the Docker
 # image signing so verification policy is unified.
