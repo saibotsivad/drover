@@ -33,16 +33,15 @@ can also be run manually).
 
 ### How a release flows
 
-```
-push to main touching changes/         (update-release-pr.yml)
-        │
-        ▼
-"Release: pending changes" PR  ──merge──►  push-tag.yml
-                                              │  scan CHANGELOG.yml, push <project>-v<version> tags
-                                              ├─► publish-image.yml   (orchestrator / builder / webapp)
-                                              ├─► publish-cli.yml      (cli)
-                                              ├─► umbrella-release.yml  → CalVer GitHub Release
-                                              └─► notify-pr            → comment on the merged PR
+```mermaid
+flowchart TD
+    push["push to main touching changes/"] --> updatePR["update-release-pr.yml"]
+    updatePR --> releasePR["'Release: pending changes' PR"]
+    releasePR -->|merge| pushTag["push-tag.yml<br/>scan CHANGELOG.yml, push &lt;project&gt;-v&lt;version&gt; tags"]
+    pushTag --> publishImage["publish-image.yml<br/>(orchestrator / builder / webapp)"]
+    pushTag --> publishCli["publish-cli.yml<br/>(cli)"]
+    pushTag --> umbrella["umbrella-release.yml<br/>→ CalVer GitHub Release"]
+    pushTag --> notify["notify-pr<br/>→ comment on the merged PR"]
 ```
 
 ## Triggers
