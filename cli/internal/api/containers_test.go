@@ -1,0 +1,100 @@
+package api
+
+import (
+	"context"
+	"encoding/json"
+	"io"
+	"net/http"
+	"strings"
+	"testing"
+)
+
+func TestListContainersPassthrough(t *testing.T) {
+	body := `[{"id":"c1","status":"running","unknown_future_field":42}]`
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/containers" {
+			t.Errorf("got %s %s", r.Method, r.URL.Path)
+		}
+		w.Write([]byte(body))
+	})
+	raw, err := c.ListContainers(context.Background())
+	if err != nil {
+		t.Fatalf("ListContainers: %v", err)
+	}
+	// Unknown fields must survive (passthrough, not re-marshalled from a struct).
+	if !strings.Contains(string(raw), "unknown_future_field") {
+		t.Errorf("raw lost unknown field: %s", raw)
+	}
+}
+
+func TestGetContainerDecodeAndRaw(t *testing.T) {
+	body := `{"id":"c1","image":"img","privileged":false,"status":"initializing","timeout_seconds":300,"transition_timeout_seconds":30,"created_at":"2026-05-24T00:00:00Z"}`
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(body))
+	})
+	res, err := c.GetContainer(context.Background(), "c1")
+	if err != nil {
+		t.Fatalf("GetContainer: %v", err)
+	}
+	if res.Status != StatusInitializing {
+		t.Errorf("status = %q", res.Status)
+	}
+	if res.TransitionTimeoutSeconds == nil || *res.TransitionTimeoutSeconds != 30 {
+		t.Errorf("transition_timeout_seconds = %v", res.TransitionTimeoutSeconds)
+	}
+	// created_at isn't in the typed view but must survive in Raw.
+	if !strings.Contains(string(res.Raw), "created_at") {
+		t.Errorf("Raw dropped created_at: %s", res.Raw)
+	}
+}
+
+func TestCreateContainerBody(t *testing.T) {
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/containers" {
+			t.Errorf("got %s %s", r.Method, r.URL.Path)
+		}
+		b, _ := io.ReadAll(r.Body)
+		var req CreateContainerRequest
+		if err := json.Unmarshal(b, &req); err != nil {
+			t.Fatalf("bad body: %v", err)
+		}
+		if req.Image != "myimg" || !req.Privileged || req.Env["K"] != "V" {
+			t.Errorf("decoded request = %+v", req)
+		}
+		w.WriteHeader(http.StatusCreated)
+		w.Write([]byte(`{"id":"c1","status":"initializing","transition_timeout_seconds":30}`))
+	})
+	res, err := c.CreateContainer(context.Background(), CreateContainerRequest{
+		Image: "myimg", Privileged: true, Env: map[string]string{"K": "V"},
+	})
+	if err != nil {
+		t.Fatalf("CreateContainer: %v", err)
+	}
+	if res.ID != "c1" {
+		t.Errorf("id = %q", res.ID)
+	}
+}
+
+func TestStopContainerMethodAndPath(t *testing.T) {
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/containers/c1/stop" {
+			t.Errorf("got %s %s, want POST /containers/c1/stop", r.Method, r.URL.Path)
+		}
+		w.Write([]byte(`{"id":"c1","status":"stopping","transition_timeout_seconds":10}`))
+	})
+	if _, err := c.StopContainer(context.Background(), "c1"); err != nil {
+		t.Fatalf("StopContainer: %v", err)
+	}
+}
+
+func TestDestroyContainerIsDelete(t *testing.T) {
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodDelete || r.URL.Path != "/containers/c1" {
+			t.Errorf("got %s %s, want DELETE /containers/c1", r.Method, r.URL.Path)
+		}
+		w.Write([]byte(`{"id":"c1","status":"destroying","transition_timeout_seconds":10}`))
+	})
+	if _, err := c.DestroyContainer(context.Background(), "c1"); err != nil {
+		t.Fatalf("DestroyContainer: %v", err)
+	}
+}

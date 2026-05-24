@@ -44,7 +44,7 @@
 | 0 | Decisions to lock before coding ✅ | — | n/a |
 | 1 | Scaffolding ✅ | 0 | no |
 | 2 | Config + version ✅ | 1 | no |
-| 3 | API client | 2 | no |
+| 3 | API client ✅ | 2 | no |
 | 4 | Read-only commands (`images`, `image`, `ps`) | 3 | no |
 | 5 | Wait helper + lifecycle (`start`/`stop`/`destroy`) | 3 | no |
 | 6 | WebSocket exec streaming | 3 | no |
@@ -225,33 +225,45 @@ See impl §"Build & distribution" (ldflags) and parent §"Authentication".
 
 ---
 
-## Phase 3 — API client
+## Phase 3 — API client — ✅ DONE
 
 **Goal:** a typed HTTP client over the orchestrator REST API. No commands
 yet. See impl §"HTTP client" and §"Risks" (explicit structs, not maps).
 
-- [ ] `internal/api/types.go`: explicit request/response structs mirroring
-      `orchestrator/models.py` — `ContainerResponse` (incl. `status`,
-      `error_code`, `transition_timeout_seconds`),
-      `CreateContainerRequest`, `ExecResponse`, `ImageSummary`,
-      `ImageDetail`. **No `map[string]any`** for known fields.
-- [ ] `internal/api/client.go`: `Client` built from `config.Config`; adds
-      `Authorization: Bearer` header; every method takes `context.Context`;
-      single shared `*http.Client`. No retry logic here.
-- [ ] `internal/api/errors.go`: decode non-2xx into `*APIError{Status, Detail}`;
-      typed helpers (`IsNotFound`, etc.) as needed by commands.
-- [ ] `internal/api/containers.go`: `List`, `Create`, `Get`, `Stop`,
-      `Destroy` (⚠️ `DELETE /containers/{id}`).
-- [ ] `internal/api/images.go`: `ListImages`, `GetImage`.
-- [ ] `internal/api/execs.go`: `CreateExec` → returns `command_id`.
-- [ ] Unit tests via `net/http/httptest.NewServer`: cover **every error
-      branch** (4xx/5xx decoding, malformed JSON, missing fields), auth
-      header presence, and the destroy-is-DELETE detail.
+- [x] `internal/api/types.go`: `Status` enum + constants;
+      `CreateContainerRequest`; `Container` (typed view: id, image,
+      privileged, status, label, timeout_seconds, error_code,
+      transition_timeout_seconds); `ContainerResult` (typed view **+ raw
+      bytes**); `ExecRequest`/`ExecResponse`. **Design choice:** display
+      commands (`images`/`ps`) get the orchestrator JSON **verbatim** (raw
+      passthrough preserves the "shape can grow" promise); container lifecycle
+      methods decode the typed view *and* keep `Raw`. **No image structs** —
+      nothing reads image fields, so typed image structs would be dead code
+      giving no drift protection.
+- [x] `internal/api/client.go`: `New(baseURL, apiKey)` (takes strings, not
+      `config.Config`, to avoid api→config coupling); `Authorization: Bearer`
+      + `Accept` headers; every method takes `context.Context`; shared
+      `*http.Client` (60s per-request timeout). No retry logic.
+- [x] `internal/api/errors.go`: `*APIError{Status, Kind, Detail}` (exit 1),
+      handles FastAPI string **and** list `detail`, non-JSON bodies, and
+      transport failures (`request_failed`); `IsNotFound` helper.
+- [x] `internal/api/containers.go`: `ListContainers` (raw), `GetContainer`,
+      `CreateContainer`, `StopContainer`, `DestroyContainer`
+      (⚠️ `DELETE /containers/{id}`). Path segments `url.PathEscape`d —
+      correct for the orchestrator's single-segment `{name}` routes (slashes
+      arrive as `%2F`).
+- [x] `internal/api/images.go`: `ListImages`, `GetImage` (raw passthrough).
+- [x] `internal/api/execs.go`: `CreateExec` → returns `command_id`.
+- [x] Unit tests via `httptest`: auth/Accept headers, every error branch
+      (404 string detail, 422 list detail, non-JSON body, transport refusal),
+      raw passthrough preserves unknown fields, **destroy-is-DELETE**,
+      method/path assertions, exec round-trip.
 
-**DoD:**
-- `go test ./internal/api/...` green, including error-path coverage.
-- Client compiles against the real struct shapes (a renamed orchestrator
-  field would be a compile error here — that's the point).
+**DoD:** ✅
+- `go test ./internal/api/... -race` green, including error-path coverage.
+- Client compiles against the real struct shapes; the typed `Container` view
+  turns a renamed `status`/`transition_timeout_seconds` into a zero value the
+  e2e/lifecycle tests would catch.
 
 ---
 
