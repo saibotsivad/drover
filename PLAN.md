@@ -50,7 +50,7 @@
 | 6 | WebSocket exec streaming ✅ | 3 | no |
 | 7 | Linting + test CI ✅ | 1 (grows w/ 2–6) | no |
 | 8 | Release pipeline (GoReleaser, `publish-cli.yml`, tag wiring) ✅ | 6, 7 | **yes (first release)** |
-| 9 | Umbrella coordination (`cli-release-assets.json`) | 8 + umbrella step 5 | yes |
+| 9 | Umbrella coordination (`cli-release-assets.json`) ◑ producer done | 8 + umbrella step 5 | yes |
 | 10 | E2E scenario | 6 | no |
 | 11 | Docs + ADRs | 6 (final pass after 9) | no |
 
@@ -464,48 +464,45 @@ this environment):
 
 ---
 
-## Phase 9 — Umbrella coordination (`cli-release-assets.json`)
+## Phase 9 — Umbrella coordination (`cli-release-assets.json`) — ◑ PRODUCER DONE
 
 **Goal:** feed the umbrella release the CLI's download URLs + checksums.
-**Depends on Phase 8 AND the umbrella plan having landed through its step 5**
-(digest plumbing in `push-tag.yml`). Coordinate with the umbrella owner. See
-impl §"CI workflows" (2), §"Key Decisions" (workflow-to-workflow contract),
-and `docs/releases.md` §"CLI release assets".
+**Depends on Phase 8 AND the umbrella plan having landed through its step 5.**
+See impl §"CI workflows" (2), §"Key Decisions" (workflow-to-workflow
+contract), and `docs/releases.md` §"CLI release assets".
 
-- [ ] In `publish-cli.yml`, post-process GoReleaser's `dist/artifacts.json`
-      into `cli-release-assets.json` in the **exact schema** from
-      `docs/releases.md`:
-      ```json
-      {
-        "version": "1.0.2",
-        "release_url": "https://github.com/saibotsivad/drover/releases/tag/cli-v1.0.2",
-        "assets": {
-          "linux-amd64":  { "url": "...", "sha256": "..." },
-          "linux-arm64":  { "url": "...", "sha256": "..." },
-          "darwin-amd64": { "url": "...", "sha256": "..." },
-          "darwin-arm64": { "url": "...", "sha256": "..." },
-          "windows-amd64":{ "url": "...", "sha256": "..." }
-        }
-      }
-      ```
-- [ ] Attach `cli-release-assets.json` to the per-component release (direct
-      consumers) **and** upload it as workflow artifact `cli-release-assets`.
-- [ ] Confirm the umbrella builder downloads artifact `cli-release-assets`
-      and that the missing-field/platform validation fails loudly (it's the
-      consumer side — verify the contract end-to-end, don't reimplement).
-- [ ] Add `publish-cli` to the umbrella job's `needs:` in `push-tag.yml` and
-      pass `cli_version` through as the umbrella's `cli_version` input
-      (mirrors the existing `*_version` / `*_digest` wiring at
-      `push-tag.yml` lines ~142–164).
-- [ ] Confirm "CLI unchanged in a release" path: no artifact → umbrella
-      carries previous manifest's `cli` block forward (per `docs/releases.md`).
+**Status:** the **producer** is fully implemented; the **consumer** is
+intentionally left to the umbrella plan — `umbrella-release.yml` already
+declares a `cli_version` input documented as *"Reserved … carried forward
+from previous manifest until then,"* so the manifest `cli:` block + `install.sh`
+baking is that plan's remaining work, not reimplemented here.
 
-**DoD:**
-- A triggered umbrella `workflow_dispatch` against a real CLI release
-  produces a `manifest.yaml` with a populated `cli:` block and an
-  `install.sh` carrying the CLI URLs + SHA-256s.
-- Schema matches `docs/releases.md` byte-for-byte (any change here requires
-  a coordinated PR on both workflows — note this in the PR description).
+- [x] In `publish-cli.yml`, post-process GoReleaser's `dist/artifacts.json`
+      (+ `dist/checksums.txt`) into `cli-release-assets.json` in the exact
+      `docs/releases.md` schema (`version`, `release_url`, per-platform
+      `{url, sha256}`). Fails loudly if any archive lacks a checksum.
+- [x] Attach `cli-release-assets.json` to the per-component release
+      (`gh release upload --clobber`) **and** upload it as workflow artifact
+      `cli-release-assets` (`if-no-files-found: error`).
+- [ ] **Consumer (umbrella plan, not this work):** umbrella `build` job must
+      `download-artifact` `cli-release-assets`, populate the manifest `cli:`
+      block, and bake URLs+SHA-256s into `install.sh`, with loud
+      missing-field/platform validation. Today it carries the previous
+      manifest's `cli` block forward (per the input's doc comment).
+- [x] Added `publish-cli` to the umbrella job's `needs:` + skip-gating in
+      `push-tag.yml` and pass `cli_version` to umbrella (input already exists).
+      Reusable workflows share a run, so the `cli-release-assets` artifact is
+      downloadable by the umbrella job in the same run.
+- [x] "CLI unchanged" path: `publish-cli` is skipped, no artifact → umbrella
+      carries the previous manifest's `cli` block forward.
+
+**DoD:** ◑ producer authored & YAML-valid; **end-to-end pending** the umbrella
+consumer + a real release:
+- [ ] A triggered umbrella run against a real CLI release produces a
+      `manifest.yaml` `cli:` block + `install.sh` with the URLs/SHA-256s
+      (blocked on the consumer above).
+- [x] Schema matches `docs/releases.md` (any change needs a coordinated PR on
+      both producer and the umbrella consumer — call this out in the PR).
 
 ---
 

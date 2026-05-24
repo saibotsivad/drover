@@ -44,4 +44,59 @@ jobs:
           # .goreleaser.yaml strips the prefix so the version parses as semver.
           GORELEASER_CURRENT_TAG: cli-v${{ inputs.version }}
 
-      # cli-release-assets.json generation + upload is added in Phase 9.
+      # Sidecar consumed by the umbrella release to populate the cli manifest
+      # entry and bake binary URLs + SHA-256s into install.sh. Schema is the
+      # workflow-to-workflow contract in docs/releases.md ("CLI release
+      # assets"); changing it requires a matching change in the umbrella
+      # workflow.
+      - name: Generate cli-release-assets.json
+        working-directory: cli
+        env:
+          REPO: ${{ github.repository }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, os
+          repo, version = os.environ["REPO"], os.environ["VERSION"]
+          tag = f"cli-v{version}"
+          base = f"https://github.com/{repo}/releases/download/{tag}"
+          arts = json.load(open("dist/artifacts.json"))
+          sums = {}
+          for line in open("dist/checksums.txt"):
+              line = line.strip()
+              if not line:
+                  continue
+              h, name = line.split(None, 1)
+              sums[name] = h
+          assets = {}
+          for a in arts:
+              if a.get("type") != "Archive":
+                  continue
+              plat = f"{a['goos']}-{a['goarch']}"
+              name = a["name"]
+              assets[plat] = {"url": f"{base}/{name}", "sha256": sums.get(name, "")}
+          missing = [p for p, v in assets.items() if not v["sha256"]]
+          if missing or not assets:
+              raise SystemExit(f"missing checksums or no archives: assets={assets}")
+          out = {
+              "version": version,
+              "release_url": f"https://github.com/{repo}/releases/tag/{tag}",
+              "assets": assets,
+          }
+          json.dump(out, open("dist/cli-release-assets.json", "w"), indent=2)
+          print(json.dumps(out, indent=2))
+          PY
+
+      - name: Attach cli-release-assets.json to the release
+        working-directory: cli
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "cli-v${{ inputs.version }}" dist/cli-release-assets.json --repo "${{ github.repository }}" --clobber
+
+      - name: Upload cli-release-assets workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cli-release-assets
+          path: cli/dist/cli-release-assets.json
+          if-no-files-found: error

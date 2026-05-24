@@ -156,16 +156,18 @@ jobs:
       version: ${{ needs.detect.outputs.cli_version }}
 
   umbrella:
-    needs: [detect, publish-orchestrator, publish-builder, publish-webapp]
+    needs: [detect, publish-orchestrator, publish-builder, publish-webapp, publish-cli]
     if: |
       always() &&
       needs.detect.result == 'success' &&
       (needs.publish-orchestrator.result == 'success' || needs.publish-orchestrator.result == 'skipped') &&
       (needs.publish-builder.result      == 'success' || needs.publish-builder.result      == 'skipped') &&
       (needs.publish-webapp.result       == 'success' || needs.publish-webapp.result       == 'skipped') &&
+      (needs.publish-cli.result          == 'success' || needs.publish-cli.result          == 'skipped') &&
       (needs.detect.outputs.orchestrator_version != '' ||
        needs.detect.outputs.builder_version      != '' ||
-       needs.detect.outputs.webapp_version       != '')
+       needs.detect.outputs.webapp_version       != '' ||
+       needs.detect.outputs.cli_version          != '')
     permissions:
       contents: write
       id-token: write
@@ -178,6 +180,7 @@ jobs:
       builder_digest:       ${{ needs.publish-builder.outputs.digest }}
       webapp_version:       ${{ needs.detect.outputs.webapp_version }}
       webapp_digest:        ${{ needs.publish-webapp.outputs.digest }}
+      cli_version:          ${{ needs.detect.outputs.cli_version }}
 
   notify-pr:
     needs: [detect, publish-orchestrator, publish-builder, publish-webapp]
