@@ -1,0 +1,12 @@
+- project: builder
+  bump: patch
+  description: |
+    Release to trigger new umbrella release strategy
+- project: orchestrator
+  bump: patch
+  description: |
+    Release to trigger new umbrella release strategy
+- project: webapp
+  bump: patch
+  description: |
+    Release to trigger new umbrella release strategy
