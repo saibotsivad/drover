@@ -66,5 +66,8 @@ jobs:
         uses: goreleaser/goreleaser-action@v7
         with:
           version: "~> v2"
-          args: release --snapshot --clean
+          # Snapshot skips publish; --skip=sign also skips the cosign step
+          # (signing needs OIDC and isn't meaningful for a validation build,
+          # and cosign isn't installed in this job).
+          args: release --snapshot --clean --skip=sign
           workdir: cli
