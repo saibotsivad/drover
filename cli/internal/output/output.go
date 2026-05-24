@@ -27,11 +27,27 @@ type exitCoder interface {
 	ExitCode() int
 }
 
+// SilentExit carries a process exit code without printing anything. exec uses
+// it to propagate the remote command's exit_code — its output already streamed
+// to stdout, so no error envelope should be written.
+type SilentExit struct{ Code int }
+
+func (e *SilentExit) Error() string { return fmt.Sprintf("exit status %d", e.Code) }
+
+// ExitCode reports the propagated exit code.
+func (e *SilentExit) ExitCode() int { return e.Code }
+
 // PrintError writes err to w as a single JSON object and returns the process
-// exit code. Errors that marshal to a JSON object (Failure, api.APIError) are
-// emitted as-is; anything else is wrapped as {"error": "<message>"}. The exit
-// code comes from an exitCoder in the chain, defaulting to 1.
+// exit code. A SilentExit prints nothing. Other errors that marshal to a JSON
+// object (Failure, api.APIError) are emitted as-is; anything else is wrapped
+// as {"error": "<message>"}. The exit code comes from an exitCoder in the
+// chain, defaulting to 1.
 func PrintError(w io.Writer, err error) int {
+	var se *SilentExit
+	if errors.As(err, &se) {
+		return se.Code
+	}
+
 	code := 1
 	var ec exitCoder
 	if errors.As(err, &ec) {

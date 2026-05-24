@@ -5,7 +5,9 @@
 package commands
 
 import (
+	"context"
 	"os"
+	"os/signal"
 
 	"github.com/spf13/cobra"
 
@@ -35,16 +37,25 @@ func newRootCmd() *cobra.Command {
 		newStartCmd(),
 		newStopCmd(),
 		newDestroyCmd(),
+		newExecCmd(),
 	)
 
 	return root
 }
 
-// Execute builds the command tree, runs it, and returns the process exit code.
+// Execute builds the command tree and runs it under a context cancelled on
+// SIGINT, returning the process exit code. A cancelled context surfaces as
+// exit 130 via the commands that honour it.
 func Execute() int {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+
 	root := newRootCmd()
 	root.SetArgs(os.Args[1:])
-	return execute(root)
+	if err := root.ExecuteContext(ctx); err != nil {
+		return output.PrintError(root.ErrOrStderr(), err)
+	}
+	return 0
 }
 
 // execute runs an already-built root command and maps any error to a process

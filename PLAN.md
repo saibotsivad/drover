@@ -47,7 +47,7 @@
 | 3 | API client ✅ | 2 | no |
 | 4 | Read-only commands (`images`, `image`, `ps`) ✅ | 3 | no |
 | 5 | Wait helper + lifecycle (`start`/`stop`/`destroy`) ✅ | 3 | no |
-| 6 | WebSocket exec streaming | 3 | no |
+| 6 | WebSocket exec streaming ✅ | 3 | no |
 | 7 | Linting + test CI | 1 (grows w/ 2–6) | no |
 | 8 | Release pipeline (GoReleaser, `publish-cli.yml`, tag wiring) | 6, 7 | **yes (first release)** |
 | 9 | Umbrella coordination (`cli-release-assets.json`) | 8 + umbrella step 5 | yes |
@@ -338,42 +338,49 @@ impl §"Output and exit codes".
 
 ---
 
-## Phase 6 — WebSocket exec streaming
+## Phase 6 — WebSocket exec streaming — ✅ DONE
 
 **Goal:** `drover exec` — pass-through frame streaming with exit-code
 propagation and clean Ctrl-C. **Depends on Phase 3.** See parent
 §"`drover exec`", impl §"WebSocket exec streaming" + §"Key Decisions"
 (unknown-flag handling).
 
-- [ ] Add `github.com/coder/websocket` to `go.mod` (deferred from Phase 1;
-      this is the phase that first imports it).
-- [ ] `internal/ws/stream.go`: dial `WS /containers/{id}/ws` with
-      `coder/websocket`; loop read → inspect `type`/`command_id` → write
-      matching `output`/`status` frames **raw + `\n`** to stdout → return
-      `exit_code` on matching `status:complete`. Drop `log`/other-`command_id`.
-- [ ] `internal/commands/exec.go`:
-  - [ ] `Use: "exec <container-id> -- <command...>"`, `Args:
-        cobra.MinimumNArgs(1)`.
-  - [ ] `cmd.Flags().SetInterspersed(false)` so flags stop at `--`; use
-        `cmd.ArgsLenAtDash()` to find the separator. Everything after `--`
-        forwarded verbatim, never flag-parsed.
-  - [ ] Bare `drover exec <id>` (no `--`) → "interactive exec not yet
-        supported" error.
-  - [ ] POST exec → `command_id`; open WS; stream; exit with propagated code.
-- [ ] Ctrl-C: wire `context.Context` to SIGINT → close socket cleanly → exit
-      **130**.
-- [ ] Register command. Tests: `httptest` server upgraded to WS via
-      `coder/websocket`, replaying recorded frame sequences from
-      `cli/testdata/exec/`; assert bytes pass through unchanged, non-matching
-      frames dropped, exit code propagated, and `drover exec $id -- foo --bar`
-      forwards `--bar` while `drover exec --bogus $id -- foo` fails with
-      "unknown flag".
+- [x] Added `github.com/coder/websocket` to `go.mod` (now a direct require).
+- [x] `internal/ws/stream.go`: `URL()` converts `http(s)`→`ws(s)` and appends
+      `/containers/{id}/ws`; `Stream()` dials with bearer header, sets a 32 MiB
+      read limit, loops read → inspect `type`/`command_id` → write matching
+      `output`/`status` frames **raw + `\n`** → return `exit_code` on matching
+      `status:complete`. Drops `log`/other-`command_id` frames.
+- [x] `internal/commands/exec.go`:
+  - [x] `Use: "exec <container-id> -- <command...>"`, `Args: MinimumNArgs(1)`.
+  - [x] **Correction to the impl doc:** uses cobra's **default** interspersed
+        parsing + `cmd.ArgsLenAtDash()`. `SetInterspersed(false)` is
+        deliberately **not** used — empirically it makes `ArgsLenAtDash()`
+        always `-1`. Default parsing gives dash=1 for `id -- cmd`, `-1` for
+        bare, and still rejects a flag before the id. Everything after `--`
+        is forwarded verbatim.
+  - [x] Bare `drover exec <id>` (no `--`) → `interactive_exec_unsupported`
+        (exit 1).
+  - [x] POST exec → `command_id`; build WS URL; stream; propagate exit code
+        via `output.SilentExit` (non-zero exit, **no** error envelope since
+        output already streamed).
+- [x] Ctrl-C: `Execute` runs under `signal.NotifyContext(…, os.Interrupt)`;
+      a cancelled context maps to exit **130** in `exec` and `runLifecycle`.
+- [x] Registered command. Tests: `httptest` upgraded to WS via
+      `coder/websocket` (frames inline, not files): pass-through verbatim,
+      non-matching/`log` frames dropped, exit-code propagation (5 and 0),
+      `exec $id -- ls --bar -la` posts `"ls --bar -la"`, bare exec → exit 1,
+      `exec --bogus $id -- ls` → unknown flag (exit 1), stream-closed-before-
+      complete → error. `ws` package unit-tests `URL`, passthrough, and
+      cancellation.
 
-**DoD:**
-- `drover exec $id -- echo hi | jq -r 'select(.stream=="stdout").data'`
-  reconstructs output against the fake WS server.
-- Exit code equals the status frame's `exit_code`; Ctrl-C exits 130.
+**DoD:** ✅
+- `drover exec $id -- echo hi` streams newline-delimited frames to stdout
+  (jq-reconstructable) against the fake WS server.
+- Exit code equals the status frame's `exit_code` (SilentExit, clean stderr);
+  cancellation path exits 130.
 - Flag-passthrough and unknown-flag behaviour verified by test.
+- `go test ./... -race`, `gofmt`, `go vet` clean.
 
 ---
 
