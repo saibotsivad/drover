@@ -183,7 +183,7 @@ jobs:
       cli_version:          ${{ needs.detect.outputs.cli_version }}
 
   notify-pr:
-    needs: [detect, publish-orchestrator, publish-builder, publish-webapp]
+    needs: [detect, publish-orchestrator, publish-builder, publish-webapp, publish-cli]
     if: |
       always() &&
       github.event_name == 'pull_request' &&
@@ -211,9 +211,15 @@ jobs:
           if [[ "${{ needs.publish-webapp.result }}" == "success" ]]; then
             lines+=("- **webapp** \`${{ needs.detect.outputs.webapp_version }}\` → \`${registry}-webapp\`")
           fi
+          # The CLI publishes to a per-component GitHub Release (tag
+          # cli-v<version>), not GHCR, so link the release instead of a registry.
+          if [[ "${{ needs.publish-cli.result }}" == "success" ]]; then
+            cli_tag="cli-v${{ needs.detect.outputs.cli_version }}"
+            lines+=("- **cli** \`${{ needs.detect.outputs.cli_version }}\` → [\`${cli_tag}\` release](https://github.com/${{ github.repository }}/releases/tag/${cli_tag})")
+          fi
 
           if [[ ${#lines[@]} -eq 0 ]]; then
-            echo "No images were successfully published; skipping comment."
+            echo "No components were successfully published; skipping comment."
             exit 0
           fi
 
