@@ -72,6 +72,16 @@ def make_repo(tmp_path: Path) -> Path:
             {"bump": "patch", "description": "Earlier patch.\n"},
         ]},
     ])
+    # cli_assets.json fixture is version 1.0.2; previous_manifest.yaml carries
+    # cli 1.0.1. The change feed for the CLI is read from this changelog.
+    _make_changelog(root / "cli/CHANGELOG.yml", "1.0.2", [
+        {"version": "1.0.2", "date": "2026-05-23", "entries": [
+            {"bump": "minor", "description": "Added the exec command.\n"},
+        ]},
+        {"version": "1.0.1", "date": "2026-05-22", "entries": [
+            {"bump": "patch", "description": "Earlier CLI patch.\n"},
+        ]},
+    ])
 
     # Real docker-compose.yml from the repo — exercises the actual file shape.
     shutil.copy(COMPOSE_SOURCE, root / "docker-compose.yml")
@@ -326,9 +336,25 @@ def test_changes_and_manifest_agree_on_to_version(repo, output_dir):
     manifest = _read(output_dir, "manifest.yaml")
     changes = _read(output_dir, "changes.yml")
     for project in changes["changes"]:
-        if project == "cli":
-            continue
         assert changes["changes"][project]["to"] == manifest["components"][project]["version"]
+
+
+def test_changes_cli_sourced_from_changelog(repo, output_dir):
+    """The CLI change feed is read from cli/CHANGELOG.yml, not a hardcoded stub."""
+    _run_build(
+        repo, output_dir,
+        components=[],
+        previous=FIXTURES / "previous_manifest.yaml",
+        cli_assets=FIXTURES / "cli_assets.json",
+    )
+    changes = _read(output_dir, "changes.yml")
+    cli = changes["changes"]["cli"]
+    assert cli["from"] == "1.0.1"
+    assert cli["to"] == "1.0.2"
+    # "minor" comes from the changelog entry — the old code hardcoded "patch".
+    assert cli["bump"] == "minor"
+    assert cli["entries"], "CLI entries must come from the changelog, not []"
+    assert cli["entries"][0]["description"].startswith("Added the exec command")
 
 
 # --------------------------------------------------------------------------- #
@@ -371,11 +397,15 @@ def test_install_sh_and_manifest_agree(repo, output_dir):
         assert f"ASSET_{var}_SHA256=" in install_sh
 
 
-def test_install_sh_shell_escapes_special_chars(tmp_path, repo, output_dir):
-    """A malformed asset value must not be able to break out of its assignment."""
-    bad_assets = {
+def test_install_sh_shell_escapes_special_chars(tmp_path):
+    """A malformed asset value must not be able to break out of its assignment.
+
+    Exercises render_install_sh directly: the values that get baked into the
+    script come straight from the (untrusted) GoReleaser asset list, so the
+    escaping must hold regardless of what the rest of the build does.
+    """
+    cli_entry = {
         "version": '1.0.0"; rm -rf /; echo "',
-        "release_url": "https://example.com/release",
         "assets": {
             platform: {
                 "url": 'https://example.com/$(touch /tmp/pwned)',
@@ -383,34 +413,22 @@ def test_install_sh_shell_escapes_special_chars(tmp_path, repo, output_dir):
             } for platform in build_manifest.PLATFORM_KEYS
         },
     }
-    bad_assets_path = tmp_path / "bad_assets.json"
-    bad_assets_path.write_text(json.dumps(bad_assets))
-
-    _run_build(
-        repo, output_dir,
-        components=[],
-        previous=FIXTURES / "previous_manifest.yaml",
-        cli_assets=bad_assets_path,
+    rendered = build_manifest.render_install_sh(
+        INSTALLER_TEMPLATE, "v2026.5-3", "2026-05-23T18:00:00Z", cli_entry,
     )
-    install_sh = output_dir / "install.sh"
-    result = subprocess.run(["bash", "-n", str(install_sh)], capture_output=True, text=True)
+    install_sh = tmp_path / "install.sh"
+    install_sh.write_text(rendered)
+    result = subprocess.run(
+        ["bash", "-n", str(install_sh)], capture_output=True, text=True,
+    )
     assert result.returncode == 0, result.stderr
 
-    # Verify the literal evil string is exposed (no breakout).
-    cmd = (
-        f"set -a; source {install_sh}; printf %s \"$CLI_VERSION\""
-    )
-    # We can't actually source it without running the whole installer, so
-    # just check the assignment line is properly single-quoted.
-    text = install_sh.read_text()
-    assert '$(touch /tmp/pwned)' in text  # the string IS present...
-    # ...but always inside a shlex-quoted assignment, never bare.
-    for line in text.splitlines():
+    # The literal evil string is exposed (no breakout)...
+    assert '$(touch /tmp/pwned)' in rendered
+    # ...but always inside a single-quoted assignment, never bare.
+    for line in rendered.splitlines():
         if line.startswith("CLI_VERSION=") or line.startswith("ASSET_"):
-            # Each such line must be a simple NAME='...' assignment (no
-            # unquoted $ or ` or " etc.).
-            name, _, value = line.partition("=")
-            # shlex-quoted values are either single-quoted or simple words.
+            _, _, value = line.partition("=")
             assert value.startswith("'") and value.endswith("'"), \
                 f"unsafe assignment line: {line!r}"
 

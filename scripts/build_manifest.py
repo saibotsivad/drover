@@ -42,11 +42,17 @@ import yaml
 # --------------------------------------------------------------------------- #
 #
 # Kept in sync with docs/versioning.md's "Versioned projects" table. When a
-# new project lands there, add it here too. The CLI is handled separately —
-# it is added to the manifest whenever --cli-assets is supplied or the
-# previous manifest carried a cli block forward, but it is not in this
-# canonical list because it lives outside the per-project CHANGELOG.yml /
-# container publish flow.
+# new project lands there, add it here too.
+#
+# "kind" controls how a component's manifest entry is built and where its
+# change feed comes from:
+#   container  GHCR image, pinned by digest.
+#   pypi       PyPI package (executor is tracked here but not yet published).
+#   binary     The CLI: a GitHub Release of cross-compiled binaries. Its
+#              manifest entry (binary URLs + SHA-256s) comes from the
+#              cli-release-assets.json sidecar (see _build_cli_entry), but its
+#              change feed is read from cli/CHANGELOG.yml like every other
+#              project.
 
 PROJECTS: dict[str, dict] = {
     "orchestrator": {
@@ -68,6 +74,10 @@ PROJECTS: dict[str, dict] = {
         "kind": "pypi",
         "pypi_name": "drover-executor",
         "changelog": "executor/CHANGELOG.yml",
+    },
+    "cli": {
+        "kind": "binary",
+        "changelog": "cli/CHANGELOG.yml",
     },
 }
 
@@ -219,6 +229,15 @@ def assemble_components(
     for project, meta in PROJECTS.items():
         kind = meta["kind"]
 
+        # The CLI ships as a GitHub Release of cross-compiled binaries: its
+        # manifest entry comes from the cli-release-assets.json sidecar, or is
+        # carried forward when the CLI didn't move this release.
+        if kind == "binary":
+            entry = _build_cli_entry(prev_components, cli_assets, changed)
+            if entry is not None:
+                components[project] = entry
+            continue
+
         if project in changed:
             spec = changed[project]
             if kind == "container":
@@ -262,10 +281,6 @@ def assemble_components(
             components[project] = _component_entry_pypi(project, published)
         else:
             raise BuildError(f"project {project!r}: unknown kind {kind!r}")
-
-    cli_entry = _build_cli_entry(prev_components, cli_assets, changed)
-    if cli_entry is not None:
-        components["cli"] = cli_entry
 
     return components
 
@@ -356,16 +371,6 @@ def assemble_changes(
             "to": spec["version"],
             "bump": _highest_bump(item["bump"] for item in entries),
             "entries": entries,
-        }
-
-    if "cli" in changed:
-        spec = changed["cli"]
-        from_version = (prev_components.get("cli") or {}).get("version")
-        changes["cli"] = {
-            "from": from_version,
-            "to": spec["version"],
-            "bump": spec.get("bump", "patch"),
-            "entries": spec.get("entries", []),
         }
 
     return {
@@ -518,11 +523,9 @@ def build(
 
     cli_assets = load_cli_assets(cli_assets_path) if cli_assets_path else None
     if cli_assets is not None:
-        changed["cli"] = {
-            "version": cli_assets["version"],
-            "bump": "patch",
-            "entries": [],
-        }
+        # Marks the CLI as "changed this release" so its change feed is read
+        # from cli/CHANGELOG.yml; the manifest entry itself comes from cli_assets.
+        changed["cli"] = {"version": cli_assets["version"]}
 
     components = assemble_components(repo_root, changed, previous, cli_assets)
 
