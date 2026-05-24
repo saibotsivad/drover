@@ -1,5 +1,11 @@
-published: 0.0.16
+published: 0.0.17
 changes:
+- version: 0.0.17
+  date: '2026-05-24'
+  entries:
+  - bump: patch
+    description: |
+      Release to trigger new umbrella release strategy
 - version: 0.0.16
   date: '2026-05-22'
   entries:
