@@ -1,0 +1,9 @@
+- project: cli
+  bump: minor
+  description: |
+    Initial release of the `drover` command-line client — a single
+    statically-linked Go binary over the orchestrator REST API. Commands:
+    `images`, `image`, `ps`, `start`, `stop`, `destroy`, and `exec` (with
+    WebSocket output streaming and exit-code propagation). Configured via
+    `DROVER_API_URL` / `DROVER_API_KEY`; JSON in / JSON out with documented
+    exit codes. Published as cross-compiled binaries via GoReleaser.
