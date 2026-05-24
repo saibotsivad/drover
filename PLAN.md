@@ -41,7 +41,7 @@
 
 | # | Phase | Depends on | Lands a release? |
 |---|---|---|---|
-| 0 | Decisions to lock before coding | — | n/a |
+| 0 | Decisions to lock before coding ✅ | — | n/a |
 | 1 | Scaffolding | 0 | no |
 | 2 | Config + version | 1 | no |
 | 3 | API client | 2 | no |
@@ -120,29 +120,38 @@ on the matching `status: complete` frame propagating `exit_code`.
   `--no-wait` and warn on stderr (impl/parent: no defensible default).
 - **Bare `drover exec <id>`** (no `--`) → error "interactive exec not yet
   supported".
+- **No telemetry, ever.** No analytics, no phone-home, no usage counters —
+  in any package, including future additions (Phase 0 team decision).
+- **Goldenfiles regenerate via `go test -update`** (Phase 0 decision): tests
+  read fixtures by default; the flag rewrites them for review in the diff.
 
 ---
 
-## Phase 0 — Decisions to lock before coding
+## Phase 0 — Decisions to lock before coding — ✅ DONE
 
 **Goal:** close the open questions that would force rework if answered late.
 No code. Output is decisions recorded in this doc / ADR stubs.
 
-- [ ] Confirm **module path**: `github.com/saibotsivad/drover/cli`.
-- [ ] Confirm **Go version** to pin (impl proposes `go 1.23`); same value
-      goes in `go.mod` and `actions/setup-go`.
-- [ ] Resolve **Homebrew tap in v1?** (impl Open Questions). Default: **no**,
-      `install.sh` covers users; revisit post-v1. Record the answer.
-- [ ] Resolve **goldenfile policy** for `testdata/`: `go test -update`
-      regeneration **vs** hand-curated. Default: **`-update` flag**. Record.
-- [ ] Confirm **no telemetry** (impl Open Questions) — explicit team yes.
-- [ ] Confirm **`drover --version` scope**: own version only for v1 (no
-      orchestrator API-version negotiation; defer to a separate API-version
-      ADR).
-- [ ] Note: orchestrator already returns `transition_timeout_seconds`
-      (`orchestrator/models.py:106`) — **no orchestrator-side prerequisite**.
+- [x] **Module path:** `github.com/saibotsivad/drover/cli` (module rooted at
+      `cli/` of the repo). *(confirmed)*
+- [x] **Go version:** pin `go 1.23` — same value in `go.mod` and
+      `actions/setup-go`. *(confirmed)*
+- [x] **Homebrew tap in v1?** **No.** `install.sh` covers users; revisit
+      post-v1. Not implemented in this plan. *(confirmed)*
+- [x] **Goldenfile policy for `testdata/`:** **regenerate with `go test
+      -update`** (idiomatic Go; keeps fixtures in sync with code cheaply,
+      regenerated diff is reviewed in the PR). Tests read fixtures by default;
+      a `-update` flag rewrites them. *(engineering decision)*
+- [x] **Telemetry:** **none, ever.** No analytics, no phone-home. *(team
+      decision — absolute)*
+- [x] **`drover --version` scope:** reports the **CLI's own version only** for
+      v1. No orchestrator API-version negotiation; defer that to a separate
+      API-version ADR if/when needed. *(confirmed)*
+- [x] **Orchestrator prerequisite:** none — orchestrator already returns
+      `transition_timeout_seconds` (`orchestrator/models.py:106`).
 
-**DoD:** every box above answered in writing; no open decision blocks Phase 1.
+**DoD:** ✅ every decision above answered in writing; no open decision blocks
+Phase 1.
 
 ---
 
@@ -243,7 +252,8 @@ See parent §"`drover images`…/`drover ps`", impl §"Testing strategy".
 - [ ] `internal/commands/image.go` → single object from `GET /images/{name}`.
 - [ ] `internal/commands/ps.go` → array JSON from `GET /containers`.
 - [ ] Register the three commands in `root.go`.
-- [ ] Goldenfiles under `cli/testdata/ps/` (+ images) for table-driven tests.
+- [ ] Goldenfiles under `cli/testdata/ps/` (+ images) for table-driven tests;
+      add the `-update` flag wiring (Phase 0 policy) so fixtures regenerate.
 - [ ] Command-level tests against `httptest`: assert exit code, stdout JSON
       (goldenfile), and stderr on the API-error path (exit 1).
 
