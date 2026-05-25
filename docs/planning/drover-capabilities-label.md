@@ -40,19 +40,6 @@ here before it appears on any image label.
 | `exec` | The container responds to exec requests via the orchestrator socket. Commands submitted through the "Exec Commands" UI will be queued and executed by the guest agent (`drover-executor`). | All images that ship `drover-executor` as their `CMD` should declare this. |
 | `host-docker` | The container can be launched in privileged mode: the host Docker socket is bind-mounted at `/run/docker.sock` and gVisor isolation is disabled. This allows Docker CLI commands (build, pull, push, tag) to reach the host daemon. | Only images that explicitly need Docker-in-Docker style access should declare this. Requires `PRIVILEGED_IMAGE` to be configured on the orchestrator. |
 
-> **Why `host-docker` instead of `privileged`?**
->
-> "Privileged" is overloaded: Docker has its own `--privileged` flag (broad
-> Linux capability grant), and Linux itself has privileged processes. In
-> Drover, what is actually granted is access to the *host Docker daemon* via a
-> bind-mounted socket — gVisor is lifted as a side-effect, not as the goal.
-> Naming the capability `host-docker` is more self-documenting and makes the
-> security implication explicit to anyone reading the label.
->
-> The webapp's "Privileged" checkbox and the `privileged` field in the
-> orchestrator API are not renamed by this plan — that is existing API surface.
-> The capability key name is only for the label metadata.
-
 ---
 
 ## Changes Required
