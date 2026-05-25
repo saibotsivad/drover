@@ -25,7 +25,7 @@ The existing Drover label convention is the `drover.*` namespace:
 The new label follows that convention:
 
 ```
-drover.capabilities="exec,host-docker"
+drover.capabilities="exec"
 ```
 
 ---
@@ -38,7 +38,6 @@ here before it appears on any image label.
 | Key | What it grants | Notes |
 |---|---|---|
 | `exec` | The container responds to exec requests via the orchestrator socket. Commands submitted through the "Exec Commands" UI will be queued and executed by the guest agent (`drover-executor`). | All images that ship `drover-executor` as their `CMD` should declare this. |
-| `host-docker` | The container can be launched in privileged mode: the host Docker socket is bind-mounted at `/run/docker.sock` and gVisor isolation is disabled. This allows Docker CLI commands (build, pull, push, tag) to reach the host daemon. | Only images that explicitly need Docker-in-Docker style access should declare this. Requires `PRIVILEGED_IMAGE` to be configured on the orchestrator. |
 
 ---
 
@@ -51,7 +50,7 @@ Add the `drover.capabilities` label alongside the existing ones:
 ```dockerfile
 LABEL drover.managed="true"
 LABEL drover.name="builder"
-LABEL drover.capabilities="exec,host-docker"
+LABEL drover.capabilities="exec"
 ```
 
 **File:** `builder/Dockerfile` (after line 28)
@@ -74,22 +73,6 @@ class CapabilityNotSupported(ContainerError):
     detail = "image does not declare the required capability"
 ```
 
-**2a. Privileged container launch**
-
-**File:** `orchestrator/container_manager.py` (launch path, alongside the
-existing `PrivilegedNotConfigured` check)
-
-Before accepting a `POST /containers` with `privileged: true`, the orchestrator
-looks up the image by `req.image` (the `drover.name` short name), parses its
-`drover.capabilities` label, and asserts `host-docker` is present. If the label
-is absent, empty, or does not contain `host-docker`, it raises
-`CapabilityNotSupported`.
-
-This check runs regardless of whether `PRIVILEGED_IMAGE` is configured — the
-image must opt in explicitly via its label.
-
-**2b. Exec command**
-
 **File:** `orchestrator/container_manager.py` (exec path)
 
 Before queuing a command, the orchestrator resolves the container's `image`
@@ -99,98 +82,15 @@ Same error if the capability is absent or the image can no longer be found
 
 ---
 
-### 3. Webapp — Launch Form: Disable Privileged Checkbox
+### 3. Webapp — Launch Form: Privileged Checkbox
 
-**File:** `webapp/src/views/partials/launch-form.js`
-
-**Goal:** When an image is selected whose `drover.capabilities` label does not
-include `host-docker`, the "Privileged" checkbox should be disabled (and
-unchecked).
-
-**Approach — data attributes + inline JS:**
-
-The webapp's launch-form route already receives the list of available images
-(objects with at least `name`). We extend the route to also pass each image's
-parsed capabilities. The `<option>` elements are rendered with a
-`data-capabilities` attribute containing the comma-separated capability list
-(empty string if the label is absent).
-
-A small `<script>` block on the page reacts to the `<select>` change event:
-if the chosen image has a non-empty `data-capabilities` that does not include
-`host-docker`, the checkbox is disabled and unchecked.
-
-If the image list is absent and a plain `<input type="text">` is rendered
-instead (the "no images found" fallback), the checkbox remains fully enabled
-— the operator typed in an arbitrary image name and we have no metadata.
-
-**Route change (`webapp/src/routes/views.js` or wherever the launch page is
-rendered):**
-
-When building the `images` array, parse the `drover.capabilities` label:
-
-```js
-// Existing:
-const images = rawImages.map(img => ({ name: img.name }))
-
-// Updated:
-const images = rawImages.map(img => ({
-  name: img.name,
-  capabilities: (img.labels?.['drover.capabilities'] ?? '').split(',').map(s => s.trim()).filter(Boolean),
-}))
-```
-
-**Template change (`launch-form.js`):**
-
-```html
-<option
-  value="${img.name}"
-  data-capabilities="${img.capabilities.join(',')}"
-  ${img.name === v.image ? 'selected' : ''}
->${img.name}</option>
-```
-
-Privileged checkbox updated to carry an `id` (it already has one) and be
-initially disabled/enabled based on the pre-selected image:
-
-```html
-<label class="checkbox">
-  <input
-    type="checkbox"
-    id="privileged"
-    name="privileged"
-    value="true"
-    ${v.privileged ? 'checked' : ''}
-    ${privilegedDisabled ? 'disabled' : ''}
-  />
-  Privileged
-  ${privilegedDisabled ? html`<span class="muted">(not supported by this image)</span>` : null}
-</label>
-```
-
-Where `privilegedDisabled` is computed server-side for the initially-selected
-image, and updated client-side on selection change:
-
-```html
-<script>
-  (function () {
-    const select = document.getElementById('image');
-    const checkbox = document.getElementById('privileged');
-    if (!select || !checkbox) return;
-
-    function update() {
-      const opt = select.options[select.selectedIndex];
-      if (!opt) return;
-      const caps = (opt.dataset.capabilities || '').split(',').map(s => s.trim()).filter(Boolean);
-      const allowed = caps.includes('host-docker');
-      checkbox.disabled = !allowed;
-      if (!allowed) checkbox.checked = false;
-    }
-
-    select.addEventListener('change', update);
-    update(); // apply on initial load too
-  })();
-</script>
-```
+The privileged checkbox is not affected by image capabilities. Whether
+privileged mode is available is an orchestrator-level configuration
+(`PRIVILEGED_IMAGE`), not something individual images advertise. The checkbox
+stays as-is for this plan; if the operator checks it without `PRIVILEGED_IMAGE`
+configured, the orchestrator returns a `PrivilegedNotConfigured` error as it
+does today. Surfacing orchestrator configuration state in the webapp UI is a
+separate future improvement.
 
 ---
 
@@ -275,10 +175,9 @@ no capabilities. No capability-gated feature will be allowed for that image.
 The authoritative table of supported keys (same content as in this plan,
 kept up to date here going forward):
 
-| Key         | What it grants | Which images should declare it |
-|-------------|----------------|-------------------------------|
-| exec        | ...            | ...                           |
-| host-docker | ...            | ...                           |
+| Key  | What it grants | Which images should declare it |
+|------|----------------|-------------------------------|
+| exec | ...            | ...                           |
 
 ## Adding a new capability
 Short checklist: add a row to the table here, add enforcement in the
@@ -296,21 +195,15 @@ minimises risk:
    changes land; reviewers can check implementation against it.
 2. **Update `builder/Dockerfile`** — a label addition, zero behaviour change,
    safe to ship immediately.
-3. **Add orchestrator enforcement** — capability checks in the launch and exec
-   paths, new `CapabilityNotSupported` error. Verify `drover.capabilities` is
-   already included in `ImageSummary.labels` (it should be; add a test).
-4. **Update the webapp launch form** — disable the privileged checkbox when
-   the selected image lacks `host-docker`.
-5. **Update the webapp container detail page** — hide exec UI when the image
+3. **Add orchestrator enforcement** — capability check in the exec path, new
+   `CapabilityNotSupported` error. Verify `drover.capabilities` is already
+   included in `ImageSummary.labels` (it should be; add a test).
+4. **Update the webapp container detail page** — hide exec UI when the image
    lacks `exec`.
-6. Write/extend tests:
+5. Write/extend tests:
    - Unit test: capability parsing helper (comma splitting, trim, dedup).
-   - Orchestrator integration test: `POST /containers` with `privileged: true`
-     against an image without `host-docker` → 422.
    - Orchestrator integration test: exec against a container whose image lacks
      `exec` → 422.
-   - Integration/e2e: launch form with an image that has no `host-docker` →
-     privileged checkbox is disabled.
    - Integration/e2e: container detail with a no-`exec` image → exec section
      is absent.
 
@@ -323,4 +216,3 @@ minimises risk:
 | Should a `drover.capabilities` label with an *empty* value be treated the same as the label being absent? | Yes — empty string and absent are both treated as *no capabilities declared*; all capability-gated features are denied. |
 | Should the webapp cache the images list to avoid an extra `GET /images` call on every container detail page load? | Out of scope for this plan; the list is small and the call is cheap. |
 | Should capabilities be stored in the `containers` DB row at launch time to decouple the detail page from image availability? | Noted as a future improvement; not required for initial implementation. |
-| Should `host-docker` also require that the operator has configured `PRIVILEGED_IMAGE`? | The orchestrator already enforces this separately via `PrivilegedNotConfigured`. Both checks must pass: the image must declare `host-docker` *and* the operator must have configured `PRIVILEGED_IMAGE`. No additional work needed for this interaction. |
