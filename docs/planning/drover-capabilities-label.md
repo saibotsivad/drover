@@ -28,14 +28,6 @@ The new label follows that convention:
 drover.capabilities="exec,host-docker"
 ```
 
-> **Note on the user's original suggestion (`docker.capabilities`):** the
-> `docker.*` prefix is used by Docker's own tooling (e.g. `docker.description`,
-> `docker.url`). Using it for a project-specific label risks future collisions.
-> More concretely, the orchestrator's `_drover_labels()` helper already strips
-> all non-`drover.*` labels before exposing them via the API, so a
-> `docker.capabilities` label would be invisible to the webapp without an
-> additional code change. `drover.capabilities` avoids both problems.
-
 ---
 
 ## Capability Definitions
