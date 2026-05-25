@@ -180,7 +180,9 @@ jobs:
       builder_digest:       ${{ needs.publish-builder.outputs.digest }}
       webapp_version:       ${{ needs.detect.outputs.webapp_version }}
       webapp_digest:        ${{ needs.publish-webapp.outputs.digest }}
-      cli_version:          ${{ needs.detect.outputs.cli_version }}
+      # The CLI's umbrella manifest entry comes from the `cli-release-assets`
+      # workflow artifact (uploaded by publish-cli.yml, downloaded inside
+      # umbrella-release.yml), not from an input here.
 
   notify-pr:
     needs: [detect, publish-orchestrator, publish-builder, publish-webapp, publish-cli]

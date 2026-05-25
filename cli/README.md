@@ -60,16 +60,16 @@ CI fails on lint findings, so run `make lint` before pushing.
 
 ```
 cli/
-├── cmd/drover/main.go      Entry point — wires the root command only.
-├── internal/
-│   ├── api/                HTTP client over the orchestrator REST API.
-│   ├── ws/                 WebSocket streaming for exec output.
-│   ├── commands/           One file per subcommand; root.go wires the tree.
-│   ├── output/             JSON stdout/stderr emission + exit-code-aware errors.
-│   ├── wait/               Polling loop with a deadline for the lifecycle commands.
-│   ├── config/             DROVER_API_URL / DROVER_API_KEY loading and validation.
-│   └── version/            Build-time version metadata (set via -ldflags).
-└── testdata/               Golden files and recorded WebSocket fixtures.
+├── cmd/drover/main.go          Entry point — wires the root command only.
+└── internal/
+    ├── api/                    HTTP client over the orchestrator REST API.
+    ├── ws/                     WebSocket streaming for exec output.
+    ├── commands/               One file per subcommand; root.go wires the tree.
+    │   └── testdata/           Golden files for the read-only command tests.
+    ├── output/                 JSON stdout/stderr emission + exit-code-aware errors.
+    ├── wait/                   Polling loop with a deadline for the lifecycle commands.
+    ├── config/                 DROVER_API_URL / DROVER_API_KEY loading and validation.
+    └── version/                Build-time version metadata (set via -ldflags).
 ```
 
 `internal/` is compiler-enforced: nothing outside this module can import it.
