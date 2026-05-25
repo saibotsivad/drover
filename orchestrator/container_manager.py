@@ -21,6 +21,7 @@ from orchestrator.config import Config
 from orchestrator.database import Database
 from orchestrator.docker_client import DockerClient
 from orchestrator.errors import (
+    CapabilityNotSupported,
     CommandNotFound,
     ContainerNotConnected,
     ContainerNotFound,
@@ -33,6 +34,8 @@ from orchestrator.errors import (
 from orchestrator.id_gen import generate_id
 from orchestrator.log_capture import LogCaptureManager
 from orchestrator.models import (
+    CAPABILITIES_LABEL,
+    CAPABILITY_EXEC,
     CommandMessage,
     CommandStatus,
     CommandSummary,
@@ -40,6 +43,7 @@ from orchestrator.models import (
     ContainerStatus,
     CreateContainerRequest,
     ExecStatusResponse,
+    parse_capabilities,
 )
 from orchestrator.socket_manager import SocketManager
 
@@ -789,6 +793,21 @@ class ContainerManager:
 
     # -- exec ---------------------------------------------------------------
 
+    async def _assert_capability(self, image_name: str, capability: str) -> None:
+        """Deny the operation unless the container's image declares ``capability``.
+
+        Resolves the container's stored image short name to its Drover labels
+        and parses ``drover.capabilities``.  An absent/empty label, or an
+        image that can no longer be resolved (deleted/renamed since launch),
+        means the capability is unavailable — deny rather than assume.
+        """
+        matches = await self._docker.list_images(name=image_name)
+        if not matches:
+            raise CapabilityNotSupported(capability)
+        labels = matches[0].get("Labels") or {}
+        if capability not in parse_capabilities(labels.get(CAPABILITIES_LABEL)):
+            raise CapabilityNotSupported(capability)
+
     async def exec_command(self, container_id: str, command: str) -> str:
         """Send a command to a running container.  Returns the command ID."""
         row = await self._db.fetchone(
@@ -801,6 +820,8 @@ class ContainerManager:
 
         if not self._sockets.is_connected(container_id):
             raise ContainerNotConnected(container_id)
+
+        await self._assert_capability(row["image"], CAPABILITY_EXEC)
 
         command_id = generate_id()
         now = _now_iso()

@@ -160,7 +160,7 @@ function logsSection(id, opts) {
 	</section>`;
 }
 
-export function containerDetailPage(container, logOpts = null, commands = null) {
+export function containerDetailPage(container, logOpts = null, commands = null, { canExec = false } = {}) {
 	return html`<section id="container-detail">
 		<div class="page-header">
 			<h2>Container <code>${container.id}</code></h2>
@@ -178,8 +178,12 @@ export function containerDetailPage(container, logOpts = null, commands = null) 
 			${container.error_code ? metadataRow('Error code', html`<code>${container.error_code}</code>`) : null}
 		</dl>
 		${actionBar(container)}
-		${commands ? execInputSection(container.id) : null}
-		${commands ? execSection(container.id, commands) : null}
+		${canExec && commands !== null ? execInputSection(container.id) : null}
+		${canExec && commands !== null ? execSection(container.id, commands) : null}
+		${!canExec ? html`<section class="exec-section">
+			<h3>Exec Commands</h3>
+			<p class="muted">This image does not support exec commands.</p>
+		</section>` : null}
 		${logOpts ? logsSection(container.id, logOpts) : null}
 	</section>`;
 }

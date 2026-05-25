@@ -11,6 +11,7 @@ from orchestrator.models import (
     ExecStatusResponse,
     ImageDetail,
     ImageSummary,
+    parse_capabilities,
 )
 
 
@@ -235,6 +236,49 @@ class TestImageSummary:
             "drover.name": "python-runner",
             "drover.template": "true",
         }
+
+
+class TestParseCapabilities:
+    def test_single_key(self):
+        assert parse_capabilities("exec") == {"exec"}
+
+    def test_comma_separated(self):
+        assert parse_capabilities("exec,build") == {"exec", "build"}
+
+    def test_trims_whitespace(self):
+        assert parse_capabilities(" exec , build ") == {"exec", "build"}
+
+    def test_dedups(self):
+        assert parse_capabilities("exec,exec, exec ") == {"exec"}
+
+    def test_drops_empty_segments(self):
+        assert parse_capabilities("exec,,,build,") == {"exec", "build"}
+
+    def test_empty_string_is_no_capabilities(self):
+        assert parse_capabilities("") == set()
+
+    def test_none_is_no_capabilities(self):
+        assert parse_capabilities(None) == set()
+
+    def test_only_whitespace_and_commas(self):
+        assert parse_capabilities("  , , ") == set()
+
+
+class TestImageCapabilitiesLabel:
+    def test_capabilities_label_surfaced_in_summary(self):
+        """The drover.capabilities label is included in ImageSummary.labels."""
+        data = {
+            "RepoTags": [],
+            "Labels": {
+                "drover.managed": "true",
+                "drover.name": "builder",
+                "drover.capabilities": "exec",
+            },
+            "Size": 0,
+            "Created": 1700000000,
+        }
+        summary = ImageSummary.from_docker(data)
+        assert summary.labels["drover.capabilities"] == "exec"
 
 
 class TestImageDetail:

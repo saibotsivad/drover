@@ -24,6 +24,10 @@ NAME=$(printf '%s' "$E2E_RESPONSE_BODY" | jq -r '.name')
 assert_equals "builder" "$NAME" "image name is 'builder'"
 MANAGED=$(printf '%s' "$E2E_RESPONSE_BODY" | jq -r '.labels["drover.managed"]')
 assert_equals "true" "$MANAGED" "drover.managed label is 'true'"
+# The builder ships drover-executor as its CMD, so it must advertise the
+# 'exec' capability (comma-separated list in the drover.capabilities label).
+CAPABILITIES=$(printf '%s' "$E2E_RESPONSE_BODY" | jq -r '.labels["drover.capabilities"]')
+assert_contains "$CAPABILITIES" "exec" "drover.capabilities label declares 'exec'"
 step_end
 
 echo "[test] 02-images: ok"

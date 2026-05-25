@@ -64,7 +64,7 @@ const SAMPLE_IMAGES = [
 	{
 		name: 'python-runner',
 		tags: ['latest', '3.12'],
-		labels: { 'drover.managed': 'true', 'drover.name': 'python-runner' },
+		labels: { 'drover.managed': 'true', 'drover.name': 'python-runner', 'drover.capabilities': 'exec' },
 		size: 200_000_000,
 		created: '2026-04-01T00:00:00Z',
 	},
@@ -139,6 +139,7 @@ test('GET /views/containers/:id renders metadata', async () => {
 			if (path === '/containers/c-aaa') return SAMPLE_CONTAINERS[0];
 			if (path === '/containers/c-aaa/logs/files') return [];
 			if (path === '/containers/c-aaa/execs') return [];
+			if (path === '/images') return SAMPLE_IMAGES;
 			throw new Error(`unexpected getJson: ${path}`);
 		},
 		getText: async (path) => {
@@ -422,6 +423,7 @@ test('GET /views/containers/:id renders the exec commands table when commands ex
 			if (path === '/containers/c-aaa') return SAMPLE_CONTAINERS[0];
 			if (path === '/containers/c-aaa/logs/files') return [];
 			if (path === '/containers/c-aaa/execs') return SAMPLE_COMMANDS;
+			if (path === '/images') return SAMPLE_IMAGES;
 			throw new Error(`unexpected getJson: ${path}`);
 		},
 		getText: async () => '',
@@ -451,6 +453,7 @@ test('GET /views/containers/:id swallows 404 from /execs (matches missing-contai
 			if (path === '/containers/c-aaa') return SAMPLE_CONTAINERS[0];
 			if (path === '/containers/c-aaa/logs/files') return [];
 			if (path === '/containers/c-aaa/execs') throw new OrchestratorHttpError(404, { detail: 'gone' });
+			if (path === '/images') return SAMPLE_IMAGES;
 			throw new Error(`unexpected getJson: ${path}`);
 		},
 		getText: async () => '',
@@ -461,6 +464,79 @@ test('GET /views/containers/:id swallows 404 from /execs (matches missing-contai
 		assert.equal(res.status, 200);
 		const text = await res.text();
 		assert.match(text, /No exec commands yet/);
+	} finally {
+		await close();
+	}
+});
+
+test('GET /views/containers/:id shows the exec input form when the image declares exec', async () => {
+	const orchestrator = makeFakeOrchestrator({
+		getJson: async (path) => {
+			if (path === '/containers/c-aaa') return SAMPLE_CONTAINERS[0];
+			if (path === '/containers/c-aaa/logs/files') return [];
+			if (path === '/containers/c-aaa/execs') return [];
+			if (path === '/images') return SAMPLE_IMAGES;
+			throw new Error(`unexpected getJson: ${path}`);
+		},
+		getText: async () => '',
+	});
+	const { url, close } = await startApp(orchestrator);
+	try {
+		const res = await fetch(`${url}/views/containers/c-aaa`);
+		assert.equal(res.status, 200);
+		const text = await res.text();
+		assert.match(text, /class="exec-input-form"/);
+		assert.equal(text.includes('This image does not support exec commands'), false);
+	} finally {
+		await close();
+	}
+});
+
+test('GET /views/containers/:id hides the exec UI when the image lacks the exec capability', async () => {
+	const nodeContainer = { ...SAMPLE_CONTAINERS[0], image: 'node-runner' };
+	const orchestrator = makeFakeOrchestrator({
+		getJson: async (path) => {
+			if (path === '/containers/c-aaa') return nodeContainer;
+			if (path === '/containers/c-aaa/logs/files') return [];
+			if (path === '/containers/c-aaa/execs') return SAMPLE_COMMANDS;
+			if (path === '/images') return SAMPLE_IMAGES;
+			throw new Error(`unexpected getJson: ${path}`);
+		},
+		getText: async () => '',
+	});
+	const { url, close } = await startApp(orchestrator);
+	try {
+		const res = await fetch(`${url}/views/containers/c-aaa`);
+		assert.equal(res.status, 200);
+		const text = await res.text();
+		assert.match(text, /This image does not support exec commands/);
+		// Neither the input form nor the command table should be rendered.
+		assert.equal(text.includes('exec-input-form'), false, 'exec input form must be hidden');
+		assert.equal(text.includes('id="command-rows"'), false, 'command table must be hidden');
+		assert.equal(text.includes('echo hello'), false, 'command rows must not leak in');
+	} finally {
+		await close();
+	}
+});
+
+test('GET /views/containers/:id hides the exec UI when the image is unknown / images fetch fails', async () => {
+	const orchestrator = makeFakeOrchestrator({
+		getJson: async (path) => {
+			if (path === '/containers/c-aaa') return SAMPLE_CONTAINERS[0];
+			if (path === '/containers/c-aaa/logs/files') return [];
+			if (path === '/containers/c-aaa/execs') return [];
+			if (path === '/images') throw new OrchestratorHttpError(503, { detail: 'unreachable' });
+			throw new Error(`unexpected getJson: ${path}`);
+		},
+		getText: async () => '',
+	});
+	const { url, close } = await startApp(orchestrator);
+	try {
+		const res = await fetch(`${url}/views/containers/c-aaa`);
+		assert.equal(res.status, 200);
+		const text = await res.text();
+		assert.match(text, /This image does not support exec commands/);
+		assert.equal(text.includes('exec-input-form'), false, 'exec input form must be hidden on images failure');
 	} finally {
 		await close();
 	}
