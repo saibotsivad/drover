@@ -13,8 +13,10 @@ audiences:
 - **Installation**: see the release flow in
   [`docs/releases.md`](../docs/releases.md). For end users it's a single
   `curl … | sh`.
-- **Design & rationale**:
-  [`docs/planning/drover-cli-go-implementation.md`](../docs/planning/drover-cli-go-implementation.md).
+- **Design & rationale**: the CLI architecture decision records —
+  [Use Go for the CLI](../docs/decisions/2026-05-24-go-for-the-cli.md),
+  [Cobra as the CLI framework](../docs/decisions/2026-05-24-cobra-cli-framework.md),
+  and [Single Go module, `internal/`-only packages](../docs/decisions/2026-05-24-single-go-module-internal-packages.md).
 
 ## Requirements
 

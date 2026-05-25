@@ -9,9 +9,8 @@ The Drover CLI needs subcommand routing, flag parsing, help text, and a
 `--version` flag. It also needs to forward everything after a `--` separator
 verbatim to the orchestrator for `drover exec <id> -- <cmd...>`.
 
-The framework evaluation (against stdlib `flag` and `urfave/cli`) lives in
-[`docs/planning/drover-cli-go-implementation.md`](../planning/drover-cli-go-implementation.md).
-This ADR records the durable outcome.
+stdlib `flag` (smaller footprint) and `urfave/cli` (lighter API) were both
+considered and rejected; this ADR records the durable outcome.
 
 ## Decision
 
