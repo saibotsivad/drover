@@ -58,16 +58,44 @@ LABEL drover.capabilities="exec,host-docker"
 
 ---
 
-### 2. Orchestrator — No Changes Required
+### 2. Orchestrator — Capability Enforcement
 
-The orchestrator already:
+The orchestrator is the authoritative security gate. The webapp UI disables
+controls as a convenience, but the orchestrator independently rejects any
+request that requires a capability the image has not explicitly declared.
+An absent or empty `drover.capabilities` label means *no capabilities* —
+there is no implicit allowlist.
 
-- Filters image labels to the `drover.*` namespace in `_drover_labels()`
-  (`orchestrator/models.py`).
-- Returns those labels in `ImageSummary.labels` (`GET /images`).
+A new error class is added (alongside the existing `ContainerError` subclasses):
 
-`drover.capabilities` will be included automatically with no orchestrator
-changes.
+```python
+class CapabilityNotSupported(ContainerError):
+    status_code = 422
+    detail = "image does not declare the required capability"
+```
+
+**2a. Privileged container launch**
+
+**File:** `orchestrator/container_manager.py` (launch path, alongside the
+existing `PrivilegedNotConfigured` check)
+
+Before accepting a `POST /containers` with `privileged: true`, the orchestrator
+looks up the image by `req.image` (the `drover.name` short name), parses its
+`drover.capabilities` label, and asserts `host-docker` is present. If the label
+is absent, empty, or does not contain `host-docker`, it raises
+`CapabilityNotSupported`.
+
+This check runs regardless of whether `PRIVILEGED_IMAGE` is configured — the
+image must opt in explicitly via its label.
+
+**2b. Exec command**
+
+**File:** `orchestrator/container_manager.py` (exec path)
+
+Before queuing a command, the orchestrator resolves the container's `image`
+field to an image, parses `drover.capabilities`, and asserts `exec` is present.
+Same error if the capability is absent or the image can no longer be found
+(image deleted since the container was launched: deny rather than assume).
 
 ---
 
@@ -85,7 +113,7 @@ The webapp's launch-form route already receives the list of available images
 (objects with at least `name`). We extend the route to also pass each image's
 parsed capabilities. The `<option>` elements are rendered with a
 `data-capabilities` attribute containing the comma-separated capability list
-(empty string if the label is absent, meaning unknown/unconstrained).
+(empty string if the label is absent).
 
 A small `<script>` block on the page reacts to the `<select>` change event:
 if the chosen image has a non-empty `data-capabilities` that does not include
@@ -153,11 +181,6 @@ image, and updated client-side on selection change:
       const opt = select.options[select.selectedIndex];
       if (!opt) return;
       const caps = (opt.dataset.capabilities || '').split(',').map(s => s.trim()).filter(Boolean);
-      // No capabilities declared → image is unconstrained (e.g. manually typed name)
-      if (caps.length === 0) {
-        checkbox.disabled = false;
-        return;
-      }
       const allowed = caps.includes('host-docker');
       checkbox.disabled = !allowed;
       if (!allowed) checkbox.checked = false;
@@ -193,9 +216,8 @@ const imageInfo = images.find(img => img.name === container.image);
 const capabilities = (imageInfo?.labels?.['drover.capabilities'] ?? '')
   .split(',').map(s => s.trim()).filter(Boolean);
 
-const canExec = capabilities.length === 0 || capabilities.includes('exec');
-// ^ if capabilities is empty (label absent), assume exec is supported
-//   for backwards compatibility with images that predate this label.
+const canExec = capabilities.includes('exec');
+// absent or empty label = no capabilities; exec UI is hidden
 ```
 
 Pass `canExec` into the view:
@@ -221,11 +243,47 @@ ${!canExec ? html`<section class="exec-section">
 ```
 
 > **Fallback behaviour:** If the image is no longer present in `GET /images`
-> (deleted, renamed, or the call fails) `capabilities` will be empty and
-> `canExec` will default to `true`. This is the safer fallback — we degrade
-> gracefully rather than hiding exec from a container that might actually
-> support it. A future improvement could store capabilities at launch time in
-> the containers table to remove the dependency on image availability.
+> (deleted, renamed, or the call fails), `capabilities` will be empty and
+> `canExec` will be `false` — the exec UI is hidden. The orchestrator applies
+> the same deny-if-unknown rule, so the webapp and API are consistent. A future
+> improvement could store capabilities in the `containers` DB row at launch time
+> to remove the dependency on image availability entirely.
+
+---
+
+### 5. Documentation — `docs/capabilities.md`
+
+A new file serves as the permanent, authoritative reference for capabilities.
+It is the single place an image author looks to understand what labels to set,
+and the single place a contributor looks before adding a new capability key.
+
+Suggested structure:
+
+```
+# Drover Capabilities
+
+## Overview
+Brief explanation of what the drover.capabilities label is, the label format
+(comma-separated keys on drover-managed images), and where enforcement happens
+(orchestrator rejects requests; webapp hides unsupported controls).
+
+## Absent or empty label
+Explicitly state: an absent label or an empty string means the image declares
+no capabilities. No capability-gated feature will be allowed for that image.
+
+## Capability reference
+The authoritative table of supported keys (same content as in this plan,
+kept up to date here going forward):
+
+| Key         | What it grants | Which images should declare it |
+|-------------|----------------|-------------------------------|
+| exec        | ...            | ...                           |
+| host-docker | ...            | ...                           |
+
+## Adding a new capability
+Short checklist: add a row to the table here, add enforcement in the
+orchestrator, update the webapp, update affected Dockerfiles.
+```
 
 ---
 
@@ -234,19 +292,23 @@ ${!canExec ? html`<section class="exec-section">
 The changes are independent enough to be done in any order, but this sequence
 minimises risk:
 
-1. **Add the capability table to the docs** (this file, or a dedicated
-   reference doc) — done; acts as the contract.
+1. **Write `docs/capabilities.md`** — establishes the contract before any code
+   changes land; reviewers can check implementation against it.
 2. **Update `builder/Dockerfile`** — a label addition, zero behaviour change,
    safe to ship immediately.
-3. **Update the orchestrator images route** — verify `drover.capabilities` is
-   included in the `labels` field of `ImageSummary` responses (should already
-   work; add an integration test).
+3. **Add orchestrator enforcement** — capability checks in the launch and exec
+   paths, new `CapabilityNotSupported` error. Verify `drover.capabilities` is
+   already included in `ImageSummary.labels` (it should be; add a test).
 4. **Update the webapp launch form** — disable the privileged checkbox when
    the selected image lacks `host-docker`.
 5. **Update the webapp container detail page** — hide exec UI when the image
    lacks `exec`.
 6. Write/extend tests:
    - Unit test: capability parsing helper (comma splitting, trim, dedup).
+   - Orchestrator integration test: `POST /containers` with `privileged: true`
+     against an image without `host-docker` → 422.
+   - Orchestrator integration test: exec against a container whose image lacks
+     `exec` → 422.
    - Integration/e2e: launch form with an image that has no `host-docker` →
      privileged checkbox is disabled.
    - Integration/e2e: container detail with a no-`exec` image → exec section
@@ -258,7 +320,7 @@ minimises risk:
 
 | Question | Default / recommendation |
 |---|---|
-| Should a `drover.capabilities` label with an *empty* value be treated the same as the label being absent (unconstrained)? | Yes — empty string and absent both mean "no constraint"; all UI controls remain enabled. |
+| Should a `drover.capabilities` label with an *empty* value be treated the same as the label being absent? | Yes — empty string and absent are both treated as *no capabilities declared*; all capability-gated features are denied. |
 | Should the webapp cache the images list to avoid an extra `GET /images` call on every container detail page load? | Out of scope for this plan; the list is small and the call is cheap. |
 | Should capabilities be stored in the `containers` DB row at launch time to decouple the detail page from image availability? | Noted as a future improvement; not required for initial implementation. |
-| Should `host-docker` also require that the operator has configured `PRIVILEGED_IMAGE`? | The orchestrator already enforces this at launch time (`PrivilegedNotConfigured` error). The webapp checkbox being enabled just means the image *supports* it; the request will fail at the API level if the orchestrator is not configured for it. No change needed. |
+| Should `host-docker` also require that the operator has configured `PRIVILEGED_IMAGE`? | The orchestrator already enforces this separately via `PrivilegedNotConfigured`. Both checks must pass: the image must declare `host-docker` *and* the operator must have configured `PRIVILEGED_IMAGE`. No additional work needed for this interaction. |
