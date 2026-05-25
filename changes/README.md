@@ -36,6 +36,6 @@ Multiple projects in one file is fine:
 
 | Field | Required | Notes |
 |---|---|---|
-| `project` | yes | One of `builder`, `executor`, `orchestrator`, `webapp`. |
+| `project` | yes | One of `builder`, `cli`, `executor`, `orchestrator`, `webapp`. |
 | `bump` | yes | One of `major`, `minor`, `patch`. |
 | `description` | yes | Free-form Markdown. Use `\|` for multi-line. |
