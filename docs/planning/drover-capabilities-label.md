@@ -82,19 +82,7 @@ Same error if the capability is absent or the image can no longer be found
 
 ---
 
-### 3. Webapp — Launch Form: Privileged Checkbox
-
-The privileged checkbox is not affected by image capabilities. Whether
-privileged mode is available is an orchestrator-level configuration
-(`PRIVILEGED_IMAGE`), not something individual images advertise. The checkbox
-stays as-is for this plan; if the operator checks it without `PRIVILEGED_IMAGE`
-configured, the orchestrator returns a `PrivilegedNotConfigured` error as it
-does today. Surfacing orchestrator configuration state in the webapp UI is a
-separate future improvement.
-
----
-
-### 4. Webapp — Container Detail Page: Conditionally Show Exec UI
+### 3. Webapp — Container Detail Page: Conditionally Show Exec UI
 
 **Files:**
 - `webapp/src/routes/views.js` (or wherever the container detail route lives)
@@ -151,7 +139,7 @@ ${!canExec ? html`<section class="exec-section">
 
 ---
 
-### 5. Documentation — `docs/capabilities.md`
+### 4. Documentation — `docs/capabilities.md`
 
 A new file serves as the permanent, authoritative reference for capabilities.
 It is the single place an image author looks to understand what labels to set,
