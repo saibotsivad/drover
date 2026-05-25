@@ -1,5 +1,5 @@
 // Package config loads and validates the two environment variables the CLI
-// runs on. There is no config file (see drover-cli.md "Authentication").
+// runs on. There is no config file (see docs/cli.md "Configuration").
 package config
 
 import (

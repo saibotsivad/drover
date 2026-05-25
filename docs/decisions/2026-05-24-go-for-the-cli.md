@@ -10,10 +10,8 @@ operators can list images, manage micro-containers, and run exec commands
 without hand-writing HTTP requests. The rest of the repository
 (orchestrator, executor, release tooling) is Python.
 
-The full evaluation — language alternatives, dependency choices, build and
-release pipeline — lives in
-[`docs/planning/drover-cli-go-implementation.md`](../planning/drover-cli-go-implementation.md).
-This ADR records only the durable outcome.
+This ADR records the durable outcome of the language evaluation (language
+alternatives, dependency choices, build and release pipeline).
 
 ## Decision
 
@@ -33,12 +31,14 @@ binary (`CGO_ENABLED=0`) across linux/macOS/Windows on amd64 and arm64.
   change-file → version-tag → publish flow.
 
 Python (team familiarity, type sharing with the orchestrator) and Rust
-(equally small binaries) were both considered and rejected; see the planning
-doc's "Alternatives Considered" section.
+(equally small binaries) were both considered and rejected — Python for its
+runtime-management burden and more awkward WebSocket/signal handling, Rust
+for its heavier cross-compile and release tooling and the team's lesser
+experience with it.
 
 ## Consequences
 
 - The CLI is the repository's only Go module.
-- The team accepts a new language in the codebase; the planning doc's risk
-  section covers the review and onboarding mitigations (tiny dependency set,
-  one-thing-per-file structure, generous package comments).
+- The team accepts a new language in the codebase. The review and onboarding
+  risk is mitigated by a tiny dependency set, one-thing-per-file structure,
+  and generous package comments.

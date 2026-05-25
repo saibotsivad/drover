@@ -8,9 +8,7 @@
 The repository hosts several independently-versioned projects. The CLI is
 the only one written in Go, and it ships a single binary with no library to
 publish. The layout options (single module vs. workspace, `internal/` vs.
-`pkg/`, nested vs. flat) are weighed in
-[`docs/planning/drover-cli-go-implementation.md`](../planning/drover-cli-go-implementation.md).
-This ADR records the durable outcome.
+`pkg/`, nested vs. flat) were weighed; this ADR records the durable outcome.
 
 ## Decision
 

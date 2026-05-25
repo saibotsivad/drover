@@ -37,11 +37,6 @@ on:
         required: false
         type: string
         default: ""
-      cli_version:
-        description: 'Reserved: CLI release coordination ships in a follow-up; carried forward from previous manifest until then.'
-        required: false
-        type: string
-        default: ""
   workflow_dispatch:
     inputs:
       drover_version:
