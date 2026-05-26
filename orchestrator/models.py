@@ -199,6 +199,28 @@ class ImageDetail(ImageSummary):
         )
 
 
+# --- Capabilities ---
+
+# Image label advertising the capabilities a container supports, as a
+# comma-separated list of keys.  See docs/capabilities.md.
+CAPABILITIES_LABEL = "drover.capabilities"
+
+# Capability key: the container accepts exec requests over the orchestrator
+# socket and runs them via the guest agent.
+CAPABILITY_EXEC = "exec"
+
+
+def parse_capabilities(value: str | None) -> set[str]:
+    """Parse a ``drover.capabilities`` label value into a set of keys.
+
+    Comma-separated, whitespace-trimmed, empties dropped.  An absent or
+    empty value yields the empty set — no capabilities declared.
+    """
+    if not value:
+        return set()
+    return {part.strip() for part in value.split(",") if part.strip()}
+
+
 def _drover_labels(raw: dict | None) -> dict[str, str]:
     """Return only the ``drover.*`` labels from a Docker label dict.
 

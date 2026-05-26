@@ -26,6 +26,7 @@ FROM python:3.12-slim
 
 LABEL drover.managed="true"
 LABEL drover.name="builder"
+LABEL drover.capabilities="exec"
 
 # Install build tooling and the Docker CLI from Docker's official apt
 # repo. gnupg/curl are only needed to add that repo, so we drop them

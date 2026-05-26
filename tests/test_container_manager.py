@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from orchestrator.container_manager import (
+    CapabilityNotSupported,
     ContainerManager,
     ContainerNotConnected,
     ContainerNotFound,
@@ -29,7 +30,11 @@ def docker():
             {
                 "Id": "sha256:image_abc123",
                 "RepoTags": ["example/python-runner:latest"],
-                "Labels": {"drover.managed": "true", "drover.name": "python-runner"},
+                "Labels": {
+                    "drover.managed": "true",
+                    "drover.name": "python-runner",
+                    "drover.capabilities": "exec",
+                },
             }
         ]
     )
@@ -525,6 +530,50 @@ async def test_exec_not_connected_raises(manager, sockets, db):
     resp = await _create_running(manager, db, image="test-img")
     sockets.is_connected.return_value = False
     with pytest.raises(ContainerNotConnected):
+        await manager.exec_command(resp.id, "echo hello")
+
+
+async def test_exec_image_without_exec_capability_raises(manager, docker, sockets, db):
+    """Exec is rejected with 422 when the image does not declare 'exec'."""
+    resp = await _create_running(manager, db, image="test-img")
+    docker.list_images.return_value = [
+        {
+            "Id": "sha256:image_abc123",
+            "RepoTags": ["example/no-exec:latest"],
+            "Labels": {"drover.managed": "true", "drover.name": "test-img"},
+        }
+    ]
+    with pytest.raises(CapabilityNotSupported) as exc:
+        await manager.exec_command(resp.id, "echo hello")
+    assert exc.value.status_code == 422
+    # No command was queued or sent to the guest agent.
+    sockets.send_command.assert_not_called()
+    assert await manager.list_commands(resp.id) == []
+
+
+async def test_exec_empty_capabilities_label_raises(manager, docker, db):
+    """An empty drover.capabilities label means no capabilities declared."""
+    resp = await _create_running(manager, db, image="test-img")
+    docker.list_images.return_value = [
+        {
+            "Id": "sha256:image_abc123",
+            "RepoTags": [],
+            "Labels": {
+                "drover.managed": "true",
+                "drover.name": "test-img",
+                "drover.capabilities": "",
+            },
+        }
+    ]
+    with pytest.raises(CapabilityNotSupported):
+        await manager.exec_command(resp.id, "echo hello")
+
+
+async def test_exec_image_no_longer_resolvable_raises(manager, docker, db):
+    """If the image can no longer be found, deny exec rather than assume."""
+    resp = await _create_running(manager, db, image="test-img")
+    docker.list_images.return_value = []
+    with pytest.raises(CapabilityNotSupported):
         await manager.exec_command(resp.id, "echo hello")
 
 

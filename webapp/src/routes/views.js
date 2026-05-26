@@ -35,6 +35,21 @@ async function fetchCommands(orchestrator, encodedId) {
 	}
 }
 
+async function fetchImages(orchestrator) {
+	try {
+		const images = await orchestrator.getJson('/images');
+		return Array.isArray(images) ? images : [];
+	} catch {
+		return [];
+	}
+}
+
+function imageCapabilities(images, imageName) {
+	const info = images.find((img) => img && img.name === imageName);
+	const raw = info?.labels?.['drover.capabilities'] ?? '';
+	return new Set(String(raw).split(',').map((s) => s.trim()).filter(Boolean));
+}
+
 async function fetchLogFiles(orchestrator, encodedId) {
 	try {
 		const logFiles = await orchestrator.getJson(`/containers/${encodedId}/logs/files`);
@@ -130,10 +145,11 @@ export function createViewsRouter({ orchestrator }) {
 		const id = req.params.id;
 		const encodedId = encodeURIComponent(id);
 		try {
-			const [container, filesResult, commands] = await Promise.all([
+			const [container, filesResult, commands, images] = await Promise.all([
 				orchestrator.getJson(`/containers/${encodedId}`),
 				fetchLogFiles(orchestrator, encodedId),
 				fetchCommands(orchestrator, encodedId),
+				fetchImages(orchestrator),
 			]);
 			const { logFiles, filesUnavailable } = filesResult;
 			const { logSource, logContent, logUnavailable } = await fetchLogContent(
@@ -142,6 +158,7 @@ export function createViewsRouter({ orchestrator }) {
 				req.query.log_source,
 				logFiles,
 			);
+			const canExec = imageCapabilities(images, container.image).has('exec');
 			sendPage(res, layout({
 				title: `Container ${container.id}`,
 				activePath: '/views/containers',
@@ -151,7 +168,7 @@ export function createViewsRouter({ orchestrator }) {
 					logSource,
 					logContent,
 					logUnavailable,
-				}, commands),
+				}, canExec ? commands : null, { canExec }),
 			}));
 		} catch (err) {
 			const { status } = describeOrchestratorError(err);

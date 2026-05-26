@@ -226,8 +226,11 @@ Workload images are identified by two Docker labels baked in at build time:
 |---|---|---|
 | `drover.managed` | `"true"` | yes |
 | `drover.name` | short name used to launch containers (e.g. `"python-runner"`) | yes |
+| `drover.capabilities` | comma-separated list of capability keys the image supports (e.g. `"exec"`) | no |
 
-An image without both labels is invisible to Drover. The `drover.*` namespace is reserved for future Drover-specific metadata (templates, versions, etc.).
+An image without both required labels is invisible to Drover. The `drover.*` namespace is reserved for future Drover-specific metadata (templates, versions, etc.).
+
+The optional `drover.capabilities` label advertises which capability-gated features a container supports; the orchestrator rejects requests for an undeclared capability and the webapp hides the corresponding controls. See [docs/capabilities.md](docs/capabilities.md) for the authoritative reference.
 
 Because labels are baked into the image and survive re-tagging, the same image can be pulled from any registry (e.g. `ghcr.io/saibotsivad/drover-builder:latest`) and the orchestrator will still recognise it by label.
 

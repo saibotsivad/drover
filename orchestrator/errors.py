@@ -79,6 +79,16 @@ class CommandNotFound(ContainerError):
         )
 
 
+class CapabilityNotSupported(ContainerError):
+    """Raised when a request needs a capability the image does not declare."""
+
+    def __init__(self, capability: str) -> None:
+        super().__init__(
+            422,
+            f"Image does not declare the required capability '{capability}'",
+        )
+
+
 class LoggingNotEnabled(ContainerError):
     """Raised when log-file endpoints are hit but capture is disabled."""
 
