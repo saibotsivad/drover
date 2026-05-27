@@ -1,5 +1,12 @@
-published: 0.0.11
+published: 0.0.12
 changes:
+- version: 0.0.12
+  date: '2026-05-27'
+  entries:
+  - bump: patch
+    description: |
+      Hide the exec command UI on the container detail page when the image does
+      not declare the `exec` capability, with a note explaining why.
 - version: 0.0.11
   date: '2026-05-24'
   entries:

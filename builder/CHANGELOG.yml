@@ -1,5 +1,12 @@
-published: 0.0.3
+published: 0.0.4
 changes:
+- version: 0.0.4
+  date: '2026-05-27'
+  entries:
+  - bump: patch
+    description: |
+      Declare the `drover.capabilities="exec"` image label so the orchestrator
+      and webapp know the builder supports exec commands.
 - version: 0.0.3
   date: '2026-05-24'
   entries:

@@ -1,5 +1,13 @@
-published: 0.0.17
+published: 0.0.18
 changes:
+- version: 0.0.18
+  date: '2026-05-27'
+  entries:
+  - bump: patch
+    description: |
+      Enforce the `drover.capabilities` image label: exec requests are rejected
+      with 422 unless the image declares the `exec` capability. An absent/empty
+      label or an unresolvable image is denied rather than assumed.
 - version: 0.0.17
   date: '2026-05-24'
   entries:
