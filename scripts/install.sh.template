@@ -18,31 +18,40 @@ set -euo pipefail
 
 # --- VALUES BLOCK ---
 
-err() { printf '%s\n' "drover install: $*" >&2; }
+log() { printf 'drover install: %s\n' "$*"; }
+err() { printf 'drover install: %s\n' "$*" >&2; }
 die() { err "$@"; exit 1; }
 
 if [ -z "${CLI_VERSION:-}" ]; then
     die "values block missing or malformed (no CLI_VERSION)"
 fi
 
+log "installing drover ${CLI_VERSION}"
+
 if command -v curl >/dev/null 2>&1; then
     DOWNLOADER="curl"
+    log "downloader: curl"
 elif command -v wget >/dev/null 2>&1; then
     DOWNLOADER="wget"
+    log "downloader: wget"
 else
     die "need curl or wget on PATH"
 fi
 
 if command -v sha256sum >/dev/null 2>&1; then
     SHA_TOOL="sha256sum"
+    log "checksum tool: sha256sum"
 elif command -v shasum >/dev/null 2>&1; then
     SHA_TOOL="shasum -a 256"
+    log "checksum tool: shasum -a 256"
 else
     die "need sha256sum or shasum on PATH"
 fi
 
 os_raw=$(uname -s)
 arch_raw=$(uname -m)
+
+log "detected OS: ${os_raw}, arch: ${arch_raw}"
 
 case "$os_raw" in
     Linux)   os="linux" ;;
@@ -59,6 +68,8 @@ esac
 
 platform="${os}_${arch}"
 
+log "target platform: ${platform}"
+
 url_var="ASSET_${platform}_URL"
 sha_var="ASSET_${platform}_SHA256"
 
@@ -74,15 +85,22 @@ trap 'rm -rf "$tmpdir"' EXIT
 
 tarball="${tmpdir}/drover-${platform}.tar.gz"
 
+log "downloading ${url}"
+
 if [ "$DOWNLOADER" = "curl" ]; then
-    curl -fsSL -o "$tarball" "$url"
+    curl -fSL --progress-bar -o "$tarball" "$url"
 else
-    wget -q -O "$tarball" "$url"
+    wget -O "$tarball" "$url"
 fi
+
+log "verifying checksum"
 
 (cd "$tmpdir" && printf '%s  %s\n' "$sha" "$(basename "$tarball")" | $SHA_TOOL -c -) >/dev/null \
     || die "checksum mismatch on downloaded archive for ${platform}"
 
+log "checksum OK"
+
+log "extracting archive"
 tar -xzf "$tarball" -C "$tmpdir"
 
 binary=""
@@ -98,8 +116,33 @@ if [ -z "$binary" ]; then
     die "drover binary not found inside ${tarball}"
 fi
 
-install_dir="${DROVER_INSTALL_DIR:-/usr/local/bin}"
-mkdir -p "$install_dir"
-install -m 0755 "$binary" "${install_dir}/$(basename "$binary")"
+# Resolve install directory.
+# Precedence: DROVER_INSTALL_DIR > XDG_BIN_HOME > ~/.local/bin
+# ~/.local/bin is the conventional user-local bin directory per the XDG Base
+# Directory Specification. XDG_BIN_HOME is not in the official spec but is
+# widely used (cargo, etc.) and honoured here as a convenience override.
+if [ -n "${DROVER_INSTALL_DIR:-}" ]; then
+    install_dir="$DROVER_INSTALL_DIR"
+    log "install directory (DROVER_INSTALL_DIR): ${install_dir}"
+elif [ -n "${XDG_BIN_HOME:-}" ]; then
+    install_dir="$XDG_BIN_HOME"
+    log "install directory (XDG_BIN_HOME): ${install_dir}"
+else
+    install_dir="${HOME}/.local/bin"
+    log "install directory (default): ${install_dir}"
+fi
 
-echo "drover ${CLI_VERSION} installed to ${install_dir}/$(basename "$binary")"
+log "creating ${install_dir}"
+mkdir -p "$install_dir"
+
+dest="${install_dir}/$(basename "$binary")"
+log "installing binary to ${dest}"
+install -m 0755 "$binary" "$dest"
+
+log "drover ${CLI_VERSION} installed to ${dest}"
+
+# Remind the user if the install directory is not on PATH.
+case ":${PATH}:" in
+    *":${install_dir}:"*) ;;
+    *) printf '\nNOTE: %s is not on your PATH.\n      Add it, e.g.:\n        export PATH="%s:$PATH"\n\n' "$install_dir" "$install_dir" ;;
+esac
