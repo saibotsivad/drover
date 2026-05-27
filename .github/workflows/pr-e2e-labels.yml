@@ -1,0 +1,122 @@
+name: PR E2E Labels
+
+# Orchestrates the e2e test suite via PR labels.
+#
+# Labels used:
+#   e2e:start   - Add to a PR to trigger the e2e run.
+#   e2e:running - Applied while the e2e suite is in progress.
+#   e2e:pass    - Applied when the e2e suite succeeds.
+#   e2e:failing - Applied when the e2e suite fails.
+#
+# When the PR is updated (synchronize), all labels starting with "e2e:" are
+# removed so stale results don't linger.
+
+on:
+  pull_request:
+    types: [labeled, synchronize]
+
+concurrency:
+  group: pr-e2e-labels-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  pull-requests: write
+  contents: read
+
+jobs:
+  # ------------------------------------------------------------------
+  # When the PR is updated, wipe any stale e2e labels.
+  # ------------------------------------------------------------------
+  clear-on-update:
+    if: github.event.action == 'synchronize'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Remove all e2e:* labels
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { data: labels } = await github.rest.issues.listLabelsOnIssue({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+            const toRemove = labels.filter(l => l.name.startsWith('e2e:'));
+            for (const label of toRemove) {
+              await github.rest.issues.removeLabel({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                name: label.name,
+              });
+            }
+
+  # ------------------------------------------------------------------
+  # Transition e2e:start -> e2e:running immediately.
+  # ------------------------------------------------------------------
+  mark-running:
+    if: github.event.action == 'labeled' && github.event.label.name == 'e2e:start'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Swap labels
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.removeLabel({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              name: 'e2e:start',
+            }).catch(e => { if (e.status !== 404) throw e; });
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              labels: ['e2e:running'],
+            });
+
+  # ------------------------------------------------------------------
+  # Run the actual e2e suite (re-uses the existing workflow).
+  # ------------------------------------------------------------------
+  e2e-tests:
+    needs: [mark-running]
+    if: github.event.action == 'labeled' && github.event.label.name == 'e2e:start'
+    uses: ./.github/workflows/e2e.yml
+
+  # ------------------------------------------------------------------
+  # When the reusable workflow finishes, swap e2e:running for the
+  # final status label.
+  # ------------------------------------------------------------------
+  mark-result:
+    needs: [e2e-tests]
+    if: always() && needs.e2e-tests.result != 'skipped'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Transition to pass / fail
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.removeLabel({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              name: 'e2e:running',
+            }).catch(e => { if (e.status !== 404) throw e; });
+
+            const result = '${{ needs.e2e-tests.result }}';
+            if (result === 'success') {
+              await github.rest.issues.addLabels({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                labels: ['e2e:pass'],
+              });
+            } else if (result === 'failure') {
+              await github.rest.issues.addLabels({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                labels: ['e2e:failing'],
+              });
+            }
+            // If the job was cancelled (e.g. PR was updated and
+            // concurrency cancelled it) we simply leave no final label.

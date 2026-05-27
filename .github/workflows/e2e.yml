@@ -6,6 +6,7 @@ name: E2E
 # are no carry-over side effects to worry about.
 on:
   workflow_dispatch:
+  workflow_call: {}
 
 jobs:
   e2e:
