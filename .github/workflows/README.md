@@ -15,6 +15,7 @@ For the release model these workflows implement, see
 | [`test.yml`](./test.yml) | Test | Core CI. Runs orchestrator + executor unit tests (pytest), webapp tests (npm), and builds the orchestrator and webapp images with a `/health` smoke test. |
 | [`cli-test.yml`](./cli-test.yml) | CLI Test | Go CLI CI. Runs `golangci-lint`, `go test -race -cover`, and a GoReleaser config check + snapshot build (no publish, no signing) to catch cross-compile/config breakage. |
 | [`e2e.yml`](./e2e.yml) | E2E | Full end-to-end suite. Installs gVisor (`runsc`), runs `./e2e/run.sh ci` (including the CLI e2e scenario), and uploads service logs and Playwright results as artifacts. |
+| [`pr-e2e-labels.yml`](./pr-e2e-labels.yml) | E2E PR | Orchestrates e2e runs via PR labels. Watches for `e2e:start` and `synchronize` events, transitions `e2e:start` → `e2e:running` → `e2e:pass`/`e2e:failing`, and clears all `e2e:*` labels when the PR is updated. |
 | [`publish.yml`](./publish.yml) | Publish SHA-tagged Docker images to GHCR | On every push to `main`, detects which project paths changed and builds + pushes SHA-tagged images (`orchestrator`, `builder`, `webapp`) to GHCR via `publish-image.yml`. These are not releases — just per-commit images. |
 | [`update-release-pr.yml`](./update-release-pr.yml) | Update release PR | Watches `changes/` on `main`. Regenerates the pending `CHANGELOG.yml` files, force-pushes the `versioning` branch, and opens/updates the **"Release: pending changes"** PR whose body previews the version bumps. |
 | [`pr-changeset-summary.yml`](./pr-changeset-summary.yml) | PR changeset summary | On normal PRs (not `versioning`), upserts a sticky comment summarizing the version bumps the PR's `changes/` files would produce, or nudges the author to add one. Validates change-file format. |
@@ -26,10 +27,10 @@ For the release model these workflows implement, see
 
 ### Reusable workflows
 
-`publish-image.yml`, `publish-cli.yml`, and `umbrella-release.yml` are
-`workflow_call` building blocks. They aren't triggered directly by repo events —
-`push-tag.yml` calls them as part of the release flow (`umbrella-release.yml`
-can also be run manually).
+`e2e.yml`, `publish-image.yml`, `publish-cli.yml`, and `umbrella-release.yml` are
+`workflow_call` building blocks. `e2e.yml` is triggered by `pr-e2e-labels.yml` during
+the PR label flow; the others are invoked by `push-tag.yml` during the release
+flow (`umbrella-release.yml` can also be run manually).
 
 ### How a release flows
 
@@ -52,9 +53,10 @@ flowchart TD
 | `pull_request` (`opened`, `synchronize`, `reopened`, `ready_for_review`) | `pr-changeset-summary.yml` | Posts/updates the sticky changeset-summary comment. Skips the `versioning` branch. |
 | `pull_request` (`closed`) | `push-tag.yml` | Only acts when a **merged** PR whose head branch is `versioning` closes: tags components, publishes them, runs the umbrella release, and comments back. |
 | `pull_request` (paths `cli/**`) | `cli-test.yml` | Runs the Go lint/test/build matrix when CLI code changes. |
+| `pull_request` (`labeled`, `synchronize`) | `pr-e2e-labels.yml` | Starts e2e on `e2e:start` label; clears e2e labels on push to PR branch. |
 | `push` to `main` | `test.yml`, `publish.yml` | `test.yml` re-runs CI on the merged result; `publish.yml` builds SHA-tagged images for changed projects. |
 | `push` to `main` (paths `changes/**`) | `update-release-pr.yml` | Rebuilds the pending release and updates the `versioning` PR. |
 | `push` to `main` (paths `cli/**`) | `cli-test.yml` | Runs Go CI on the merged result. |
 | `schedule` (Mondays 06:00 UTC) | `prune-ghcr.yml` | Weekly cleanup of stale SHA-only GHCR images. |
 | `workflow_dispatch` (manual) | `e2e.yml`, `cli-test.yml`, `prune-ghcr.yml`, `push-tag.yml`, `umbrella-release.yml` | Manual runs. `e2e.yml` is dispatch-only. `prune-ghcr.yml` takes `max-age-days` / `dry-run`. `push-tag.yml` takes `project` / `version` to re-publish a component. `umbrella-release.yml` takes `drover_version` / `dry_run` / `make_latest` to (re-)cut a release. |
-| `workflow_call` (reusable) | `publish-image.yml`, `publish-cli.yml`, `umbrella-release.yml` | Invoked by `push-tag.yml` during the release flow (see above), not by repo events directly. |
+| `workflow_call` (reusable) | `e2e.yml`, `publish-image.yml`, `publish-cli.yml`, `umbrella-release.yml` | `e2e.yml` is invoked by `pr-e2e-labels.yml` during the PR label flow; the others are invoked by `push-tag.yml` during the release flow. |
