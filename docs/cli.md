@@ -73,6 +73,7 @@ newline-delimited JSON frames (see [§5](#5-exec-streaming)).
 | `drover stop <id>` | `POST /containers/{id}/stop` | Stop a container (resumable). |
 | `drover destroy <id>` | `DELETE /containers/{id}` | Stop and destroy a container. |
 | `drover exec <id> -- <cmd...>` | `POST /containers/{id}/execs` then `GET /containers/{id}/ws` | Run a command in a container and stream its output. |
+| `drover keygen` | _(local)_ | Generate a new API key and its SHA-256 hash. |
 
 ### Read-only commands
 
@@ -184,7 +185,32 @@ Ctrl-C closes the socket cleanly and exits 130.
 
 ---
 
-## 6. Exit codes
+## 6. Key generation
+
+`drover keygen` generates a random API key and prints it in three ready-to-use
+forms — no network connection or environment variables required:
+
+```
+Drover Server Key:
+    DROVER_API_KEY=<sha256-hash>
+
+Drover API Header:
+    Authorization: Bearer <plain-text-key>
+
+Drover CLI Key:
+    export DROVER_API_KEY=<plain-text-key>
+```
+
+Copy the **Server Key** line to the orchestrator's environment. Copy the
+**CLI Key** line to your shell profile (or wherever you set `DROVER_API_KEY`
+for the CLI). Use the **API Header** line when making raw HTTP requests.
+
+See [Authentication](../README.md#authentication) in the main README for
+the full setup flow.
+
+---
+
+## 7. Exit codes
 
 The exit codes are a fixed contract — scripts can rely on them without
 parsing stderr.
