@@ -38,6 +38,7 @@ func newRootCmd() *cobra.Command {
 		newStopCmd(),
 		newDestroyCmd(),
 		newExecCmd(),
+		newKeygenCmd(),
 	)
 
 	return root
