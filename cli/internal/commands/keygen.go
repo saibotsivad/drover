@@ -28,16 +28,11 @@ plain-text key in DROVER_API_KEY on the CLI and in Authorization headers.`,
 			sum := sha256.Sum256([]byte(plainKey))
 			hashedKey := hex.EncodeToString(sum[:])
 
-			out := cmd.OutOrStdout()
-			fmt.Fprintln(out, "Drover Server Key:")
-			fmt.Fprintf(out, "    DROVER_API_KEY=%s\n", hashedKey)
-			fmt.Fprintln(out)
-			fmt.Fprintln(out, "Drover API Header:")
-			fmt.Fprintf(out, "    Authorization: Bearer %s\n", plainKey)
-			fmt.Fprintln(out)
-			fmt.Fprintln(out, "Drover CLI Key:")
-			fmt.Fprintf(out, "    export DROVER_API_KEY=%s\n", plainKey)
-			return nil
+			_, err := fmt.Fprintf(cmd.OutOrStdout(),
+				"Drover Server Key:\n    DROVER_API_KEY=%s\n\nDrover API Header:\n    Authorization: Bearer %s\n\nDrover CLI Key:\n    export DROVER_API_KEY=%s\n",
+				hashedKey, plainKey, plainKey,
+			)
+			return err
 		},
 	}
 }
