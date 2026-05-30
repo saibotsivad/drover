@@ -1,5 +1,16 @@
 published: 0.0.1
 changes:
+- version: 0.0.2
+  date: '2026-05-30'
+  entries:
+  - bump: minor
+    description: |
+      Default to the orchestrator socket inside the per-container folder.
+      The guest agent's default socket path changed from
+      `/run/orchestrator.sock` to
+      `/var/run/drover/sockets/orchestrator.sock`, matching the
+      orchestrator's new per-container socket folder bind mount. Override
+      with `--socket` if needed.
 - version: 0.0.1
   date: '2026-05-21'
   entries:
