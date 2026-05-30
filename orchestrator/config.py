@@ -7,17 +7,15 @@ from dataclasses import dataclass
 # locations and the orchestrator never touches anything else.
 DB_PATH = "/var/lib/drover/data/db.sqlite"
 LOG_DIR = "/var/lib/drover/logs"
-SOCKET_DIR = "/var/run/drover/sockets"
-DOCKER_SOCK = "/var/run/docker.sock"
-
 # Each micro-container gets its own per-container folder under SOCKET_DIR
 # (``{socket_dir}/{container_id}/``).  The whole folder is bind-mounted
-# into the micro-container at the same path (GUEST_SOCKET_DIR), and the
-# orchestrator's control socket lives in it as ORCHESTRATOR_SOCKET_NAME.
-# Using a folder (rather than a single socket file) lets us add more
-# sockets per container later — e.g. one per interactive shell.
-GUEST_SOCKET_DIR = SOCKET_DIR
+# into the micro-container at the same path, and the orchestrator's
+# control socket lives in it as ORCHESTRATOR_SOCKET_NAME.  Using a folder
+# (rather than a single socket file) lets us add more sockets per
+# container later — e.g. one per interactive shell.
+SOCKET_DIR = "/var/run/drover/sockets"
 ORCHESTRATOR_SOCKET_NAME = "orchestrator.sock"
+DOCKER_SOCK = "/var/run/docker.sock"
 
 
 @dataclass(frozen=True)

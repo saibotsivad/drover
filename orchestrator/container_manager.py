@@ -17,7 +17,7 @@ import logging
 import os
 from datetime import datetime, timezone
 
-from orchestrator.config import GUEST_SOCKET_DIR, Config
+from orchestrator.config import SOCKET_DIR, Config
 from orchestrator.database import Database
 from orchestrator.docker_client import DockerClient
 from orchestrator.errors import (
@@ -379,8 +379,8 @@ class ContainerManager:
             env_list.append(f"DROVER_CONTAINER_ID={container_id}")
 
             # Bind the per-container socket FOLDER into the micro-container
-            # at GUEST_SOCKET_DIR, so the guest agent finds the control
-            # socket at {GUEST_SOCKET_DIR}/orchestrator.sock.  Use the
+            # at SOCKET_DIR, so the guest agent finds the control
+            # socket at {SOCKET_DIR}/orchestrator.sock.  Use the
             # HOST-side folder path as the bind source — Docker resolves
             # bind sources against the host filesystem, not the
             # orchestrator container's filesystem.
@@ -389,7 +389,7 @@ class ContainerManager:
                 "Container %s: socket in-container=%s host-dir=%s",
                 container_id, socket_path, host_socket_dir,
             )
-            binds: list[str] = [f"{host_socket_dir}:{GUEST_SOCKET_DIR}"]
+            binds: list[str] = [f"{host_socket_dir}:{SOCKET_DIR}"]
             if req.privileged:
                 binds.append(f"{self._host_docker_sock}:/run/docker.sock")
 
