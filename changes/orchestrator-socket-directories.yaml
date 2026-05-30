@@ -1,0 +1,21 @@
+- project: orchestrator
+  bump: minor
+  description: |
+    Give each micro-container its own socket folder instead of a single
+    socket file. The orchestrator now creates a per-container folder
+    `{socket_dir}/{container_id}/` containing the control socket
+    `orchestrator.sock`, and bind-mounts that folder into the
+    micro-container at `/var/run/drover/sockets/` (previously a single
+    socket file was bound at `/run/orchestrator.sock`). The folder layout
+    makes room for multiple sockets per container later, e.g. one per
+    interactive shell. This is a breaking change to the orchestrator/guest
+    socket contract; Drover is pre-production so no backwards
+    compatibility is provided.
+- project: executor
+  bump: minor
+  description: |
+    Default to the orchestrator socket inside the per-container folder.
+    The guest agent's default socket path changed from
+    `/run/orchestrator.sock` to `/var/run/drover/sockets/orchestrator.sock`,
+    matching the orchestrator's new per-container socket folder bind
+    mount. Override with `--socket` if needed.
