@@ -16,14 +16,16 @@
 #
 # The host-side bind paths below default to relative directories next to
 # this compose file, and can be overridden via DROVER_DATA_DIR /
-# DROVER_LOGS_DIR (e.g. in a .env file) when you want the data and logs
-# on a different filesystem.
+# DROVER_LOGS_DIR / DROVER_SOCKETS_DIR (e.g. in a .env file) when you want
+# the data, logs, or per-micro-container sockets on a different filesystem.
 #
-# The per-micro-container socket directory MUST be /var/run/drover/sockets
-# on both the host and inside the orchestrator — Docker resolves nested
-# bind-mount sources against the host filesystem, so the path has to
-# match on both sides. The orchestrator entrypoint chowns the host
-# directory at startup, so you don't need to pre-create it.
+# The per-micro-container socket directory's host path does NOT need to
+# match its in-container path (/var/run/drover/sockets). The orchestrator
+# self-inspects through the Docker API at startup to learn the host path
+# of that mount and uses it as the bind source when launching
+# micro-containers, so whatever DROVER_SOCKETS_DIR resolves to is what
+# gets used. The orchestrator entrypoint chowns the directory at startup,
+# so you don't need to pre-create it.
 #
 # Rootless Docker note: the host Docker socket lives at /run/user/$UID/docker.sock,
 # not /var/run/docker.sock. Either export DROVER_HOST_DOCKER_SOCK before running compose:
