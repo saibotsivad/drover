@@ -1,6 +1,6 @@
 # Interactive Exec Sessions
 
-**Status:** Draft / RFC-ish — options laid out, recommendation noted, not yet adopted.
+**Status:** Draft — Axis 1 (orchestrator↔guest transport) decided; Axes 2–4 still open.
 
 ## Goal / Desired Outcome
 
@@ -48,45 +48,117 @@ obviously-correct answer for our stack, so each lists options.
 
 ---
 
-## Axis 1 — Orchestrator ↔ guest transport
+## Axis 1 — Orchestrator ↔ guest transport — **DECIDED**
 
-How does interactive PTY data get between the orchestrator and the guest
-agent inside the container?
+**Decision (team, 2026-05-30): dedicated per-session socket inside a
+per-container folder bind mount.** Drover isn't in production use yet, so
+backwards compatibility with the current single-file mount is a non-concern,
+and gVisor behaviour with a directory mount of Unix sockets has been verified.
+The win is clean, independently-managed streams: command traffic and each
+interactive session each get their own connection, with no shared framing and
+no head-of-line blocking.
 
-**Option 1A — Multiplex over the existing socket.** Add new message types to
-the existing newline-delimited JSON protocol: `attach`/`stdin`/`resize`
-(orch→guest) and `pty_output`/`pty_exit` (guest→orch), each carrying a
-`session_id`. The guest spawns a PTY-backed shell and pumps it through the one
-connection it already holds.
-- *Pro:* no bind-mount change, no new sockets, reuses the live connection and
-  the heartbeat/reconnect machinery already there.
-- *Con:* interactive bytes share a connection (and the JSON-line framing) with
-  command traffic; PTY output must be base64'd (or similar) to stay
-  line-safe; one slow/fat session can head-of-line-block commands.
+### Layout
 
-**Option 1B — Dedicated per-session socket (the original sketch).** The
-orchestrator opens a new Unix server at e.g.
-`{socket_dir}/{container_id}/{session_id}.sock`, tells the guest over the main
-socket to dial it, and the guest runs the PTY session on that fresh
-connection.
-- *Pro:* clean stream isolation; per-session backpressure; mirrors the "new
-  feature in the executor library" framing.
-- *Con:* **requires bind-mounting a directory** into the container instead of
-  a single file — a real change to the mount convention (and to the
-  `/run/orchestrator.sock` path layout), with gVisor `--host-uds=all`
-  implications to re-validate. The guest, which today only dials once at
-  startup, must now dial sockets on demand.
+Today the host socket dir (`SOCKET_DIR = /var/run/drover/sockets/`) holds one
+**file** per container, `{container_id}.sock`, bind-mounted as a file to
+`/run/orchestrator.sock` in the container. That changes to one **folder** per
+container:
 
-**Option 1C — Skip the guest; use `docker exec -it`.** The orchestrator holds
-the Docker socket already; it could open a native Docker exec with a TTY and
-proxy it.
-- *Pro:* Docker does the PTY correctly; zero executor changes; zero socket
-  changes.
-- *Con:* bypasses the "everything flows through the guest agent" architecture
-  the whole system is built on; doesn't honor the executor's command model or
-  custom-agent overrides; interacts awkwardly with gVisor and with the
-  capability model. Listed for completeness; likely rejected on architectural
-  consistency grounds.
+```
+host:   /var/run/drover/sockets/{container_id}/        (bind-mounted as a dir)
+                                  ├── drover.sock        # main orch <-> guest
+                                  └── sessions/
+                                        └── {session-id}.sock   # one per session
+
+guest:  /var/run/drover/sockets/                        (same path for every container)
+                                  ├── drover.sock
+                                  └── sessions/{session-id}.sock
+```
+
+- The orchestrator bind-mounts the host **folder** `…/sockets/{container_id}/`
+  onto the in-container path `/var/run/drover/sockets/`. The container-side
+  path is identical for every container; only the host side is per-container.
+- Because it is a **directory** mount (not a file mount), session socket files
+  the orchestrator creates *after* container start appear inside the container
+  automatically — this is precisely why the folder approach is required and a
+  file mount could not work.
+- The guest's main socket moves from `/run/orchestrator.sock` to
+  `/var/run/drover/sockets/drover.sock`.
+
+### Roles and ordering
+
+The orchestrator stays the Unix-socket **server** for every socket; the guest
+stays the **dialer** — consistent with today's model and unchanged for the
+main socket. For an interactive session:
+
+1. Orchestrator creates the session socket server at
+   `…/{container_id}/sessions/{session-id}.sock` (`start_unix_server`,
+   `chmod` it) **before** announcing it, so it is listening when the guest
+   dials.
+2. Orchestrator sends a `session_start` lifecycle message over `drover.sock`.
+3. Guest dials its in-container session path, allocates a PTY, launches the
+   shell, and pumps PTY⇆session-socket.
+4. On shell exit (or `session_close` from the orchestrator, or socket close),
+   the guest tears down the PTY; the orchestrator unlinks the session socket.
+
+### Lifecycle protocol (over the main `drover.sock`)
+
+New orch→guest message types alongside the existing `command`:
+
+- `session_start` — `{"type":"session_start","session_id":"…"}`. The guest
+  derives the path itself from its known mount root
+  (`/var/run/drover/sockets/sessions/{session_id}.sock`) rather than trusting
+  a host-side path, so host/container path differences never leak across.
+- `session_close` — `{"type":"session_close","session_id":"…"}`. Orchestrator
+  asks the guest to end a session (client disconnected, container stopping).
+
+The PTY byte stream and `resize`/`exit` messages flow over the **session
+socket**, not the main socket — framing for that is an Axis 3 detail.
+
+### Cleanup semantics (extends `SocketManager`)
+
+- `SocketManager` is currently keyed by `container_id` (one server/writer/task
+  each). It gains a session dimension: a set of session servers/connections
+  per container. This is a real but contained refactor.
+- **On session end:** unlink the `{session-id}.sock` file; close the server.
+- **On container stop (resume-able):** keep `drover.sock` (as today, for
+  resume); close and unlink all session sockets — sessions don't survive a
+  stop because the shell processes die with the container.
+- **On destroy:** remove the whole `{container_id}/` directory tree.
+
+### Permissions
+
+The per-container directory and its `sessions/` subdir must be traversable by
+the guest process (`o+rx`); session sockets get the same world-rw `chmod`
+(`0o777`) the main socket gets today.
+
+### Open questions / unresolved (Axis 1)
+
+- **Stale session sockets.** If the orchestrator crashes mid-session, a
+  `{session-id}.sock` can linger in the folder. Need a sweep of `sessions/` on
+  container start/stop/destroy (mirroring the existing stale-`.sock` unlink in
+  `create_socket`).
+- **Guest dial failure / race.** If the guest fails to dial after
+  `session_start` (e.g. it's mid-restart), how does the orchestrator learn and
+  surface the failure to the client? Need a timeout + error path, not a hang.
+- **Resume + reconnect.** After a stop/resume the guest re-dials `drover.sock`;
+  confirm no session state is assumed to survive and that the orchestrator
+  rejects/cleans session sockets created before the stop.
+- **Session id authority.** Orchestrator-generated (like `command_id`) — but
+  confirm whether sessions get a DB row for listing/audit or stay purely
+  ephemeral (see global Open Questions).
+- **Concurrency caps.** Whether `--max-concurrent-commands` applies to
+  sessions, or sessions get their own cap, and what the guest does when over
+  the limit (refuse the `session_start`?).
+- **Folder bind mount + non-Drover images.** Custom-agent images now mount a
+  folder, not a file, and must connect to `…/drover.sock`. Confirm the
+  executor default path change is the only client-visible break and document
+  it loudly given the no-backwards-compat stance.
+- **Path constant ownership.** `/var/run/drover/sockets/` is currently a
+  host-only constant; it becomes a *shared* contract (the guest hardcodes the
+  same in-container path). Decide where that constant lives so orchestrator
+  and executor can't drift.
 
 ## Axis 2 — Client ↔ orchestrator transport
 
@@ -129,22 +201,14 @@ A new capability in `drover-executor`:
 
 ## Recommendation (for discussion)
 
-**1A + 2B + 3 + 4**, i.e. *multiplex over the existing socket* but expose a
-*dedicated client WS endpoint*:
-
-- Avoids the bind-mount/dir change of 1B, which is the single biggest source
-  of risk (mount convention + gVisor revalidation) for the least direct
-  benefit — head-of-line blocking between commands and an interactive session
-  is unlikely to bite a homelab-scale deployment, and can be revisited if it
-  does.
-- A dedicated client endpoint (2B) keeps the overloaded log-fanout WS contract
-  clean and gives interactive sessions their own lifecycle/exit semantics.
-- This is the smallest change that honors the existing architecture (all
-  traffic flows through the guest agent) and the intent recorded in the
-  WebSockets ADR.
-
-If stream isolation later proves necessary, 1B is an additive change behind
-the same client-facing contract.
+- **Axis 1: decided** — dedicated per-session sockets in a per-container folder
+  bind mount (see Axis 1 above). Backwards compat is a non-concern and gVisor
+  is verified, so the stream-isolation win is worth the mount-convention
+  change.
+- **Axis 2: 2B** — a dedicated client WS endpoint keeps the overloaded
+  log-fanout WS contract clean and gives interactive sessions their own
+  lifecycle/exit semantics. Still open for discussion.
+- **Axes 3 & 4** proceed regardless of the transport choices.
 
 Add a capability key (proposed `interactive`, or `exec.interactive`) gated in
 `container_manager` and advertised on executor-bearing images, per
@@ -168,8 +232,12 @@ Add a capability key (proposed `interactive`, or `exec.interactive`) gated in
 
 ## Risks and Mitigations
 
-- **Bind-mount change (only if 1B):** re-validate gVisor `--host-uds=all` and
-  the file-vs-dir mount; mitigated by recommending 1A.
+- **Folder bind-mount change (Axis 1):** moving from a file mount to a
+  per-container directory mount changes the in-container socket path and the
+  mount convention. gVisor `--host-uds=all` behaviour with the directory mount
+  has been verified by the team; remaining risk is the executor default-path
+  break (call it out loudly — no backwards compat) and stale session sockets
+  lingering in `sessions/` (sweep on start/stop/destroy).
 - **Raw-mode terminal corruption:** always restore terminal state via
   `defer`, including on panic/signal.
 - **Leaked PTYs / zombie shells:** kill the process group on
