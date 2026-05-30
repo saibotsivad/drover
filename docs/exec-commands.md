@@ -103,7 +103,7 @@ A WebSocket endpoint at `GET /containers/{id}/ws` pushes exec output (`{"type": 
 
 ### Socket protocol is newline-delimited JSON
 
-One JSON object per line over the Unix socket at `/run/orchestrator.sock` inside the micro-container. The orchestrator creates the socket file before starting the micro-container. The guest agent connects once at startup and maintains a persistent connection.
+One JSON object per line over the Unix socket at `/var/run/drover/sockets/orchestrator.sock` inside the micro-container. The orchestrator creates the per-container socket folder and the socket file before starting the micro-container. The guest agent connects once at startup and maintains a persistent connection.
 
 ### Heartbeats are separate from commands
 

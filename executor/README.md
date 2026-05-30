@@ -1,6 +1,6 @@
 # drover-executor
 
-Guest-agent library that runs inside Drover micro-containers. It connects to the orchestrator's Unix socket at `/run/orchestrator.sock`, receives commands, executes them as subprocesses, streams stdout/stderr back, and reports exit codes.
+Guest-agent library that runs inside Drover micro-containers. It connects to the orchestrator's Unix socket at `/var/run/drover/sockets/orchestrator.sock`, receives commands, executes them as subprocesses, streams stdout/stderr back, and reports exit codes.
 
 Zero external dependencies — Python 3.11+ stdlib only.
 
@@ -23,7 +23,7 @@ RUN pip install --no-cache-dir \
 CMD ["drover-executor"]
 ```
 
-The `drover-executor` command connects to `/run/orchestrator.sock` (the socket the orchestrator bind-mounts into every container) and processes commands indefinitely.
+The `drover-executor` command connects to `/var/run/drover/sockets/orchestrator.sock` (inside the per-container folder the orchestrator bind-mounts into every container at `/var/run/drover/sockets/`) and processes commands indefinitely.
 
 ### Pinning a version
 
@@ -44,7 +44,7 @@ drover-executor [OPTIONS]
 
 | Flag | Default | Description |
 |---|---|---|
-| `--socket PATH` | `/run/orchestrator.sock` | Path to the orchestrator Unix socket |
+| `--socket PATH` | `/var/run/drover/sockets/orchestrator.sock` | Path to the orchestrator Unix socket |
 | `--heartbeat-interval SECONDS` | `2.0` | Seconds between automatic heartbeats |
 | `--max-concurrent-commands N` | unlimited | Cap on concurrent subprocesses |
 | `--no-auto-heartbeat` | _(off)_ | Disable automatic heartbeats |
