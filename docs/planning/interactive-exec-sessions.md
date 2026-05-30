@@ -1,6 +1,8 @@
 # Interactive Exec Sessions
 
-**Status:** Draft — Axis 1 (orchestrator↔guest transport) decided; Axes 2–4 still open.
+**Status:** Draft — Axis 1 (orchestrator↔guest transport) decided and its
+per-container socket-folder groundwork already landed in `main`; the session
+sockets on top of it, plus Axes 2–4, are still to build.
 
 ## Goal / Desired Outcome
 
@@ -16,14 +18,17 @@ Read first: the exec flow (`docs/exec-commands.md`) and the WebSockets ADR
 chose WebSockets partly to leave the door open for "attach to an interactive
 shell" and "send stdin to a running command."
 
-Current state (the constraints that shape every option below):
+Current state (the constraints that shape the work below):
 
-- **One socket file, mounted as a file.** The orchestrator is the Unix-socket
-  *server*; the guest agent dials *out* to `/run/orchestrator.sock`. That path
-  is a single-file bind mount (`container_manager.py` ~L391:
-  `{host_socket_path}:/run/orchestrator.sock`). The container does **not** see
-  the socket *folder* — so "a different filename in the same folder" is not
-  visible inside the container without a bind-mount change.
+- **Per-container socket folder, mounted as a directory.** The orchestrator is
+  the Unix-socket *server*; the guest agent dials *out* to
+  `/var/run/drover/sockets/orchestrator.sock`. Each container gets its own
+  folder `/var/run/drover/sockets/{container_id}/` (orchestrator in-container
+  path), bind-mounted as a directory onto `/var/run/drover/sockets/` in the
+  guest, with `orchestrator.sock` inside it. Because it is a *directory* mount,
+  additional per-container sockets created after container start are visible
+  inside the container — the socket_manager docstring already calls out
+  interactive session sockets as the intended use.
 - **Fire-and-forget, no TTY.** `runner.run_command` uses
   `create_subprocess_shell(..., stdin=DEVNULL)`. No PTY, no stdin, no resize.
 - **WS is one-way.** `/containers/{id}/ws` only sends server→client today; it
@@ -128,7 +133,8 @@ main socket. For an interactive session:
    `…/{container_id}/sessions/{session-id}.sock` (`start_unix_server`,
    `chmod` it) **before** announcing it, so it is listening when the guest
    dials.
-2. Orchestrator sends a `session_start` lifecycle message over `drover.sock`.
+2. Orchestrator sends a `session_start` lifecycle message over
+   `orchestrator.sock`.
 3. Guest dials its in-container session path. For a **new** session it
    allocates a PTY, launches the shell, and starts an in-memory terminal
    emulator (see Axis 3 — likely `pyte`) that consumes the shell's PTY output
@@ -152,7 +158,7 @@ detached session lives only as long as its container keeps running, since the
 shell and emulator are in-guest state that die with the container (see Cleanup
 semantics).
 
-### Lifecycle protocol (over the main `drover.sock`)
+### Lifecycle protocol (over the main `orchestrator.sock`)
 
 New orch→guest message types alongside the existing `command`:
 
@@ -183,11 +189,17 @@ that is an Axis 3 detail.
   the guest keeps the shell/PTY/emulator alive — so a later `session_start`
   re-attach gets a fresh socket plus the snapshot.
 - **On terminate:** same socket cleanup, and the guest drops the session.
-- **On container stop (resume-able):** keep `drover.sock` (as today, for
-  resume); close and unlink all session sockets and consider every session
-  gone — neither active nor *detached* sessions survive a stop, because the
-  shell processes and the in-guest emulator state die with the container.
-- **On destroy:** remove the whole `{container_id}/` directory tree.
+- **On container stop (resume-able):** `close_socket` keeps the folder and
+  `orchestrator.sock` (as today, for resume); it must additionally close and
+  unlink all session sockets and consider every session gone — neither active
+  nor *detached* sessions survive a stop, because the shell processes and the
+  in-guest emulator state die with the container.
+- **On destroy:** `destroy_socket` must remove the whole `{container_id}/`
+  tree **including `sessions/`**. ⚠️ Today it does `unlink(orchestrator.sock)`
+  then `os.rmdir(container_dir)` (swallowing `OSError`); `rmdir` fails on a
+  non-empty directory, so any leftover `sessions/{…}.sock` would silently
+  orphan the folder. This needs to become a recursive removal (e.g.
+  `shutil.rmtree`) or an explicit `sessions/` sweep before the `rmdir`.
 
 ### Permissions
 
@@ -293,10 +305,10 @@ A new capability in `drover-executor`:
 
 ## Recommendation (for discussion)
 
-- **Axis 1: decided** — dedicated per-session sockets in a per-container folder
-  bind mount (see Axis 1 above). Backwards compat is a non-concern and gVisor
-  is verified, so the stream-isolation win is worth the mount-convention
-  change.
+- **Axis 1: decided, partly built** — the per-container socket *folder* (with
+  `orchestrator.sock` inside) has landed in `main`; remaining work is the
+  `sessions/` subfolder and per-session sockets on top of it (see Axis 1
+  above).
 - **Axis 2: 2B** — a dedicated client WS endpoint keeps the overloaded
   log-fanout WS contract clean and gives interactive sessions their own
   lifecycle/exit semantics. Still open for discussion.
