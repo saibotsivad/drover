@@ -10,6 +10,15 @@ LOG_DIR = "/var/lib/drover/logs"
 SOCKET_DIR = "/var/run/drover/sockets"
 DOCKER_SOCK = "/var/run/docker.sock"
 
+# Each micro-container gets its own per-container folder under SOCKET_DIR
+# (``{socket_dir}/{container_id}/``).  The orchestrator's control socket
+# lives in that folder as ORCHESTRATOR_SOCKET_NAME, and the whole folder
+# is bind-mounted into the micro-container at GUEST_SOCKET_DIR.  Using a
+# folder (rather than a single socket file) lets us add more sockets per
+# container later — e.g. one per interactive shell.
+GUEST_SOCKET_DIR = "/var/run/drover/sockets"
+ORCHESTRATOR_SOCKET_NAME = "orchestrator.sock"
+
 
 @dataclass(frozen=True)
 class Config:

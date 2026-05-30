@@ -7,7 +7,7 @@
 #
 #   Stop / resume continuity: stop a running container, resume it, and
 #   assert that the captured 0.log contains output from BOTH segments.
-#   The drover-executor logs "Connecting to /run/orchestrator.sock" each
+#   The drover-executor logs "Connecting to /var/run/drover/sockets/orchestrator.sock" each
 #   time it (re)starts, so we look for that line appearing at least
 #   twice across the file set.
 #

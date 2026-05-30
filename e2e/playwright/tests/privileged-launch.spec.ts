@@ -189,7 +189,7 @@ test.describe.serial('privileged container UI flows', () => {
 		// 1. Live source (default).
 		await page.goto(`/views/containers/${containerId}`);
 		await waitForLogViewerAttached(page, 10_000);
-		await expect(page.locator('pre#log-viewer')).toContainText('Connecting to /run/orchestrator.sock');
+		await expect(page.locator('pre#log-viewer')).toContainText('Connecting to /var/run/drover/sockets/orchestrator.sock');
 
 		// 2. File source — wait for 0.log to be available before switching.
 		await waitForLogFile(request, containerId, '0.log', 15_000);

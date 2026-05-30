@@ -60,6 +60,6 @@ RUN set -eux; \
 COPY executor/ /tmp/executor/
 RUN pip install --no-cache-dir /tmp/executor && rm -rf /tmp/executor
 
-# Default agent: connect to /run/orchestrator.sock and serve commands
+# Default agent: connect to /var/run/drover/sockets/orchestrator.sock and serve commands
 # until the orchestrator stops the container or the idle timeout fires.
 CMD ["drover-executor"]

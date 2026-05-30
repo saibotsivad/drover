@@ -19,7 +19,7 @@ Published as `ghcr.io/saibotsivad/drover-builder`.
 | Component | Purpose |
 |---|---|
 | `python:3.12-slim` | Base image; runs the guest agent. |
-| `drover-executor` | Reference guest agent. Connects to `/run/orchestrator.sock`, runs commands as subprocesses, streams stdout/stderr back, reports exit codes. Installed from `/executor` in this repo. |
+| `drover-executor` | Reference guest agent. Connects to `/var/run/drover/sockets/orchestrator.sock`, runs commands as subprocesses, streams stdout/stderr back, reports exit codes. Installed from `/executor` in this repo. |
 | `docker-ce-cli` | Talks to the bind-mounted host Docker daemon at `/run/docker.sock`. Use `docker build`, `docker pull`, `docker push`, `docker tag`, `docker image ls`, etc. |
 | `docker-buildx-plugin` | Modern image builds via `docker buildx build` (BuildKit). |
 | `git` | Clone source repos to build from. |
@@ -109,7 +109,7 @@ it on demand. To make it available:
 
    The orchestrator creates the container, mounts the host Docker
    socket at `/run/docker.sock` and the per-container orchestrator
-   socket at `/run/orchestrator.sock`, and starts it. The
+   socket folder at `/var/run/drover/sockets/`, and starts it. The
    `drover-executor` agent connects, sends `{"type": "ready"}`, and
    the container transitions to `running`.
 

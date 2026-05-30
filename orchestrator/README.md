@@ -82,7 +82,7 @@ The container entrypoint runs as root just long enough to (a) detect the GID of 
 
 Whenever the orchestrator bind-mounts something into a micro-container, it needs that thing's path **on the host** to use as the bind source — Docker resolves nested bind-mount sources against the host filesystem, not the orchestrator's filesystem. This applies to two mounts:
 
-- the per-container socket directory (`/var/run/drover/sockets/`), bind-mounted into every micro-container, and
+- the per-container socket directory (`/var/run/drover/sockets/`), whose per-container subfolders are each bind-mounted into the corresponding micro-container at `/var/run/drover/sockets/`, and
 - the host Docker socket (`/var/run/docker.sock`), bind-mounted into privileged micro-containers at `/run/docker.sock`.
 
 For both, the orchestrator self-inspects through the Docker API at startup to discover the host path: it reads its own container's `Mounts` and uses the `Source` of the mount whose `Destination` matches the in-container path. Because of this, the host-side paths can be anything — they need not match the in-container paths — and no environment variable is needed. If self-inspection fails, it falls back to assuming the host path equals the in-container path and logs a warning.
@@ -278,7 +278,7 @@ The [webapp](../webapp/README.md) can hold the token and inject it into proxied 
 
 ## Socket protocol
 
-The orchestrator and guest agents communicate over a per-container Unix socket using newline-delimited JSON. The socket is created in `/var/run/drover/sockets/` before the container starts and passed to the micro-container at `/run/orchestrator.sock` via a bind mount.
+The orchestrator and guest agents communicate over a per-container Unix socket using newline-delimited JSON. For each container the orchestrator creates a folder `/var/run/drover/sockets/{container_id}/` containing `orchestrator.sock` before the container starts, then bind-mounts that folder into the micro-container at `/var/run/drover/sockets/`, so the guest agent connects to `/var/run/drover/sockets/orchestrator.sock`.
 
 **Guest → Orchestrator:**
 

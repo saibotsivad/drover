@@ -1,8 +1,14 @@
 """Per-container Unix socket lifecycle and message routing.
 
-Each running container gets a Unix socket at
-``/var/run/drover/sockets/{container_id}.sock`` (fixed in-container
-path, see orchestrator/config.py).
+Each running container gets its own folder
+``/var/run/drover/sockets/{container_id}/`` (fixed in-container path, see
+orchestrator/config.py) containing the orchestrator control socket
+``orchestrator.sock``.  The whole folder is bind-mounted into the
+micro-container at ``/var/run/drover/sockets/`` so the guest agent
+connects to ``/var/run/drover/sockets/orchestrator.sock``.  The folder
+layout (rather than a single socket file) leaves room for additional
+per-container sockets later, e.g. one per interactive shell.
+
 The guest agent inside the container connects to this socket and communicates
 using newline-delimited JSON messages.
 
@@ -25,7 +31,7 @@ from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
-from orchestrator.config import Config
+from orchestrator.config import ORCHESTRATOR_SOCKET_NAME, Config
 from orchestrator.database import Database
 
 if TYPE_CHECKING:
@@ -72,14 +78,24 @@ class SocketManager:
         """
         self._ready_callback = callback
 
+    def _container_dir(self, container_id: str) -> str:
+        """Per-container socket folder bind-mounted into the micro-container."""
+        return os.path.join(self._config.socket_dir, container_id)
+
+    def _socket_path(self, container_id: str) -> str:
+        """Path to the orchestrator control socket inside the container folder."""
+        return os.path.join(self._container_dir(container_id), ORCHESTRATOR_SOCKET_NAME)
+
     async def create_socket(self, container_id: str) -> str:
         """Create a Unix socket for a container and start listening.
 
         Returns the socket path.  Must be called BEFORE the Docker container
-        starts so the socket file exists for the bind mount.
+        starts so the per-container folder and socket file exist for the
+        bind mount.
         """
-        socket_path = os.path.join(self._config.socket_dir, f"{container_id}.sock")
-        os.makedirs(self._config.socket_dir, exist_ok=True)
+        container_dir = self._container_dir(container_id)
+        socket_path = self._socket_path(container_id)
+        os.makedirs(container_dir, exist_ok=True)
 
         # Remove stale socket file if present (e.g. from a previous run)
         try:
@@ -118,10 +134,14 @@ class SocketManager:
             server.close()
             await server.wait_closed()
 
-        socket_path = os.path.join(self._config.socket_dir, f"{container_id}.sock")
         try:
-            os.unlink(socket_path)
+            os.unlink(self._socket_path(container_id))
         except FileNotFoundError:
+            pass
+        # Remove the now-empty per-container folder.
+        try:
+            os.rmdir(self._container_dir(container_id))
+        except (FileNotFoundError, OSError):
             pass
 
         logger.info("Socket destroyed for container %s", container_id)

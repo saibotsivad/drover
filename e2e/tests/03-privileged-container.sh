@@ -67,7 +67,7 @@ step_end
 
 # --- 2b. captured-log files check -----------------------------------------
 #
-# The drover-executor writes "Connecting to /run/orchestrator.sock" to
+# The drover-executor writes "Connecting to /var/run/drover/sockets/orchestrator.sock" to
 # stderr the moment it starts up, which the orchestrator captures into
 # 0.log via the Docker log stream.  We assert on that sentinel because
 # the exec stdout itself is piped through the socket and never reaches
