@@ -44,29 +44,29 @@ Current state (the constraints that shape the work below):
 
 Interactive PTY traffic is a fundamentally different shape than the existing
 command model: long-lived, bidirectional, latency-sensitive, binary-ish, and
-1:1 with a client. The current stack (single outbound socket, one-way WS,
-no-stdin runner) supports none of these directly. The design question is
-*where* to add the bidirectional, per-session plumbing.
+1:1 with a client. The current stack (per-container socket folder, one-way WS,
+no-stdin runner) supports the command model but none of the interactive needs
+directly. The design question is *where* to add the bidirectional, per-session
+plumbing.
 
-There are **three independent axes** to decide. None has a single
-obviously-correct answer for our stack, so each lists options.
+There are **three independent axes**. Axis 1 is decided; Axes 2–4 still list
+options where there is no single obviously-correct answer.
 
 ---
 
 ## Axis 1 — Orchestrator ↔ guest transport — **DECIDED**
 
-**Decision (team, 2026-05-30): dedicated per-session socket inside a
-per-container folder bind mount.** Drover isn't in production use yet, so
-backwards compatibility with the current single-file mount is a non-concern,
-and gVisor behaviour with a directory mount of Unix sockets has been verified.
-The win is clean, independently-managed streams: command traffic and each
-interactive session each get their own connection, with no shared framing and
-no head-of-line blocking.
+**Decision (team): dedicated per-session socket inside the per-container socket
+folder.** The folder-per-container bind mount this depends on has already
+landed in `main` (gVisor behaviour with a directory mount of Unix sockets is
+verified). What remains is adding a `sessions/` subfolder and one socket per
+interactive session. The win is clean, independently-managed streams: command
+traffic and each interactive session each get their own connection, with no
+shared framing and no head-of-line blocking.
 
 ### Layout
 
-There are **three distinct path namespaces** here, and PR #139 cleared up a
-doc error that conflated them — worth keeping straight in this plan:
+Three distinct path namespaces are in play; keep them straight:
 
 - **Host path** — wherever `DROVER_SOCKETS_DIR` resolves to on the host (e.g.
   `./sockets/`). It does **not** have to equal the in-container path. The
@@ -80,54 +80,47 @@ doc error that conflated them — worth keeping straight in this plan:
   /var/run/drover/sockets/`. Where the orchestrator actually creates the
   socket files (`start_unix_server`).
 - **Guest in-container path** — also `/var/run/drover/sockets/`, where the
-  per-container thing is mounted. Same for every container.
+  per-container folder is mounted. Same for every container.
 
-Today the orchestrator creates one **file** per container at its in-container
-path, `/var/run/drover/sockets/{container_id}.sock`, and bind-mounts it —
-using the **host** mirror `{host_socket_dir}/{container_id}.sock` as the bind
-source — to `/run/orchestrator.sock` in the guest. That changes to one
-**folder** per container:
+What is **already in place**: the orchestrator creates the per-container folder
+at its in-container path `os.path.join(SOCKET_DIR, container_id)` with
+`orchestrator.sock` (`ORCHESTRATOR_SOCKET_NAME`) inside, and bind-mounts the
+**host** mirror `os.path.join(self._host_socket_dir, container_id)` as the
+source onto the guest in-container path `/var/run/drover/sockets/`. The guest
+dials `/var/run/drover/sockets/orchestrator.sock`.
+
+What **will be added** is the `sessions/` subfolder and per-session sockets:
 
 ```
 orchestrator in-container:  /var/run/drover/sockets/{container_id}/
 host (bind source):         {host_socket_dir}/{container_id}/
-       (both the same dir via the existing sockets-dir mount)
-                              ├── drover.sock        # main orch <-> guest
-                              └── sessions/
-                                    └── {session-id}.sock   # one per session
+       (the same dir, surfaced via the per-container sockets-dir mount)
+                              ├── orchestrator.sock     # main orch <-> guest  (exists today)
+                              └── sessions/             # NEW
+                                    └── {session-id}.sock  # NEW — one per session
 
 guest in-container:         /var/run/drover/sockets/   (same path every container)
-                              ├── drover.sock
+                              ├── orchestrator.sock
                               └── sessions/{session-id}.sock
 ```
 
-- The orchestrator creates the dir tree at its in-container path
-  `os.path.join(SOCKET_DIR, container_id)` and bind-mounts the **host** mirror
-  `os.path.join(self._host_socket_dir, container_id)` as the source onto the
-  guest in-container path `/var/run/drover/sockets/`. This is the exact same
-  host-vs-in-container split the single-file mount uses today (`container_id`
-  subdir instead of `{container_id}.sock`); the existing self-inspection
-  already supplies `self._host_socket_dir`, so **no new host-path discovery is
-  needed**.
-- The container-side mount path is identical for every container; only the host
-  side (and the orchestrator's in-container source dir) is per-container.
-- Because it is a **directory** mount (not a file mount), session socket files
-  the orchestrator creates *after* container start appear inside the container
-  automatically — this is precisely why the folder approach is required and a
-  file mount could not work.
-- The guest's main socket moves from `/run/orchestrator.sock` to
-  `/var/run/drover/sockets/drover.sock`.
-- The existing pre-create-before-start invariant inverts: today the file is
-  pre-created so the bind target is "a file rather than a directory"
-  (`container_manager.py` comment ~L370); now the per-container dir **and**
-  `drover.sock` must exist before Docker start so the bind target is a
-  populated directory the guest can immediately connect into.
+- The session sockets reuse the exact host-vs-in-container split already used
+  for `orchestrator.sock` — they just live one level deeper, under
+  `sessions/`. The existing self-inspection already supplies
+  `self._host_socket_dir`, so **no new host-path discovery is needed**.
+- Because the per-container folder is mounted as a **directory**, session
+  socket files the orchestrator creates *after* container start appear inside
+  the container automatically — this is exactly the headroom the folder layout
+  was built to provide.
+- The orchestrator must create the `sessions/` subdir (and clean it up); see
+  Cleanup semantics for how that interacts with the existing
+  `create_socket`/`destroy_socket`.
 
 ### Roles and ordering
 
 The orchestrator stays the Unix-socket **server** for every socket; the guest
-stays the **dialer** — consistent with today's model and unchanged for the
-main socket. For an interactive session:
+stays the **dialer** — consistent with the main socket. For an interactive
+session:
 
 1. Orchestrator creates the session socket server at
    `…/{container_id}/sessions/{session-id}.sock` (`start_unix_server`,
@@ -230,28 +223,17 @@ the guest process (`o+rx`); session sockets get the same world-rw `chmod`
 - **`pyte` as a dependency.** It breaks the executor's current zero-dependency
   posture. Confirm that's acceptable, or whether a vendored/minimal emulator is
   warranted.
-- **Resume + reconnect.** After a stop/resume the guest re-dials `drover.sock`;
-  confirm no session state is assumed to survive and that the orchestrator
-  rejects/cleans session sockets created before the stop.
-- **Session id authority.** Orchestrator-generated (like `command_id`) — but
-  confirm whether sessions get a DB row for listing/audit or stay purely
-  ephemeral (see global Open Questions).
 - **Concurrency caps.** Whether `--max-concurrent-commands` applies to
   sessions, or sessions get their own cap, and what the guest does when over
   the limit (refuse the `session_start`?).
-- **Folder bind mount + non-Drover images.** Custom-agent images now mount a
-  folder, not a file, and must connect to `…/drover.sock`. Confirm the
-  executor default path change is the only client-visible break and document
-  it loudly given the no-backwards-compat stance.
-- **Path constant ownership.** `/var/run/drover/sockets/` is today the
-  orchestrator's own in-container constant (`SOCKET_DIR` in `config.py`); the
-  guest currently only knows `/run/orchestrator.sock`. After this change the
-  in-container mount path becomes a *shared* contract — the executor must
-  hardcode the same `/var/run/drover/sockets/` mount root (plus `drover.sock`
-  and `sessions/`). Decide where that contract is defined so orchestrator and
-  executor can't drift. (The host path stays separate and self-discovered —
-  `DROVER_SOCKETS_DIR` / `self._host_socket_dir` — and is not part of this
-  shared in-container contract.)
+- **Path constant ownership.** The in-container path is already a *shared*
+  contract: the orchestrator owns `SOCKET_DIR` + `ORCHESTRATOR_SOCKET_NAME`
+  (`config.py`), while the executor independently hardcodes the same
+  `/var/run/drover/sockets/orchestrator.sock` as its default. Adding
+  `sessions/` + the session-socket naming extends that shared contract. Decide
+  where it is defined so orchestrator and executor can't drift. (The host path
+  stays separate and self-discovered — `DROVER_SOCKETS_DIR` /
+  `self._host_socket_dir` — and is not part of this in-container contract.)
 
 ## Axis 2 — Client ↔ orchestrator transport
 
@@ -281,10 +263,9 @@ A new capability in `drover-executor`:
   authoritative screen model. The emulator is the mechanism that makes
   pause/resume cheap: on (re)attach the guest renders the current screen to a
   **snapshot** frame and sends that, then streams live PTY output — no full
-  byte-history replay. `pyte` is pure stdlib-compatible Python, but it is a
-  **new external dependency**, which the executor has so far avoided (see the
-  executor README's "zero external dependencies" claim) — a deliberate
-  trade-off to weigh.
+  byte-history replay. `pyte` is a **new external dependency**, which the
+  executor has so far avoided (see the executor README's "zero external
+  dependencies" claim) — a deliberate trade-off to weigh.
 - Apply window size to **both** the PTY (`fcntl.ioctl(fd, termios.TIOCSWINSZ,
   …)`) and the emulator screen (`Screen.resize`) on `resize`, so the snapshot
   stays correctly dimensioned.
@@ -339,12 +320,9 @@ Add a capability key (proposed `interactive`, or `exec.interactive`) gated in
 
 ## Risks and Mitigations
 
-- **Folder bind-mount change (Axis 1):** moving from a file mount to a
-  per-container directory mount changes the in-container socket path and the
-  mount convention. gVisor `--host-uds=all` behaviour with the directory mount
-  has been verified by the team; remaining risk is the executor default-path
-  break (call it out loudly — no backwards compat) and stale session sockets
-  lingering in `sessions/` (sweep on start/stop/destroy).
+- **Recursive folder cleanup (Axis 1):** `destroy_socket`'s current `rmdir`
+  won't remove a `sessions/` subtree; switch to a recursive removal or sweep
+  `sessions/` first, and sweep stale session sockets on start/stop too.
 - **Raw-mode terminal corruption:** always restore terminal state via
   `defer`, including on panic/signal.
 - **Leaked PTYs / zombie shells:** kill the process group on
