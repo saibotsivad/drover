@@ -22,7 +22,7 @@ class Agent:
 
     def __init__(
         self,
-        socket_path: str = "/run/orchestrator.sock",
+        socket_path: str = "/var/run/drover/sockets/orchestrator.sock",
         heartbeat_interval: float = 2.0,
         max_concurrent_commands: int | None = None,
         auto_heartbeat: bool = True,

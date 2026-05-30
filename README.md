@@ -164,7 +164,7 @@ Both standard and privileged micro-containers share the same lifecycle, socket p
 
 | | Standard | Privileged |
 |---|---|---|
-| `/run/orchestrator.sock` | Orchestrator command socket | Orchestrator command socket |
+| `/var/run/drover/sockets/orchestrator.sock` | Orchestrator command socket | Orchestrator command socket |
 | `/run/docker.sock` | No | Passes through host Docker socket |
 | gVisor runtime | Yes | No |
 
@@ -174,7 +174,7 @@ To bind-mount the host Docker socket into a privileged micro-container, the orch
 
 ### Socket Protocol
 
-The socket at `/run/orchestrator.sock` is the single bidirectional communication channel, carrying newline-delimited JSON. The guest agent connects once at startup and maintains a persistent connection.
+The socket at `/var/run/drover/sockets/orchestrator.sock` is the single bidirectional communication channel, carrying newline-delimited JSON. The orchestrator bind-mounts a per-container folder into the micro-container at `/var/run/drover/sockets/`; the guest agent connects once at startup and maintains a persistent connection.
 
 **Inbound (orchestrator-to-container):**
 

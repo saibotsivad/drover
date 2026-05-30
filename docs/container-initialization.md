@@ -39,7 +39,7 @@ POST /containers/{id}/resume
 At its most basic, the ready message can be sent from any language or shell:
 
 ```bash
-echo '{"type": "ready"}' | socat - UNIX-CONNECT:/run/orchestrator.sock
+echo '{"type": "ready"}' | socat - UNIX-CONNECT:/var/run/drover/sockets/orchestrator.sock
 ```
 
 Callers should poll `GET /containers/{id}` until `status` is `running` before

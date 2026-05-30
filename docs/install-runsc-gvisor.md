@@ -41,4 +41,4 @@ Both flags are required:
   connect to the per-container Unix socket that the orchestrator bind-mounts in.
   Without this flag, gVisor blocks all host Unix-socket traffic and every
   non-privileged container times out with `init_timeout` (the error surfaces
-  inside the container as `ConnectionRefusedError` on `/run/orchestrator.sock`).
+  inside the container as `ConnectionRefusedError` on `/var/run/drover/sockets/orchestrator.sock`).

@@ -13,7 +13,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--socket",
-        default="/run/orchestrator.sock",
+        default="/var/run/drover/sockets/orchestrator.sock",
         help="Path to the orchestrator Unix socket (default: %(default)s)",
     )
     parser.add_argument(

@@ -228,6 +228,11 @@ async def test_create_privileged_with_config(config, db, docker, sockets):
     # /var/run/docker.sock is bound from /run/user/$UID/docker.sock.
     binds = create_arg["HostConfig"]["Binds"]
     assert "/host/path/docker.sock:/run/docker.sock" in binds
+    # The per-container socket FOLDER (host path) is bound into the
+    # micro-container at the fixed guest socket directory.
+    assert (
+        f"/var/run/drover/sockets/{resp.id}:/var/run/drover/sockets" in binds
+    )
 
 
 async def test_create_docker_failure_transitions_to_error(
