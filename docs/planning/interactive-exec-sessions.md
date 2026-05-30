@@ -60,31 +60,63 @@ no head-of-line blocking.
 
 ### Layout
 
-Today the host socket dir (`SOCKET_DIR = /var/run/drover/sockets/`) holds one
-**file** per container, `{container_id}.sock`, bind-mounted as a file to
-`/run/orchestrator.sock` in the container. That changes to one **folder** per
-container:
+There are **three distinct path namespaces** here, and PR #139 cleared up a
+doc error that conflated them — worth keeping straight in this plan:
+
+- **Host path** — wherever `DROVER_SOCKETS_DIR` resolves to on the host (e.g.
+  `./sockets/`). It does **not** have to equal the in-container path. The
+  orchestrator discovers it at startup by self-inspecting its own container's
+  Docker `Mounts` (the `Source` of the mount whose `Destination` is
+  `/var/run/drover/sockets/`). This is `self._host_socket_dir` in
+  `container_manager.py`. It matters because Docker resolves *nested*
+  bind-mount sources against the **host** filesystem, so the bind *source* must
+  be the host path, not the orchestrator's own path.
+- **Orchestrator in-container path** — fixed `SOCKET_DIR =
+  /var/run/drover/sockets/`. Where the orchestrator actually creates the
+  socket files (`start_unix_server`).
+- **Guest in-container path** — also `/var/run/drover/sockets/`, where the
+  per-container thing is mounted. Same for every container.
+
+Today the orchestrator creates one **file** per container at its in-container
+path, `/var/run/drover/sockets/{container_id}.sock`, and bind-mounts it —
+using the **host** mirror `{host_socket_dir}/{container_id}.sock` as the bind
+source — to `/run/orchestrator.sock` in the guest. That changes to one
+**folder** per container:
 
 ```
-host:   /var/run/drover/sockets/{container_id}/        (bind-mounted as a dir)
-                                  ├── drover.sock        # main orch <-> guest
-                                  └── sessions/
-                                        └── {session-id}.sock   # one per session
+orchestrator in-container:  /var/run/drover/sockets/{container_id}/
+host (bind source):         {host_socket_dir}/{container_id}/
+       (both the same dir via the existing sockets-dir mount)
+                              ├── drover.sock        # main orch <-> guest
+                              └── sessions/
+                                    └── {session-id}.sock   # one per session
 
-guest:  /var/run/drover/sockets/                        (same path for every container)
-                                  ├── drover.sock
-                                  └── sessions/{session-id}.sock
+guest in-container:         /var/run/drover/sockets/   (same path every container)
+                              ├── drover.sock
+                              └── sessions/{session-id}.sock
 ```
 
-- The orchestrator bind-mounts the host **folder** `…/sockets/{container_id}/`
-  onto the in-container path `/var/run/drover/sockets/`. The container-side
-  path is identical for every container; only the host side is per-container.
+- The orchestrator creates the dir tree at its in-container path
+  `os.path.join(SOCKET_DIR, container_id)` and bind-mounts the **host** mirror
+  `os.path.join(self._host_socket_dir, container_id)` as the source onto the
+  guest in-container path `/var/run/drover/sockets/`. This is the exact same
+  host-vs-in-container split the single-file mount uses today (`container_id`
+  subdir instead of `{container_id}.sock`); the existing self-inspection
+  already supplies `self._host_socket_dir`, so **no new host-path discovery is
+  needed**.
+- The container-side mount path is identical for every container; only the host
+  side (and the orchestrator's in-container source dir) is per-container.
 - Because it is a **directory** mount (not a file mount), session socket files
   the orchestrator creates *after* container start appear inside the container
   automatically — this is precisely why the folder approach is required and a
   file mount could not work.
 - The guest's main socket moves from `/run/orchestrator.sock` to
   `/var/run/drover/sockets/drover.sock`.
+- The existing pre-create-before-start invariant inverts: today the file is
+  pre-created so the bind target is "a file rather than a directory"
+  (`container_manager.py` comment ~L370); now the per-container dir **and**
+  `drover.sock` must exist before Docker start so the bind target is a
+  populated directory the guest can immediately connect into.
 
 ### Roles and ordering
 
@@ -155,10 +187,15 @@ the guest process (`o+rx`); session sockets get the same world-rw `chmod`
   folder, not a file, and must connect to `…/drover.sock`. Confirm the
   executor default path change is the only client-visible break and document
   it loudly given the no-backwards-compat stance.
-- **Path constant ownership.** `/var/run/drover/sockets/` is currently a
-  host-only constant; it becomes a *shared* contract (the guest hardcodes the
-  same in-container path). Decide where that constant lives so orchestrator
-  and executor can't drift.
+- **Path constant ownership.** `/var/run/drover/sockets/` is today the
+  orchestrator's own in-container constant (`SOCKET_DIR` in `config.py`); the
+  guest currently only knows `/run/orchestrator.sock`. After this change the
+  in-container mount path becomes a *shared* contract — the executor must
+  hardcode the same `/var/run/drover/sockets/` mount root (plus `drover.sock`
+  and `sessions/`). Decide where that contract is defined so orchestrator and
+  executor can't drift. (The host path stays separate and self-discovered —
+  `DROVER_SOCKETS_DIR` / `self._host_socket_dir` — and is not part of this
+  shared in-container contract.)
 
 ## Axis 2 — Client ↔ orchestrator transport
 
