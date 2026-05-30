@@ -129,34 +129,64 @@ main socket. For an interactive session:
    `chmod` it) **before** announcing it, so it is listening when the guest
    dials.
 2. Orchestrator sends a `session_start` lifecycle message over `drover.sock`.
-3. Guest dials its in-container session path, allocates a PTY, launches the
-   shell, and pumps PTY⇆session-socket.
-4. On shell exit (or `session_close` from the orchestrator, or socket close),
-   the guest tears down the PTY; the orchestrator unlinks the session socket.
+3. Guest dials its in-container session path. For a **new** session it
+   allocates a PTY, launches the shell, and starts an in-memory terminal
+   emulator (see Axis 3 — likely `pyte`) that consumes the shell's PTY output
+   and maintains an authoritative screen model. For a **re-attach** to an
+   existing session (same `session_id`) it reuses the live PTY/shell/emulator.
+4. On (re)connection the guest first emits a **snapshot** rendered from the
+   emulator's current screen state, then streams live PTY output. This is the
+   payoff of the emulator: a reconnecting client gets the current screen in one
+   frame instead of a replay of the entire byte history.
+5. Detach vs. terminate are **distinct**:
+   - **Detach / pause** — the session socket closes (client gone) or the
+     orchestrator sends `session_detach`. The guest stops forwarding but keeps
+     the shell, PTY, and emulator state alive; the session survives, ready to be
+     re-attached. The orchestrator unlinks the now-dead session socket.
+   - **Terminate** — the shell exits on its own, or the orchestrator sends
+     `session_terminate`. The guest tears down the PTY and drops the emulator
+     state; the orchestrator unlinks the session socket and forgets the session.
+
+Pause/resume here is **client-detach scoped, not container-stop scoped**: a
+detached session lives only as long as its container keeps running, since the
+shell and emulator are in-guest state that die with the container (see Cleanup
+semantics).
 
 ### Lifecycle protocol (over the main `drover.sock`)
 
 New orch→guest message types alongside the existing `command`:
 
-- `session_start` — `{"type":"session_start","session_id":"…"}`. The guest
-  derives the path itself from its known mount root
-  (`/var/run/drover/sockets/sessions/{session_id}.sock`) rather than trusting
-  a host-side path, so host/container path differences never leak across.
-- `session_close` — `{"type":"session_close","session_id":"…"}`. Orchestrator
-  asks the guest to end a session (client disconnected, container stopping).
+- `session_start` — `{"type":"session_start","session_id":"…"}`. Start a new
+  session, or (if the guest already holds that `session_id`) re-attach to the
+  existing one. The guest derives the socket path itself from its known mount
+  root (`/var/run/drover/sockets/sessions/{session_id}.sock`) rather than
+  trusting a host-side path, so host/container path differences never leak
+  across. A separate `session_attach` could distinguish the two, but folding
+  re-attach into `session_start` keeps the protocol smaller — see open
+  questions.
+- `session_detach` — `{"type":"session_detach","session_id":"…"}`. Pause:
+  stop forwarding but keep the shell/PTY/emulator alive for later re-attach.
+  (Socket close alone also implies detach.)
+- `session_terminate` — `{"type":"session_terminate","session_id":"…"}`.
+  Kill the shell and drop the session entirely.
 
-The PTY byte stream and `resize`/`exit` messages flow over the **session
-socket**, not the main socket — framing for that is an Axis 3 detail.
+The PTY byte stream, the reconnect **snapshot** frame, and `resize`/`exit`
+messages flow over the **session socket**, not the main socket — framing for
+that is an Axis 3 detail.
 
 ### Cleanup semantics (extends `SocketManager`)
 
 - `SocketManager` is currently keyed by `container_id` (one server/writer/task
   each). It gains a session dimension: a set of session servers/connections
   per container. This is a real but contained refactor.
-- **On session end:** unlink the `{session-id}.sock` file; close the server.
+- **On detach:** unlink the `{session-id}.sock` file and close its server, but
+  the guest keeps the shell/PTY/emulator alive — so a later `session_start`
+  re-attach gets a fresh socket plus the snapshot.
+- **On terminate:** same socket cleanup, and the guest drops the session.
 - **On container stop (resume-able):** keep `drover.sock` (as today, for
-  resume); close and unlink all session sockets — sessions don't survive a
-  stop because the shell processes die with the container.
+  resume); close and unlink all session sockets and consider every session
+  gone — neither active nor *detached* sessions survive a stop, because the
+  shell processes and the in-guest emulator state die with the container.
 - **On destroy:** remove the whole `{container_id}/` directory tree.
 
 ### Permissions
@@ -174,6 +204,20 @@ the guest process (`o+rx`); session sockets get the same world-rw `chmod`
 - **Guest dial failure / race.** If the guest fails to dial after
   `session_start` (e.g. it's mid-restart), how does the orchestrator learn and
   surface the failure to the client? Need a timeout + error path, not a hang.
+- **Detached-session lifetime / GC.** A paused session holds a live shell and
+  emulator state in the guest with no client attached. What reaps an abandoned
+  detached session — a per-session idle timeout, an explicit
+  `session_terminate`, or the container's own idle reaper? And does a detached
+  session still count as activity for the container idle-timeout reaper?
+- **`session_start` vs `session_attach`.** Whether to overload `session_start`
+  for both create and re-attach (smaller protocol) or split them (clearer
+  intent, lets the guest reject a re-attach to an unknown id explicitly).
+- **Snapshot fidelity.** Visible screen only, or include scrollback? `pyte`'s
+  base `Screen` models just the visible grid; `HistoryScreen` adds scrollback
+  at a memory cost. Pick what "resume" should show.
+- **`pyte` as a dependency.** It breaks the executor's current zero-dependency
+  posture. Confirm that's acceptable, or whether a vendored/minimal emulator is
+  warranted.
 - **Resume + reconnect.** After a stop/resume the guest re-dials `drover.sock`;
   confirm no session state is assumed to survive and that the orchestrator
   rejects/cleans session sockets created before the stop.
@@ -220,9 +264,20 @@ interactive session.
 A new capability in `drover-executor`:
 - Allocate a PTY (`pty.openpty` / `os.openpty` + `create_subprocess_exec`, or
   `pty.fork`), launch the user's login shell (`$SHELL` or `/bin/sh`).
-- Pump shell→socket and socket→shell; apply window size via
-  `fcntl.ioctl(fd, termios.TIOCSWINSZ, ...)` on `resize`.
-- Report the shell's exit status; clean up the PTY on disconnect/cancel.
+- Feed the shell's PTY output through an **in-memory terminal emulator**
+  (candidate: `pyte`, a pure-Python VT-compatible `Screen`) which holds the
+  authoritative screen model. The emulator is the mechanism that makes
+  pause/resume cheap: on (re)attach the guest renders the current screen to a
+  **snapshot** frame and sends that, then streams live PTY output — no full
+  byte-history replay. `pyte` is pure stdlib-compatible Python, but it is a
+  **new external dependency**, which the executor has so far avoided (see the
+  executor README's "zero external dependencies" claim) — a deliberate
+  trade-off to weigh.
+- Apply window size to **both** the PTY (`fcntl.ioctl(fd, termios.TIOCSWINSZ,
+  …)`) and the emulator screen (`Screen.resize`) on `resize`, so the snapshot
+  stays correctly dimensioned.
+- Keep the shell/PTY/emulator alive across detach; tear them down only on
+  shell exit or `session_terminate`. Report the shell's exit status.
 - Exposed as an override point on `Agent` (e.g. `on_attach`/`on_interactive`)
   consistent with the existing `on_command` hook.
 
@@ -256,8 +311,11 @@ Add a capability key (proposed `interactive`, or `exec.interactive`) gated in
 - **Capability granularity:** a distinct `interactive` key, or fold it into
   `exec`? (Leaning distinct — an image may ship a command-only executor.)
 - **Session persistence:** are interactive sessions ephemeral-only, or do they
-  get a row like `commands` for listing/audit? (Leaning ephemeral — no DB
-  persistence, since there's nothing to replay.)
+  get a row like `commands` for listing/audit? (Leaning no DB persistence — but
+  note this is now nuanced: a session *is* resumable while its container runs,
+  via the in-guest emulator snapshot, even though that state is never written to
+  the DB and does not survive a container stop. So "ephemeral" means
+  DB-ephemeral and container-lifetime-scoped, not non-resumable.)
 - **Concurrency:** how many simultaneous interactive sessions per container,
   and how do they interact with `--max-concurrent-commands`?
 - **Idle/heartbeat:** does an attached session count as activity for the
