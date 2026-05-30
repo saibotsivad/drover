@@ -128,64 +128,105 @@ session:
    dials.
 2. Orchestrator sends a `session_start` lifecycle message over
    `orchestrator.sock`.
-3. Guest dials its in-container session path. For a **new** session it
-   allocates a PTY, launches the shell, and starts an in-memory terminal
-   emulator (see Axis 3 — likely `pyte`) that consumes the shell's PTY output
-   and maintains an authoritative screen model. For a **re-attach** to an
-   existing session (same `session_id`) it reuses the live PTY/shell/emulator.
-4. On (re)connection the guest first emits a **snapshot** rendered from the
-   emulator's current screen state, then streams live PTY output. This is the
-   payoff of the emulator: a reconnecting client gets the current screen in one
-   frame instead of a replay of the entire byte history.
-5. Detach vs. terminate are **distinct**:
-   - **Detach / pause** — the session socket closes (client gone) or the
-     orchestrator sends `session_detach`. The guest stops forwarding but keeps
-     the shell, PTY, and emulator state alive; the session survives, ready to be
-     re-attached. The orchestrator unlinks the now-dead session socket.
-   - **Terminate** — the shell exits on its own, or the orchestrator sends
-     `session_terminate`. The guest tears down the PTY and drops the emulator
-     state; the orchestrator unlinks the session socket and forgets the session.
+3. Guest dials its in-container session path, allocates a PTY, launches the
+   shell, and starts an in-memory terminal emulator (see Axis 3 — likely
+   `pyte`) that consumes the shell's PTY output and maintains an authoritative
+   screen model. The dial itself signals success; a guest that cannot honor an
+   interactive session instead replies `session_rejected` on the main socket
+   (the orchestrator remains the authoritative capability gate — see Lifecycle
+   protocol).
+4. The session begins **transmitting**. The guest feeds PTY output into the
+   emulator at all times (so the screen model is always current), and while
+   transmitting sends a full screen **snapshot** first, then streams live PTY
+   output over the session socket.
+5. **PTY flow control is decoupled from session liveness.** The session keeps
+   running from start to terminate regardless; what the orchestrator gates is
+   only whether the guest *transmits* PTY output, based on its view of the WS
+   client:
+   - On WS client disconnect → `session_pty_pause`: the guest stops sending
+     PTY output but keeps the shell, PTY, and emulator running and the screen
+     model current. The session socket stays open.
+   - On WS client (re)connect → `session_pty_resume`: the guest sends a full
+     snapshot, then resumes streaming live output.
+   The sole purpose of pause is to avoid flooding the orchestrator with PTY
+   bytes it cannot deliver to a disconnected client. Because the emulator is
+   updated even while paused, resume always reflects the true current screen,
+   no matter how much output the shell produced in the meantime.
+6. **Termination** ends the session:
+   - *Orchestrator-initiated:* `session_terminate` on the main socket → the
+     guest stops sending, tears down the shell/PTY/emulator, and replies
+     `session_terminated` on the main socket → the orchestrator then unlinks
+     the session socket file and closes its server. The ack ordering avoids
+     removing the socket out from under a still-writing guest.
+   - *Guest-initiated (shell exits):* the guest sends `exit` with the shell's
+     exit code over the session socket (so the client receives the code), which
+     the orchestrator observes to unlink the socket file and close the client
+     WS.
 
-Pause/resume here is **client-detach scoped, not container-stop scoped**: a
-detached session lives only as long as its container keeps running, since the
-shell and emulator are in-guest state that die with the container (see Cleanup
-semantics).
+A running session is **container-lifetime scoped**: it lives only as long as
+its container runs, since the shell and emulator are in-guest state that die
+with the container (see Cleanup semantics). "Paused" never means the session
+ended — only that PTY transmission is suspended; the session socket stays open
+from start to terminate.
 
-### Lifecycle protocol (over the main `orchestrator.sock`)
+### Lifecycle protocol — two planes
 
-New orch→guest message types alongside the existing `command`:
+Session traffic splits across two sockets:
 
-- `session_start` — `{"type":"session_start","session_id":"…"}`. Start a new
-  session, or (if the guest already holds that `session_id`) re-attach to the
-  existing one. The guest derives the socket path itself from its known mount
-  root (`/var/run/drover/sockets/sessions/{session_id}.sock`) rather than
-  trusting a host-side path, so host/container path differences never leak
-  across. A separate `session_attach` could distinguish the two, but folding
-  re-attach into `session_start` keeps the protocol smaller — see open
-  questions.
-- `session_detach` — `{"type":"session_detach","session_id":"…"}`. Pause:
-  stop forwarding but keep the shell/PTY/emulator alive for later re-attach.
-  (Socket close alone also implies detach.)
-- `session_terminate` — `{"type":"session_terminate","session_id":"…"}`.
-  Kill the shell and drop the session entirely.
+- **Control plane** — the main `orchestrator.sock`. Carries all session
+  control, as a single ordered channel per container.
+- **Data plane** — the per-session socket. A dumb bidirectional pipe carrying
+  PTY bytes both ways.
 
-The PTY byte stream, the reconnect **snapshot** frame, and `resize`/`exit`
-messages flow over the **session socket**, not the main socket — framing for
-that is an Axis 3 detail.
+**Control plane, orch → guest** (new types alongside the existing `command`):
+
+- `session_start` — `{"type":"session_start","session_id":"…"}`. Create the
+  session. The guest derives the socket path itself from its known mount root
+  (`/var/run/drover/sockets/sessions/{session_id}.sock`) rather than trusting a
+  host-side path, so host/container path differences never leak across. (There
+  is no separate "attach" — re-attach after a client reconnect is just
+  `session_pty_resume`; a session is started exactly once.)
+- `session_pty_pause` / `session_pty_resume` —
+  `{"type":"session_pty_pause","session_id":"…"}`. Gate PTY *transmission*
+  only; the session keeps running either way. `resume` makes the guest send a
+  fresh snapshot before resuming live output.
+- `session_terminate` — `{"type":"session_terminate","session_id":"…"}`. End
+  the session; the guest acks before the orchestrator removes the socket file.
+
+**Control plane, guest → orch:**
+
+- `session_rejected` —
+  `{"type":"session_rejected","session_id":"…","reason":"…"}`. The guest cannot
+  honor the session (e.g. a custom agent without PTY support). Success needs no
+  ack — the guest dialing the session socket is the signal.
+- `session_terminated` — `{"type":"session_terminated","session_id":"…"}`. Ack
+  of `session_terminate`; the orchestrator unlinks the socket only after this.
+
+**Data plane (session socket):** the snapshot frame, live PTY output, and the
+shell `exit` (with code) flow guest→client; `stdin` and `resize` flow
+client→guest. Framing (e.g. base64 vs binary frames) is an Axis 3 detail.
+
+Putting pause/resume on the control plane (not the session socket) keeps the
+session socket a dumb pipe; the alternative is noted in open questions. The
+default state of a freshly started session is transmitting.
 
 ### Cleanup semantics (extends `SocketManager`)
 
 - `SocketManager` is currently keyed by `container_id` (one server/writer/task
   each). It gains a session dimension: a set of session servers/connections
   per container. This is a real but contained refactor.
-- **On detach:** unlink the `{session-id}.sock` file and close its server, but
-  the guest keeps the shell/PTY/emulator alive — so a later `session_start`
-  re-attach gets a fresh socket plus the snapshot.
-- **On terminate:** same socket cleanup, and the guest drops the session.
+- **The session socket persists for the whole session** (start → terminate). A
+  paused session keeps its socket open — pause/resume never touch the socket
+  file, only whether the guest writes PTY bytes to it.
+- **On terminate (orch-initiated):** unlink `{session-id}.sock` and close its
+  server **only after** the guest's `session_terminated` ack, so the file is
+  never removed out from under a still-writing guest.
+- **On shell exit (guest-initiated):** the guest sends `exit` over the session
+  socket; the orchestrator then unlinks the socket and closes the client WS.
 - **On container stop (resume-able):** `close_socket` keeps the folder and
   `orchestrator.sock` (as today, for resume); it must additionally close and
   unlink all session sockets and consider every session gone — neither active
-  nor *detached* sessions survive a stop, because the shell processes and the
+  nor *paused* sessions survive a stop, because the shell processes and the
   in-guest emulator state die with the container.
 - **On destroy:** `destroy_socket` must remove the whole `{container_id}/`
   tree **including `sessions/`**. ⚠️ Today it does `unlink(orchestrator.sock)`
@@ -206,17 +247,20 @@ the guest process (`o+rx`); session sockets get the same world-rw `chmod`
   `{session-id}.sock` can linger in the folder. Need a sweep of `sessions/` on
   container start/stop/destroy (mirroring the existing stale-`.sock` unlink in
   `create_socket`).
-- **Guest dial failure / race.** If the guest fails to dial after
-  `session_start` (e.g. it's mid-restart), how does the orchestrator learn and
-  surface the failure to the client? Need a timeout + error path, not a hang.
-- **Detached-session lifetime / GC.** A paused session holds a live shell and
-  emulator state in the guest with no client attached. What reaps an abandoned
-  detached session — a per-session idle timeout, an explicit
-  `session_terminate`, or the container's own idle reaper? And does a detached
-  session still count as activity for the container idle-timeout reaper?
-- **`session_start` vs `session_attach`.** Whether to overload `session_start`
-  for both create and re-attach (smaller protocol) or split them (clearer
-  intent, lets the guest reject a re-attach to an unknown id explicitly).
+- **Guest start failure / race.** A guest that can't honor the session replies
+  `session_rejected`, but a guest that neither dials nor rejects (mid-restart,
+  hung) still needs a timeout + error path so the orchestrator doesn't hang or
+  leave the client waiting.
+- **Abandoned (paused) session GC.** A paused session keeps a live shell and
+  emulator running with no client attached. What reaps one whose client never
+  returns — a per-session idle timeout, an explicit operator/UI
+  `session_terminate`, or the container's own idle reaper? And does an
+  *unattached* running session still count as activity for the container
+  idle-timeout reaper (it has no heartbeat of its own)?
+- **Pause/resume plane.** Control plane (main socket, chosen here) vs. carrying
+  pause/resume on the session socket itself. Main socket keeps the session
+  socket a dumb pipe and gives one ordered control channel; revisit if that
+  ordering ever fights with data-plane timing.
 - **Snapshot fidelity.** Visible screen only, or include scrollback? `pyte`'s
   base `Screen` models just the visible grid; `HistoryScreen` adds scrollback
   at a memory cost. Pick what "resume" should show.
@@ -260,17 +304,21 @@ A new capability in `drover-executor`:
   `pty.fork`), launch the user's login shell (`$SHELL` or `/bin/sh`).
 - Feed the shell's PTY output through an **in-memory terminal emulator**
   (candidate: `pyte`, a pure-Python VT-compatible `Screen`) which holds the
-  authoritative screen model. The emulator is the mechanism that makes
-  pause/resume cheap: on (re)attach the guest renders the current screen to a
-  **snapshot** frame and sends that, then streams live PTY output — no full
-  byte-history replay. `pyte` is a **new external dependency**, which the
-  executor has so far avoided (see the executor README's "zero external
-  dependencies" claim) — a deliberate trade-off to weigh.
+  authoritative screen model. The emulator is fed **continuously**, even while
+  PTY transmission is paused, so the screen model is always current. That is
+  what makes resume cheap: on `session_pty_resume` the guest renders the
+  current screen to a **snapshot** frame and sends that, then streams live PTY
+  output — no full byte-history replay. `pyte` is a **new external
+  dependency**, which the executor has so far avoided (see the executor
+  README's "zero external dependencies" claim) — a deliberate trade-off to
+  weigh.
 - Apply window size to **both** the PTY (`fcntl.ioctl(fd, termios.TIOCSWINSZ,
   …)`) and the emulator screen (`Screen.resize`) on `resize`, so the snapshot
   stays correctly dimensioned.
-- Keep the shell/PTY/emulator alive across detach; tear them down only on
-  shell exit or `session_terminate`. Report the shell's exit status.
+- `session_pty_pause` stops writing PTY bytes to the session socket but keeps
+  reading/feeding the emulator; `session_pty_resume` re-sends the snapshot then
+  resumes. Tear the shell/PTY/emulator down only on shell exit or
+  `session_terminate`, and report the shell's exit status.
 - Exposed as an override point on `Agent` (e.g. `on_attach`/`on_interactive`)
   consistent with the existing `on_command` hook.
 
