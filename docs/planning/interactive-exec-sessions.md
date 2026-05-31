@@ -158,10 +158,13 @@ session:
      `session_terminated` on the main socket → the orchestrator then unlinks
      the session socket file and closes its server. The ack ordering avoids
      removing the socket out from under a still-writing guest.
-   - *Guest-initiated (shell exits):* the guest sends `exit` with the shell's
-     exit code over the session socket (so the client receives the code), which
-     the orchestrator observes to unlink the socket file and close the client
-     WS.
+   - *Guest-initiated (shell exits):* the shell's exit code travels back as
+     **normal PTY output over the session socket** — the orchestrator does not
+     parse or intercept the data plane, it just forwards bytes, so the client
+     sees the code the same way it sees any other terminal output. In addition,
+     the guest sends `session_pty_stop` with the shell's exit code over the
+     **main** socket; the orchestrator observes that to unlink the session
+     socket file and close the client WS.
 
 A running session is **container-lifetime scoped**: it lives only as long as
 its container runs, since the shell and emulator are in-guest state that die
@@ -201,10 +204,18 @@ Session traffic splits across two sockets:
   ack — the guest dialing the session socket is the signal.
 - `session_terminated` — `{"type":"session_terminated","session_id":"…"}`. Ack
   of `session_terminate`; the orchestrator unlinks the socket only after this.
+- `session_pty_stop` —
+  `{"type":"session_pty_stop","session_id":"…","exit_code":N}`. Sent when the
+  shell exits on its own. The orchestrator observes it to unlink the session
+  socket file and close the client WS. (The exit code is *also* visible to the
+  client as ordinary PTY output on the data plane — this main-socket message is
+  the orchestrator's own signal to tear down, not the client's notification.)
 
-**Data plane (session socket):** the snapshot frame, live PTY output, and the
-shell `exit` (with code) flow guest→client; `stdin` and `resize` flow
-client→guest. Framing (e.g. base64 vs binary frames) is an Axis 3 detail.
+**Data plane (session socket):** the snapshot frame and live PTY output flow
+guest→client; `stdin` and `resize` flow client→guest. The orchestrator never
+parses the data plane — it forwards bytes verbatim — so the shell's exit code
+arrives at the client as normal PTY output, not a distinct frame. Framing (e.g.
+base64 vs binary frames) is an Axis 3 detail.
 
 Putting pause/resume on the control plane (not the session socket) keeps the
 session socket a dumb pipe; the alternative is noted in open questions. The
@@ -221,8 +232,10 @@ default state of a freshly started session is transmitting.
 - **On terminate (orch-initiated):** unlink `{session-id}.sock` and close its
   server **only after** the guest's `session_terminated` ack, so the file is
   never removed out from under a still-writing guest.
-- **On shell exit (guest-initiated):** the guest sends `exit` over the session
-  socket; the orchestrator then unlinks the socket and closes the client WS.
+- **On shell exit (guest-initiated):** the guest sends `session_pty_stop` (with
+  the exit code) on the **main** socket; the orchestrator then unlinks the
+  session socket and closes the client WS. (The exit code also reaches the
+  client as ordinary PTY output on the data plane.)
 - **On container stop (resume-able):** `close_socket` keeps the folder and
   `orchestrator.sock` (as today, for resume); it must additionally close and
   unlink all session sockets and consider every session gone — neither active
