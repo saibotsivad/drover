@@ -1,5 +1,11 @@
-published: 0.0.3
+published: 0.0.4
 changes:
+- version: 0.0.4
+  date: '2026-05-30'
+  entries:
+  - bump: patch
+    description: |
+      Add `drover keygen` command to generate a random API key and its SHA-256 hash, printing ready-to-use server, header, and CLI forms.
 - version: 0.0.3
   date: '2026-05-27'
   entries:
