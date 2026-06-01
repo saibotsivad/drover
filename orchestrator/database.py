@@ -5,7 +5,7 @@ from typing import AsyncIterator
 import aiosqlite
 
 _SCHEMA = """\
-CREATE TABLE IF NOT EXISTS containers (
+CREATE TABLE IF NOT EXISTS workers (
     id              TEXT PRIMARY KEY,
     docker_id       TEXT,
     image           TEXT NOT NULL,
@@ -22,16 +22,16 @@ CREATE TABLE IF NOT EXISTS containers (
 
 CREATE TABLE IF NOT EXISTS commands (
     id              TEXT PRIMARY KEY,
-    container_id    TEXT NOT NULL,
+    worker_id       TEXT NOT NULL,
     command         TEXT NOT NULL,
     status          TEXT NOT NULL DEFAULT 'pending',
     exit_code       INTEGER,
     created_at      TEXT NOT NULL,
-    FOREIGN KEY (container_id) REFERENCES containers(id)
+    FOREIGN KEY (worker_id) REFERENCES workers(id)
 );
 
-CREATE INDEX IF NOT EXISTS idx_commands_container_id
-    ON commands(container_id);
+CREATE INDEX IF NOT EXISTS idx_commands_worker_id
+    ON commands(worker_id);
 
 CREATE TABLE IF NOT EXISTS command_messages (
     seq             INTEGER PRIMARY KEY AUTOINCREMENT,

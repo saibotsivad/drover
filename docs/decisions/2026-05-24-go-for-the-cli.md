@@ -6,7 +6,7 @@
 ## Context
 
 Drover needs a command-line client for the orchestrator REST API so
-operators can list images, manage micro-containers, and run exec commands
+operators can list images, manage workers, and run exec commands
 without hand-writing HTTP requests. The rest of the repository
 (orchestrator, executor, release tooling) is Python.
 

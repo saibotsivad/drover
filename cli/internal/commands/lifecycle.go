@@ -22,11 +22,11 @@ type lifecycleSpec struct {
 
 // action performs the initial transition request (POST create / POST stop /
 // DELETE destroy) and returns the orchestrator's transitional response.
-type action func(context.Context, *api.Client) (*api.ContainerResult, error)
+type action func(context.Context, *api.Client) (*api.WorkerResult, error)
 
 // runLifecycle runs the shared create/stop/destroy flow: perform the
 // transition, then (unless --no-wait) poll until the terminal state or the
-// orchestrator-advertised timeout, printing the resulting container JSON.
+// orchestrator-advertised timeout, printing the resulting worker JSON.
 func runLifecycle(cmd *cobra.Command, noWait bool, interval int, do action, spec lifecycleSpec) error {
 	client, err := clientFromEnv()
 	if err != nil {
@@ -51,8 +51,8 @@ func runLifecycle(cmd *cobra.Command, noWait bool, interval int, do action, spec
 	deadline := time.Now().Add(time.Duration(*res.TransitionTimeoutSeconds) * time.Second)
 
 	final, werr := wait.Wait(ctx, time.Duration(interval)*time.Second, deadline,
-		func(c context.Context) (*api.ContainerResult, error) { return client.GetContainer(c, id) },
-		func(r *api.ContainerResult) bool {
+		func(c context.Context) (*api.WorkerResult, error) { return client.GetWorker(c, id) },
+		func(r *api.WorkerResult) bool {
 			if spec.failOnError && r.Status == api.StatusError {
 				return true
 			}

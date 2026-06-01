@@ -15,16 +15,16 @@ from starlette.responses import JSONResponse, Response
 from orchestrator.auth import auth_middleware
 from orchestrator.config import DOCKER_SOCK, SOCKET_DIR, Config, load_config
 from orchestrator.connection_manager import ConnectionManager
-from orchestrator.container_manager import ContainerManager
+from orchestrator.worker_manager import WorkerManager
 from orchestrator.database import Database
 from orchestrator.docker_client import DockerClient
 from orchestrator.errors import (
-    ContainerNotFound,
-    ContainerStateConflict,
+    WorkerNotFound,
+    WorkerStateConflict,
     DockerError,
 )
 from orchestrator.log_capture import LogCaptureManager
-from orchestrator.routers import containers, images, websockets
+from orchestrator.routers import workers, images, websockets
 from orchestrator.socket_manager import SocketManager
 
 
@@ -161,14 +161,14 @@ def _detect_own_container_id() -> str | None:
 
 
 async def _reaper_loop(
-    config: Config, db: Database, container_manager: ContainerManager
+    config: Config, db: Database, worker_manager: WorkerManager
 ) -> None:
-    """Background task: stop containers that have exceeded their idle timeout."""
+    """Background task: stop workers that have exceeded their idle timeout."""
     while True:
         await asyncio.sleep(config.reaper_interval_seconds)
         try:
             rows = await db.fetchall(
-                "SELECT id, last_seen, timeout_seconds FROM containers "
+                "SELECT id, last_seen, timeout_seconds FROM workers "
                 "WHERE status = 'running' AND last_seen IS NOT NULL AND timeout_seconds > 0",
             )
             now = datetime.now(timezone.utc)
@@ -177,28 +177,28 @@ async def _reaper_loop(
                 elapsed = (now - last_seen).total_seconds()
                 if elapsed > row["timeout_seconds"]:
                     logger.info(
-                        "Container %s timed out (last_seen=%s, elapsed=%.1fs, timeout=%ds), stopping",
+                        "Worker %s timed out (last_seen=%s, elapsed=%.1fs, timeout=%ds), stopping",
                         row["id"],
                         row["last_seen"],
                         elapsed,
                         row["timeout_seconds"],
                     )
                     try:
-                        await container_manager.stop_container(row["id"])
-                    except ContainerStateConflict:
+                        await worker_manager.stop_worker(row["id"])
+                    except WorkerStateConflict:
                         # State changed between query and stop (e.g. already stopping)
                         logger.debug(
-                            "Container %s state changed before reaper could stop it",
+                            "Worker %s state changed before reaper could stop it",
                             row["id"],
                         )
-                    except ContainerNotFound:
+                    except WorkerNotFound:
                         logger.debug(
-                            "Container %s not found when reaper tried to stop it",
+                            "Worker %s not found when reaper tried to stop it",
                             row["id"],
                         )
                     except Exception:
                         logger.exception(
-                            "Reaper failed to stop container %s", row["id"]
+                            "Reaper failed to stop worker %s", row["id"]
                         )
         except asyncio.CancelledError:
             raise
@@ -212,7 +212,7 @@ async def _resolve_host_docker_sock(
     """Return the host-side path of the Docker daemon socket.
 
     The orchestrator passes this string to Docker as the bind SOURCE
-    when launching privileged micro-containers.  Docker resolves bind
+    when launching privileged workers.  Docker resolves bind
     sources against the host filesystem, not the orchestrator's view
     of its own filesystem, so the in-container path
     (``/var/run/docker.sock``) is wrong when the host socket lives
@@ -251,7 +251,7 @@ async def _resolve_host_docker_sock(
         "Falling back to %s as the host Docker socket path. This only "
         "happens to be correct on rootful Docker; on rootless Docker the "
         "host socket lives at /run/user/$UID/docker.sock and privileged "
-        "container launches will receive an empty directory at /run/docker.sock.",
+        "worker launches will receive an empty directory at /run/docker.sock.",
         DOCKER_SOCK,
     )
     return DOCKER_SOCK
@@ -260,10 +260,10 @@ async def _resolve_host_docker_sock(
 async def _resolve_host_socket_dir(
     docker: DockerClient, own_id: str | None
 ) -> str:
-    """Return the host-side path of the per-container socket directory.
+    """Return the host-side path of the per-worker socket directory.
 
     Docker resolves bind-mount sources against the host filesystem, so
-    when the orchestrator bind-mounts a socket file into a micro-container
+    when the orchestrator bind-mounts a socket file into a worker
     it must use the HOST path of the socket, not the in-container path
     (SOCKET_DIR).  We discover the right value by self-inspecting: look
     for the mount whose Destination is SOCKET_DIR and return its Source.
@@ -283,7 +283,7 @@ async def _resolve_host_socket_dir(
                         return source
             logger.warning(
                 "Self-inspect succeeded but no mount with destination %s "
-                "was found; micro-container socket binds may fail.",
+                "was found; worker socket binds may fail.",
                 SOCKET_DIR,
             )
         except Exception:
@@ -315,10 +315,10 @@ def _gvisor_has_host_uds(runtime_args: list) -> bool:
 async def _warn_if_gvisor_misconfigured(docker: DockerClient) -> None:
     """Log a warning if runsc is registered without the --host-uds flag.
 
-    Non-privileged micro-containers run under gVisor (runsc).  Without
+    Non-privileged workers run under gVisor (runsc).  Without
     ``--host-uds=all`` (or ``open``) in the runtime's args, gVisor blocks
-    the guest agent from connecting to the bind-mounted orchestrator socket
-    and every container times out with ``init_timeout``.  We detect this at
+    the worker agent from connecting to the bind-mounted orchestrator socket
+    and every worker times out with ``init_timeout``.  We detect this at
     startup so operators see the root cause immediately rather than chasing
     cryptic ``ConnectionRefusedError`` logs from inside the container.
     """
@@ -333,8 +333,8 @@ async def _warn_if_gvisor_misconfigured(docker: DockerClient) -> None:
         else:
             logger.warning(
                 "gVisor (runsc) runtime is registered but '--host-uds=all' is absent "
-                "from its runtimeArgs (current args: %s). Non-privileged containers "
-                "will fail with ConnectionRefusedError when the guest agent tries to "
+                "from its runtimeArgs (current args: %s). Non-privileged workers "
+                "will fail with ConnectionRefusedError when the worker agent tries to "
                 "connect to the orchestrator socket. Add '--host-uds=all' to the runsc "
                 "runtimeArgs in your Docker daemon config and restart Docker. "
                 "See docs/install-runsc-gvisor.md for setup instructions.",
@@ -391,39 +391,39 @@ async def lifespan(app: FastAPI):
     host_docker_sock = await _resolve_host_docker_sock(docker, own_id)
     host_socket_dir = await _resolve_host_socket_dir(docker, own_id)
 
-    container_manager = ContainerManager(
+    worker_manager = WorkerManager(
         config, db, docker, sockets, log_capture,
         host_docker_sock=host_docker_sock,
         host_socket_dir=host_socket_dir,
     )
-    await container_manager.sync_containers()
+    await worker_manager.sync_workers()
 
-    async def _handle_container_done(container_id: str) -> None:
+    async def _handle_worker_done(worker_id: str) -> None:
         try:
-            await container_manager.stop_container(container_id)
-            logger.info("Container %s stopped via done signal", container_id)
-        except (ContainerStateConflict, ContainerNotFound):
+            await worker_manager.stop_worker(worker_id)
+            logger.info("Worker %s stopped via done signal", worker_id)
+        except (WorkerStateConflict, WorkerNotFound):
             pass
         except Exception:
             logger.exception(
-                "Failed to stop container %s after done signal", container_id
+                "Failed to stop worker %s after done signal", worker_id
             )
 
-    sockets.set_done_callback(_handle_container_done)
-    sockets.set_ready_callback(container_manager.on_container_ready)
+    sockets.set_done_callback(_handle_worker_done)
+    sockets.set_ready_callback(worker_manager.on_worker_ready)
 
     app.state.config = config
     app.state.db = db
     app.state.docker = docker
     app.state.sockets = sockets
     app.state.log_capture = log_capture
-    app.state.container_manager = container_manager
+    app.state.worker_manager = worker_manager
     app.state.connection_manager = connection_manager
     app.state.orchestrator_docker_id = own_id
     app.state.host_docker_sock = host_docker_sock
 
     reaper_task = asyncio.create_task(
-        _reaper_loop(config, db, container_manager)
+        _reaper_loop(config, db, worker_manager)
     )
 
     yield
@@ -434,7 +434,7 @@ async def lifespan(app: FastAPI):
     except asyncio.CancelledError:
         pass
 
-    await container_manager.shutdown()
+    await worker_manager.shutdown()
     await log_capture.shutdown()
     await sockets.close_all()
     await docker.close()
@@ -443,7 +443,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Drover Orchestrator", lifespan=lifespan)
 app.include_router(images.router)
-app.include_router(containers.router)
+app.include_router(workers.router)
 app.include_router(websockets.router)
 
 

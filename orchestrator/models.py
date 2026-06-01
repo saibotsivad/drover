@@ -22,10 +22,10 @@ _ENV_VALUE_MAX_LEN = 32_768  # 32 KB
 _TIMEOUT_MAX = 86_400
 
 
-# --- Container models ---
+# --- Worker models ---
 
 
-class ContainerStatus(str, Enum):
+class WorkerStatus(str, Enum):
     initializing = "initializing"
     running = "running"
     stopping = "stopping"
@@ -36,7 +36,7 @@ class ContainerStatus(str, Enum):
     error = "error"
 
 
-class CreateContainerRequest(BaseModel):
+class CreateWorkerRequest(BaseModel):
     image: str = Field(max_length=_IMAGE_MAX_LEN)
     privileged: bool = False
     env: dict[str, str] = Field(default_factory=dict)
@@ -90,11 +90,11 @@ class CreateContainerRequest(BaseModel):
         return v
 
 
-class ContainerResponse(BaseModel):
+class WorkerResponse(BaseModel):
     id: str
     image: str
     privileged: bool
-    status: ContainerStatus
+    status: WorkerStatus
     label: str | None = None
     timeout_seconds: int
     created_at: datetime
@@ -201,12 +201,12 @@ class ImageDetail(ImageSummary):
 
 # --- Capabilities ---
 
-# Image label advertising the capabilities a container supports, as a
+# Image label advertising the capabilities a worker supports, as a
 # comma-separated list of keys.  See docs/capabilities.md.
 CAPABILITIES_LABEL = "drover.capabilities"
 
-# Capability key: the container accepts exec requests over the orchestrator
-# socket and runs them via the guest agent.
+# Capability key: the worker accepts exec requests over the orchestrator
+# socket and runs them via the worker agent.
 CAPABILITY_EXEC = "exec"
 
 

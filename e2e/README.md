@@ -11,7 +11,7 @@ chunk-file format — see [`docs/full-e2e-suite.md`](../docs/full-e2e-suite.md).
 
 - Docker with Compose v2 (`docker compose`).
 - `jq` and `curl` on `PATH`.
-- For test 04 (non-privileged containers under gVisor): `runsc` installed
+- For test 04 (non-privileged workers under gVisor): `runsc` installed
   and registered in Docker with `--host-uds=all` — see
   [`docs/install-runsc-gvisor.md`](../docs/install-runsc-gvisor.md). If
   you genuinely want to skip test 04, set `E2E_ALLOW_MISSING_RUNSC=1`;
@@ -62,7 +62,7 @@ Every `./e2e/run.sh test` invocation creates a fresh run directory under
 `e2e/logs/<run-id>/` containing:
 
 - `summary.log` — one line per step, plus a final `RESULT:` marker.
-- One subdirectory per test (e.g. `03-privileged-container/`) holding a
+- One subdirectory per test (e.g. `03-privileged-worker/`) holding a
   self-contained chunk file per step.
 
 `./e2e/run.sh ci` additionally dumps full container logs to disk just
@@ -70,8 +70,8 @@ before tear-down, so they survive the workflow's post-test steps:
 
 - `e2e/logs/orchestrator.log`, `e2e/logs/webapp.log` — full logs of the
   long-running services.
-- `e2e/logs/microcontainers/<docker-id>.log` — one file per Docker
-  micro-container the orchestrator spawned during the run. The
+- `e2e/logs/workers/<docker-id>.log` — one file per Docker
+  worker the orchestrator spawned during the run. The
   orchestrator's own log lines reference these by `docker=<short-id>`
   so you can cross-reference.
 

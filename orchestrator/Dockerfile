@@ -20,8 +20,8 @@ COPY --from=builder /install /usr/local
 
 # Create non-root user and the fixed Drover paths.  /var/lib/drover/data
 # holds the SQLite database (and future config); /var/lib/drover/logs is
-# where DROVER_ENABLE_CONTAINER_LOGS=true writes per-container capture;
-# /var/run/drover/sockets holds the per-micro-container Unix sockets.
+# where DROVER_ENABLE_WORKER_LOGS=true writes per-worker capture;
+# /var/run/drover/sockets holds the per-worker Unix sockets.
 RUN groupadd -g 1000 orchestrator && \
     useradd -u 1000 -g orchestrator -m orchestrator && \
     mkdir -p /var/lib/drover/data /var/lib/drover/logs /var/run/drover/sockets && \

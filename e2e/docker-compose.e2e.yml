@@ -6,7 +6,7 @@
 # any per-run setup.
 #
 # Notes:
-# - The per-micro-container socket directory is bind-mounted at the
+# - The per-worker socket directory is bind-mounted at the
 #   fixed in-container path /var/run/drover/sockets on both sides.
 #   `e2e/run.sh up` creates that host directory (with sudo) so the
 #   orchestrator user can write to it. The path must match on both
@@ -31,9 +31,9 @@ services:
     environment:
       PRIVILEGED_IMAGE: drover-builder:e2e
       LOG_LEVEL: INFO
-      # Capture container stdout/stderr to disk so the e2e suite's
+      # Capture worker stdout/stderr to disk so the e2e suite's
       # /logs/files assertions exercise the real on-disk path.
-      DROVER_ENABLE_CONTAINER_LOGS: "true"
+      DROVER_ENABLE_WORKER_LOGS: "true"
       DROVER_API_KEY: 78bb43a35e23d69a38ec1b64886b858607ec407fa916f7e0390e0a015a0ba031
     volumes:
       - drover-data:/var/lib/drover/data

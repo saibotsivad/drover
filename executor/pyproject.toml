@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "drover-executor"
 version = "0.1.0"
-description = "Guest-agent library for Drover micro-containers"
+description = "Worker-agent library for Drover workers"
 requires-python = ">=3.11"
 dependencies = []
 

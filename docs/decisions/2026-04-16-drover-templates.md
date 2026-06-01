@@ -5,13 +5,13 @@
 
 ## Context
 
-Drover's current workflow requires pre-built images (carrying the `drover.managed=true` and `drover.name=<name>` labels) to launch micro-containers. This creates friction for users who want to customize their execution environment: they must build a Docker image from primitives with the privileged container, and then reference it via the API.
+Drover's current workflow requires pre-built images (carrying the `drover.managed=true` and `drover.name=<name>` labels) to launch workers. This creates friction for users who want to customize their execution environment: they must build a Docker image from primitives with the privileged container, and then reference it via the API.
 
 A common use case is iterative environment setup: install dependencies, configure tools, verify the setup works, then reuse that configured state for subsequent work. Docker supports this via `docker commit`, which creates a new image from a container's filesystem state. We want to expose this capability through Drover's API as a **template** system.
 
 Key constraints and requirements:
 
-1. **Predictable entry point**: For the orchestrator to reliably start containers, the guest agent must be at a known location.
+1. **Predictable entry point**: For the orchestrator to reliably start containers, the worker agent must be at a known location.
 
 2. **Single-level inheritance**: Templates should be simple. Once a container is converted to a template, that template cannot itself be templatized. This prevents deep inheritance chains that are hard to reason about and debug.
 
@@ -25,13 +25,13 @@ We will implement a **single-level container template** system with the followin
 
 ### 1. Standardized Agent Location
 
-All Drover micro-container images (both base images and templates) **must** provide an executable at `/usr/local/bin/drover`. This executable will be invoked as the container's main process (`Cmd` in Docker API terms).
+All Drover worker images (both base images and templates) **must** provide an executable at `/usr/local/bin/drover`. This executable will be invoked as the worker's main process (`Cmd` in Docker API terms).
 
 The reference implementation will be the [`drover_executor`](../../executor/README.md) Python package from this repository, but custom implementations are permitted as long as they conform to the socket protocol.
 
 ### 2. Template Creation Workflow
 
-A template is created from an existing micro-container via a new `create-template` API endpoint:
+A template is created from an existing worker via a new `create-template` API endpoint:
 
 ```
 POST /containers/{id}/template

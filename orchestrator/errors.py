@@ -1,4 +1,4 @@
-"""Shared exception classes for container, Docker, and log-capture layers.
+"""Shared exception classes for worker, Docker, and log-capture layers.
 
 All exception classes are defined here to avoid circular import issues and
 to provide a single source of truth for error handling. The base classes
@@ -7,8 +7,8 @@ any subclass into an ``HTTPException`` uniformly.
 """
 
 
-class ContainerError(Exception):
-    """Base exception for container operations."""
+class WorkerError(Exception):
+    """Base exception for worker operations."""
 
     def __init__(self, status_code: int, detail: str) -> None:
         self.status_code = status_code
@@ -29,57 +29,57 @@ class ImageNotFoundError(DockerError):
     """Raised when a Docker image is not found."""
 
 
-class ContainerNotFoundError(DockerError):
+class WorkerNotFoundError(DockerError):
     """Raised when a Docker container is not found."""
 
 
-class ContainerConflictError(DockerError):
-    """Raised on container state conflicts (e.g. already started/stopped)."""
+class WorkerConflictError(DockerError):
+    """Raised on worker state conflicts (e.g. already started/stopped)."""
 
 
-class ContainerNotFound(ContainerError):
-    def __init__(self, container_id: str) -> None:
-        super().__init__(404, f"Container '{container_id}' not found")
+class WorkerNotFound(WorkerError):
+    def __init__(self, worker_id: str) -> None:
+        super().__init__(404, f"Worker '{worker_id}' not found")
 
 
-class ContainerStateConflict(ContainerError):
-    def __init__(self, container_id: str, current: str, action: str) -> None:
+class WorkerStateConflict(WorkerError):
+    def __init__(self, worker_id: str, current: str, action: str) -> None:
         super().__init__(
             409,
-            f"Cannot {action} container '{container_id}' in state '{current}'",
+            f"Cannot {action} worker '{worker_id}' in state '{current}'",
         )
 
 
-class PrivilegedNotConfigured(ContainerError):
+class PrivilegedNotConfigured(WorkerError):
     def __init__(self) -> None:
         super().__init__(
             400,
-            "Privileged containers are not configured (PRIVILEGED_IMAGE is unset)",
+            "Privileged workers are not configured (PRIVILEGED_IMAGE is unset)",
         )
 
 
-class ImageNotFound(ContainerError):
+class ImageNotFound(WorkerError):
     def __init__(self, image: str) -> None:
         super().__init__(404, f"Image '{image}' not found")
 
 
-class ContainerNotConnected(ContainerError):
-    def __init__(self, container_id: str) -> None:
+class WorkerNotConnected(WorkerError):
+    def __init__(self, worker_id: str) -> None:
         super().__init__(
             409,
-            f"Container '{container_id}' has no active guest agent connection",
+            f"Worker '{worker_id}' has no active worker agent connection",
         )
 
 
-class CommandNotFound(ContainerError):
-    def __init__(self, container_id: str, command_id: str) -> None:
+class CommandNotFound(WorkerError):
+    def __init__(self, worker_id: str, command_id: str) -> None:
         super().__init__(
             404,
-            f"Command '{command_id}' not found on container '{container_id}'",
+            f"Command '{command_id}' not found on worker '{worker_id}'",
         )
 
 
-class CapabilityNotSupported(ContainerError):
+class CapabilityNotSupported(WorkerError):
     """Raised when a request needs a capability the image does not declare."""
 
     def __init__(self, capability: str) -> None:
@@ -89,18 +89,18 @@ class CapabilityNotSupported(ContainerError):
         )
 
 
-class LoggingNotEnabled(ContainerError):
+class LoggingNotEnabled(WorkerError):
     """Raised when log-file endpoints are hit but capture is disabled."""
 
     def __init__(self) -> None:
         super().__init__(
             409,
-            "Container log retention is disabled "
-            "(DROVER_ENABLE_CONTAINER_LOGS is not set to \"true\")",
+            "Worker log retention is disabled "
+            "(DROVER_ENABLE_WORKER_LOGS is not set to \"true\")",
         )
 
 
-class LogFileNotFound(ContainerError):
+class LogFileNotFound(WorkerError):
     """Raised when a requested captured log file does not exist."""
 
     def __init__(self, filename: str) -> None:

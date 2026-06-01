@@ -1,4 +1,4 @@
-"""Drover executor — guest-agent library for Drover micro-containers."""
+"""Drover executor — worker-agent library for Drover workers."""
 
 from drover_executor.agent import Agent
 

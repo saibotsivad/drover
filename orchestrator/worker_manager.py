@@ -1,14 +1,14 @@
-"""Container lifecycle orchestration.
+"""Worker lifecycle orchestration.
 
 Sits between the REST API layer, the SQLite database, and the Docker
-client.  All container state transitions flow through this module.
+client.  All worker state transitions flow through this module.
 
-Both initialization and resume are asynchronous: ``create_container`` and
-``resume_container`` insert / update the DB row (status ``initializing`` or
+Both initialization and resume are asynchronous: ``create_worker`` and
+``resume_worker`` insert / update the DB row (status ``initializing`` or
 ``resuming`` respectively) and return immediately.  A background task
-performs the Docker create/start work, and the container transitions to
-``running`` only once the guest agent sends a ``ready`` message.  A
-watchdog task fails the container to ``error`` if the transition does not
+performs the Docker create/start work, and the worker transitions to
+``running`` only once the worker agent sends a ``ready`` message.  A
+watchdog task fails the worker to ``error`` if the transition does not
 complete within ``init_timeout_seconds``.
 """
 
@@ -23,13 +23,13 @@ from orchestrator.docker_client import DockerClient
 from orchestrator.errors import (
     CapabilityNotSupported,
     CommandNotFound,
-    ContainerNotConnected,
-    ContainerNotFound,
-    ContainerNotFoundError,
-    ContainerStateConflict,
+    WorkerNotConnected,
+    WorkerNotFound,
+    WorkerNotFoundError,
+    WorkerStateConflict,
     ImageNotFound,
     PrivilegedNotConfigured,
-    ContainerConflictError,
+    WorkerConflictError,
 )
 from orchestrator.id_gen import generate_id
 from orchestrator.log_capture import LogCaptureManager
@@ -39,9 +39,9 @@ from orchestrator.models import (
     CommandMessage,
     CommandStatus,
     CommandSummary,
-    ContainerResponse,
-    ContainerStatus,
-    CreateContainerRequest,
+    WorkerResponse,
+    WorkerStatus,
+    CreateWorkerRequest,
     ExecStatusResponse,
     parse_capabilities,
 )
@@ -65,12 +65,12 @@ _DOCKER_STOP_TIMEOUT = 10
 
 def _row_to_response(
     row, transition_timeout_seconds: int | None = None
-) -> ContainerResponse:
-    return ContainerResponse(
+) -> WorkerResponse:
+    return WorkerResponse(
         id=row["id"],
         image=row["image"],
         privileged=bool(row["privileged"]),
-        status=ContainerStatus(row["status"]),
+        status=WorkerStatus(row["status"]),
         label=row["label"],
         timeout_seconds=row["timeout_seconds"],
         created_at=row["created_at"],
@@ -81,7 +81,7 @@ def _row_to_response(
     )
 
 
-def _docker_state_to_status(inspection: dict) -> ContainerStatus | None:
+def _docker_state_to_status(inspection: dict) -> WorkerStatus | None:
     """Map Docker inspect state to our status enum.
 
     Returns None for Docker states that don't map cleanly (e.g. "created",
@@ -89,9 +89,9 @@ def _docker_state_to_status(inspection: dict) -> ContainerStatus | None:
     """
     docker_status = inspection.get("State", {}).get("Status", "")
     if docker_status == "running":
-        return ContainerStatus.running
+        return WorkerStatus.running
     if docker_status in ("exited", "dead", "paused"):
-        return ContainerStatus.stopped
+        return WorkerStatus.stopped
     return None
 
 
@@ -100,7 +100,7 @@ def _docker_state_to_status(inspection: dict) -> ContainerStatus | None:
 # ---------------------------------------------------------------------------
 
 
-class ContainerManager:
+class WorkerManager:
     def __init__(
         self,
         config: Config,
@@ -123,7 +123,7 @@ class ContainerManager:
         # Docker with a relative sockets directory).
         self._host_docker_sock = host_docker_sock
         self._host_socket_dir = host_socket_dir
-        # In-flight background initialization tasks keyed by container id.
+        # In-flight background initialization tasks keyed by worker id.
         # Used for cancellation on ready-receipt and on orchestrator shutdown.
         self._init_tasks: dict[str, asyncio.Task] = {}
         self._init_watchdogs: dict[str, asyncio.Task] = {}
@@ -144,29 +144,29 @@ class ContainerManager:
         self._init_tasks.clear()
         self._init_watchdogs.clear()
 
-    async def on_container_ready(self, container_id: str) -> None:
+    async def on_worker_ready(self, worker_id: str) -> None:
         """Cancel the init/resume watchdog after a ``ready`` message is received.
 
         Invoked by ``SocketManager`` via the ready callback.  The DB status
         has already been transitioned from ``initializing`` or ``resuming``
         to ``running`` by the socket manager before this is called.
         """
-        watchdog = self._init_watchdogs.pop(container_id, None)
+        watchdog = self._init_watchdogs.pop(worker_id, None)
         if watchdog and not watchdog.done():
             watchdog.cancel()
 
     # -- startup sync -------------------------------------------------------
 
-    async def sync_containers(self) -> None:
-        """Reconcile all non-terminal containers against Docker state.
+    async def sync_workers(self) -> None:
+        """Reconcile all non-terminal workers against Docker state.
 
         Called once at startup to handle the case where the orchestrator
-        crashed or restarted while containers were running.  For each
-        non-destroyed container we inspect Docker and:
+        crashed or restarted while workers were running.  For each
+        non-destroyed worker we inspect Docker and:
           - mark it destroyed if the Docker container is gone,
           - update the DB status if Docker disagrees (and we're not
             mid-transition),
-          - re-establish a socket listener for containers still running.
+          - re-establish a socket listener for workers still running.
 
         Rows in ``initializing`` or ``resuming`` are skipped during
         reconciliation because the background task that owned them was
@@ -176,16 +176,16 @@ class ContainerManager:
         ``error`` with code ``orchestrator_crash``.
         """
         rows = await self._db.fetchall(
-            "SELECT id, docker_id, status, socket_path FROM containers "
+            "SELECT id, docker_id, status, socket_path FROM workers "
             "WHERE status NOT IN ('destroyed', 'error')",
         )
         if not rows:
             return
 
-        logger.info("Startup sync: reconciling %d non-terminal containers", len(rows))
+        logger.info("Startup sync: reconciling %d non-terminal workers", len(rows))
 
         for row in rows:
-            container_id = row["id"]
+            worker_id = row["id"]
             docker_id = row["docker_id"]
             db_status = row["status"]
 
@@ -195,7 +195,7 @@ class ContainerManager:
                 continue
 
             try:
-                inspection = await self._docker.inspect_container(docker_id)
+                inspection = await self._docker.inspect_worker(docker_id)
                 mapped = _docker_state_to_status(inspection)
 
                 if (
@@ -204,90 +204,90 @@ class ContainerManager:
                     and db_status not in ("stopping", "resuming", "destroying")
                 ):
                     await self._db.execute_insert(
-                        "UPDATE containers SET status = ? WHERE id = ?",
-                        (mapped.value, container_id),
+                        "UPDATE workers SET status = ? WHERE id = ?",
+                        (mapped.value, worker_id),
                     )
                     logger.info(
-                        "Startup sync: container %s status %s -> %s",
-                        container_id,
+                        "Startup sync: worker %s status %s -> %s",
+                        worker_id,
                         db_status,
                         mapped.value,
                     )
                     db_status = mapped.value
 
                 # Re-establish socket listener and log capture for
-                # containers still running.
+                # workers still running.
                 if db_status == "running":
-                    await self._sockets.create_socket(container_id)
-                    cursor = self._logs.read_cursor(container_id)
+                    await self._sockets.create_socket(worker_id)
+                    cursor = self._logs.read_cursor(worker_id)
                     try:
                         await self._logs.start(
-                            container_id, docker_id, since=cursor
+                            worker_id, docker_id, since=cursor
                         )
                     except Exception:
                         logger.exception(
                             "Startup sync: log capture failed to resume for %s",
-                            container_id,
+                            worker_id,
                         )
                     logger.info(
-                        "Startup sync: re-established socket for container %s",
-                        container_id,
+                        "Startup sync: re-established socket for worker %s",
+                        worker_id,
                     )
 
-            except ContainerNotFoundError:
+            except WorkerNotFoundError:
                 await self._db.execute_insert(
-                    "UPDATE containers SET status = 'destroyed' WHERE id = ?",
-                    (container_id,),
+                    "UPDATE workers SET status = 'destroyed' WHERE id = ?",
+                    (worker_id,),
                 )
                 # Belt-and-braces: ensure the on-disk capture directory is
                 # cleaned up for rows the reconciler just marked destroyed.
                 try:
-                    await self._logs.discard(container_id)
+                    await self._logs.discard(worker_id)
                 except Exception:
                     logger.exception(
                         "Startup sync: failed to discard log capture for %s",
-                        container_id,
+                        worker_id,
                     )
                 logger.warning(
-                    "Startup sync: container %s not found in Docker, marked destroyed",
-                    container_id,
+                    "Startup sync: worker %s not found in Docker, marked destroyed",
+                    worker_id,
                 )
             except Exception:
                 logger.exception(
-                    "Startup sync: failed to reconcile container %s", container_id
+                    "Startup sync: failed to reconcile worker %s", worker_id
                 )
 
-        # Any container still in ``initializing`` or ``resuming`` was
+        # Any worker still in ``initializing`` or ``resuming`` was
         # interrupted by the restart.  Force-remove the Docker container if
         # one was created and transition to ``error`` with code
         # ``orchestrator_crash``.
         stuck_rows = await self._db.fetchall(
-            "SELECT id, docker_id, status FROM containers "
+            "SELECT id, docker_id, status FROM workers "
             "WHERE status IN ('initializing', 'resuming')",
         )
         for row in stuck_rows:
-            container_id = row["id"]
+            worker_id = row["id"]
             docker_id = row["docker_id"]
             source_status = row["status"]
             await self._fail_init(
-                container_id, "orchestrator_crash", docker_id, source_status
+                worker_id, "orchestrator_crash", docker_id, source_status
             )
             logger.warning(
-                "Startup sync: container %s was stuck in %s, marked error",
-                container_id,
+                "Startup sync: worker %s was stuck in %s, marked error",
+                worker_id,
                 source_status,
             )
 
     # -- create -------------------------------------------------------------
 
-    async def create_container(self, req: CreateContainerRequest) -> ContainerResponse:
-        """Create a container row and schedule background Docker initialization.
+    async def create_worker(self, req: CreateWorkerRequest) -> WorkerResponse:
+        """Create a worker row and schedule background Docker initialization.
 
         Returns immediately with status ``initializing``.  The background
         task creates the socket, creates and starts the Docker container,
-        and the container transitions to ``running`` only when the guest
+        and the worker transitions to ``running`` only when the worker
         agent sends a ``ready`` message.  A watchdog task transitions the
-        container to ``error`` if initialization exceeds the configured
+        worker to ``error`` if initialization exceeds the configured
         timeout.
         """
         # 1. Validate image / privileged config
@@ -306,15 +306,15 @@ class ContainerManager:
             image = matches[0]["Id"]
 
         # 2. Generate ID and insert DB row in initializing state
-        container_id = generate_id()
+        worker_id = generate_id()
         now = _now_iso()
         await self._db.execute_insert(
-            """INSERT INTO containers
+            """INSERT INTO workers
                (id, docker_id, image, privileged, status, socket_path,
                 label, timeout_seconds, last_seen, created_at, error_code)
                VALUES (?, NULL, ?, ?, 'initializing', NULL, ?, ?, ?, ?, NULL)""",
             (
-                container_id,
+                worker_id,
                 req.image,
                 int(req.privileged),
                 req.label,
@@ -326,68 +326,68 @@ class ContainerManager:
 
         # 3. Schedule the background Docker init and the timeout watchdog.
         init_task = asyncio.create_task(
-            self._init_container(container_id, req, image)
+            self._init_worker(worker_id, req, image)
         )
-        self._init_tasks[container_id] = init_task
+        self._init_tasks[worker_id] = init_task
         init_task.add_done_callback(
-            lambda _t, cid=container_id: self._init_tasks.pop(cid, None)
+            lambda _t, wid=worker_id: self._init_tasks.pop(wid, None)
         )
 
         watchdog_task = asyncio.create_task(
-            self._init_watchdog(container_id, init_task, "initializing", "init_timeout")
+            self._init_watchdog(worker_id, init_task, "initializing", "init_timeout")
         )
-        self._init_watchdogs[container_id] = watchdog_task
+        self._init_watchdogs[worker_id] = watchdog_task
         watchdog_task.add_done_callback(
-            lambda _t, cid=container_id: self._init_watchdogs.pop(cid, None)
+            lambda _t, wid=worker_id: self._init_watchdogs.pop(wid, None)
         )
 
         logger.info(
-            "Created container %s (image=%s, privileged=%s); init scheduled",
-            container_id,
+            "Created worker %s (image=%s, privileged=%s); init scheduled",
+            worker_id,
             req.image,
             req.privileged,
         )
 
         row = await self._db.fetchone(
-            "SELECT * FROM containers WHERE id = ?", (container_id,)
+            "SELECT * FROM workers WHERE id = ?", (worker_id,)
         )
         return _row_to_response(row, self._config.init_timeout_seconds)
 
     # -- background init ---------------------------------------------------
 
-    async def _init_container(
-        self, container_id: str, req: CreateContainerRequest, image: str
+    async def _init_worker(
+        self, worker_id: str, req: CreateWorkerRequest, image: str
     ) -> None:
         """Phase-2 initialization: socket, Docker create, Docker start.
 
         Runs as a background task.  On Docker failure, transitions the
-        container to ``error`` with code ``init_docker_error`` and cleans
-        up.  On success, the container remains ``initializing`` until the
-        guest agent sends ``ready``.
+        worker to ``error`` with code ``init_docker_error`` and cleans
+        up.  On success, the worker remains ``initializing`` until the
+        worker agent sends ``ready``.
         """
         docker_id: str | None = None
         try:
             # Socket must exist before the Docker container starts so the
             # bind-mount target is a file rather than a directory.
-            socket_path = await self._sockets.create_socket(container_id)
+            socket_path = await self._sockets.create_socket(worker_id)
             await self._db.execute_insert(
-                "UPDATE containers SET socket_path = ? WHERE id = ?",
-                (socket_path, container_id),
+                "UPDATE workers SET socket_path = ? WHERE id = ?",
+                (socket_path, worker_id),
             )
 
             env_list = [f"{k}={v}" for k, v in req.env.items()]
-            env_list.append(f"DROVER_CONTAINER_ID={container_id}")
+            env_list.append(f"DROVER_WORKER_ID={worker_id}")
 
-            # Bind the per-container socket FOLDER into the micro-container
-            # at SOCKET_DIR, so the guest agent finds the control
+            # Bind the per-worker socket FOLDER into the worker
+            # at SOCKET_DIR, so the worker agent finds the control
             # socket at {SOCKET_DIR}/orchestrator.sock.  Use the
             # HOST-side folder path as the bind source — Docker resolves
             # bind sources against the host filesystem, not the
             # orchestrator container's filesystem.
-            host_socket_dir = os.path.join(self._host_socket_dir, container_id)
+            host_socket_dir = os.path.join(self._host_socket_dir, worker_id)
             logger.info(
-                "Container %s: socket in-container=%s host-dir=%s",
-                container_id, socket_path, host_socket_dir,
+                "Worker %s: socket in-container=%s host-dir=%s",
+                worker_id, socket_path, host_socket_dir,
             )
             binds: list[str] = [f"{host_socket_dir}:{SOCKET_DIR}"]
             if req.privileged:
@@ -403,50 +403,50 @@ class ContainerManager:
                 "HostConfig": host_config,
             }
 
-            result = await self._docker.create_container(docker_config)
+            result = await self._docker.create_worker(docker_config)
             docker_id = result["Id"]
             await self._db.execute_insert(
-                "UPDATE containers SET docker_id = ? WHERE id = ?",
-                (docker_id, container_id),
+                "UPDATE workers SET docker_id = ? WHERE id = ?",
+                (docker_id, worker_id),
             )
 
-            await self._docker.start_container(docker_id)
+            await self._docker.start_worker(docker_id)
 
             # Start log capture immediately so init-window stdout/stderr is
-            # retained even when the guest agent never connects.  Failures
-            # to start capture are non-fatal for the container — log and
+            # retained even when the worker agent never connects.  Failures
+            # to start capture are non-fatal for the worker — log and
             # continue.
             try:
-                await self._logs.start(container_id, docker_id, since=None)
+                await self._logs.start(worker_id, docker_id, since=None)
             except Exception:
                 logger.exception(
-                    "Container %s: log capture failed to start", container_id
+                    "Worker %s: log capture failed to start", worker_id
                 )
 
             logger.info(
-                "Container %s Docker init complete (docker=%s); awaiting ready",
-                container_id,
+                "Worker %s Docker init complete (docker=%s); awaiting ready",
+                worker_id,
                 docker_id[:12],
             )
         except asyncio.CancelledError:
             raise
         except Exception:
             logger.exception(
-                "Container %s failed during Docker initialization", container_id
+                "Worker %s failed during Docker initialization", worker_id
             )
-            await self._fail_init(container_id, "init_docker_error", docker_id)
+            await self._fail_init(worker_id, "init_docker_error", docker_id)
 
     async def _init_watchdog(
         self,
-        container_id: str,
+        worker_id: str,
         init_task: asyncio.Task,
         source_status: str,
         timeout_error_code: str,
     ) -> None:
-        """Fail a container to ``error`` if init/resume does not complete in time.
+        """Fail a worker to ``error`` if init/resume does not complete in time.
 
         Sleeps for ``init_timeout_seconds`` and then checks whether the
-        container is still in ``source_status`` (``initializing`` for first
+        worker is still in ``source_status`` (``initializing`` for first
         init, ``resuming`` for resume).  If so, cancels the background task,
         marks the row as ``error`` with code ``timeout_error_code``, and
         cleans up.  The watchdog is cancelled when ``ready`` is received or
@@ -459,8 +459,8 @@ class ContainerManager:
             return
 
         row = await self._db.fetchone(
-            "SELECT status, docker_id FROM containers WHERE id = ?",
-            (container_id,),
+            "SELECT status, docker_id FROM workers WHERE id = ?",
+            (worker_id,),
         )
         if not row or row["status"] != source_status:
             return
@@ -473,23 +473,23 @@ class ContainerManager:
                 pass
 
         logger.warning(
-            "Container %s %s timed out after %ds",
-            container_id,
+            "Worker %s %s timed out after %ds",
+            worker_id,
             source_status,
             self._config.init_timeout_seconds,
         )
         await self._fail_init(
-            container_id, timeout_error_code, row["docker_id"], source_status
+            worker_id, timeout_error_code, row["docker_id"], source_status
         )
 
     async def _fail_init(
         self,
-        container_id: str,
+        worker_id: str,
         error_code: str,
         docker_id: str | None,
         source_status: str = "initializing",
     ) -> None:
-        """Transition an initializing/resuming container to ``error`` and clean up.
+        """Transition an initializing/resuming worker to ``error`` and clean up.
 
         The UPDATE is conditional on the row still being in
         ``source_status`` so a late ``ready`` or a racing watchdog fire
@@ -497,9 +497,9 @@ class ContainerManager:
         Docker) only runs if this call actually performed the transition.
         """
         async with self._db.execute(
-            "UPDATE containers SET status = 'error', error_code = ? "
+            "UPDATE workers SET status = 'error', error_code = ? "
             "WHERE id = ? AND status = ?",
-            (error_code, container_id, source_status),
+            (error_code, worker_id, source_status),
         ) as cursor:
             rowcount = cursor.rowcount
 
@@ -510,59 +510,59 @@ class ContainerManager:
         # the final captured chunks are persisted (directory is preserved
         # for post-mortem of the failed init).
         try:
-            await self._logs.stop(container_id)
+            await self._logs.stop(worker_id)
         except Exception:
             logger.exception(
-                "Failed to stop log capture for container %s", container_id
+                "Failed to stop log capture for worker %s", worker_id
             )
 
         try:
-            await self._sockets.destroy_socket(container_id)
+            await self._sockets.destroy_socket(worker_id)
         except Exception:
             logger.exception(
-                "Failed to destroy socket for container %s", container_id
+                "Failed to destroy socket for worker %s", worker_id
             )
 
         if docker_id:
             try:
-                await self._docker.remove_container(docker_id, force=True)
+                await self._docker.remove_worker(docker_id, force=True)
             except Exception:
                 logger.exception(
                     "Failed to force-remove Docker container %s for %s",
                     docker_id,
-                    container_id,
+                    worker_id,
                 )
 
     # -- list ---------------------------------------------------------------
 
-    async def list_containers(self) -> list[ContainerResponse]:
-        """Return all containers, newest first.
+    async def list_workers(self) -> list[WorkerResponse]:
+        """Return all workers, newest first.
 
         Reads straight from the DB without per-row Docker reconciliation;
-        ``get_container`` syncs an individual row, and the reaper handles
+        ``get_worker`` syncs an individual row, and the reaper handles
         background drift.
         """
         rows = await self._db.fetchall(
-            "SELECT * FROM containers ORDER BY created_at DESC"
+            "SELECT * FROM workers ORDER BY created_at DESC"
         )
         return [_row_to_response(row) for row in rows]
 
     # -- get ----------------------------------------------------------------
 
-    async def get_container(self, container_id: str) -> ContainerResponse:
+    async def get_worker(self, worker_id: str) -> WorkerResponse:
         row = await self._db.fetchone(
-            "SELECT * FROM containers WHERE id = ?", (container_id,)
+            "SELECT * FROM workers WHERE id = ?", (worker_id,)
         )
         if not row:
-            raise ContainerNotFound(container_id)
+            raise WorkerNotFound(worker_id)
 
-        # Sync with Docker unless the container is in a terminal state or
+        # Sync with Docker unless the worker is in a terminal state or
         # still initializing (the background task owns state transitions for
         # the latter, and docker_id may still be NULL).
         current_status = row["status"]
         if current_status not in ("destroyed", "error", "initializing"):
             try:
-                inspection = await self._docker.inspect_container(row["docker_id"])
+                inspection = await self._docker.inspect_worker(row["docker_id"])
                 mapped = _docker_state_to_status(inspection)
                 # Only update if Docker disagrees AND we're not mid-transition
                 if (
@@ -572,232 +572,232 @@ class ContainerManager:
                     not in ("stopping", "resuming", "destroying")
                 ):
                     await self._db.execute_insert(
-                        "UPDATE containers SET status = ? WHERE id = ?",
-                        (mapped.value, container_id),
+                        "UPDATE workers SET status = ? WHERE id = ?",
+                        (mapped.value, worker_id),
                     )
                     logger.info(
-                        "Container %s status synced: %s -> %s",
-                        container_id,
+                        "Worker %s status synced: %s -> %s",
+                        worker_id,
                         current_status,
                         mapped.value,
                     )
                     row = await self._db.fetchone(
-                        "SELECT * FROM containers WHERE id = ?", (container_id,)
+                        "SELECT * FROM workers WHERE id = ?", (worker_id,)
                     )
-            except ContainerNotFoundError:
+            except WorkerNotFoundError:
                 # Docker container gone — mark as destroyed
                 await self._db.execute_insert(
-                    "UPDATE containers SET status = 'destroyed' WHERE id = ?",
-                    (container_id,),
+                    "UPDATE workers SET status = 'destroyed' WHERE id = ?",
+                    (worker_id,),
                 )
                 logger.warning(
-                    "Container %s not found in Docker, marked destroyed",
-                    container_id,
+                    "Worker %s not found in Docker, marked destroyed",
+                    worker_id,
                 )
                 row = await self._db.fetchone(
-                    "SELECT * FROM containers WHERE id = ?", (container_id,)
+                    "SELECT * FROM workers WHERE id = ?", (worker_id,)
                 )
 
         return _row_to_response(row)
 
     # -- stop ---------------------------------------------------------------
 
-    async def stop_container(self, container_id: str) -> ContainerResponse:
+    async def stop_worker(self, worker_id: str) -> WorkerResponse:
         row = await self._db.fetchone(
-            "SELECT * FROM containers WHERE id = ?", (container_id,)
+            "SELECT * FROM workers WHERE id = ?", (worker_id,)
         )
         if not row:
-            raise ContainerNotFound(container_id)
+            raise WorkerNotFound(worker_id)
         if row["status"] != "running":
-            raise ContainerStateConflict(container_id, row["status"], "stop")
+            raise WorkerStateConflict(worker_id, row["status"], "stop")
 
         await self._db.execute_insert(
-            "UPDATE containers SET status = 'stopping' WHERE id = ?",
-            (container_id,),
+            "UPDATE workers SET status = 'stopping' WHERE id = ?",
+            (worker_id,),
         )
 
         # Close the socket connection but preserve the socket file for resume
-        await self._sockets.close_socket(container_id)
+        await self._sockets.close_socket(worker_id)
 
         try:
-            await self._docker.stop_container(row["docker_id"])
-        except ContainerNotFoundError:
+            await self._docker.stop_worker(row["docker_id"])
+        except WorkerNotFoundError:
             pass  # Already gone
 
         # The follow stream is closing in the background; await the writer
         # task here so .cursor is persisted before stopped is observable.
         try:
-            await self._logs.stop(container_id)
+            await self._logs.stop(worker_id)
         except Exception:
             logger.exception(
-                "Failed to stop log capture for container %s", container_id
+                "Failed to stop log capture for worker %s", worker_id
             )
 
         now = _now_iso()
         await self._db.execute_insert(
-            "UPDATE containers SET status = 'stopped', stopped_at = ? WHERE id = ?",
-            (now, container_id),
+            "UPDATE workers SET status = 'stopped', stopped_at = ? WHERE id = ?",
+            (now, worker_id),
         )
 
-        logger.info("Stopped container %s", container_id)
+        logger.info("Stopped worker %s", worker_id)
         row = await self._db.fetchone(
-            "SELECT * FROM containers WHERE id = ?", (container_id,)
+            "SELECT * FROM workers WHERE id = ?", (worker_id,)
         )
         return _row_to_response(row, _DOCKER_STOP_TIMEOUT)
 
     # -- resume -------------------------------------------------------------
 
-    async def resume_container(self, container_id: str) -> ContainerResponse:
-        """Begin resuming a stopped container.
+    async def resume_worker(self, worker_id: str) -> WorkerResponse:
+        """Begin resuming a stopped worker.
 
         Returns immediately with status ``resuming``.  The Docker start and
-        the wait for the guest agent's ``ready`` message run in the
-        background, mirroring the ``initializing`` flow.  The container
+        the wait for the worker agent's ``ready`` message run in the
+        background, mirroring the ``initializing`` flow.  The worker
         transitions to ``running`` only when ``ready`` arrives.  A
         watchdog transitions the row to ``error`` (code ``resume_timeout``)
         if ``ready`` does not arrive within ``init_timeout_seconds``.
         """
         row = await self._db.fetchone(
-            "SELECT * FROM containers WHERE id = ?", (container_id,)
+            "SELECT * FROM workers WHERE id = ?", (worker_id,)
         )
         if not row:
-            raise ContainerNotFound(container_id)
+            raise WorkerNotFound(worker_id)
         if row["status"] != "stopped":
-            raise ContainerStateConflict(container_id, row["status"], "resume")
+            raise WorkerStateConflict(worker_id, row["status"], "resume")
 
         await self._db.execute_insert(
-            "UPDATE containers SET status = 'resuming' WHERE id = ?",
-            (container_id,),
+            "UPDATE workers SET status = 'resuming' WHERE id = ?",
+            (worker_id,),
         )
 
         resume_task = asyncio.create_task(
-            self._resume_container_async(container_id, row["docker_id"])
+            self._resume_worker_async(worker_id, row["docker_id"])
         )
-        self._init_tasks[container_id] = resume_task
+        self._init_tasks[worker_id] = resume_task
         resume_task.add_done_callback(
-            lambda _t, cid=container_id: self._init_tasks.pop(cid, None)
+            lambda _t, wid=worker_id: self._init_tasks.pop(wid, None)
         )
 
         watchdog_task = asyncio.create_task(
-            self._init_watchdog(container_id, resume_task, "resuming", "resume_timeout")
+            self._init_watchdog(worker_id, resume_task, "resuming", "resume_timeout")
         )
-        self._init_watchdogs[container_id] = watchdog_task
+        self._init_watchdogs[worker_id] = watchdog_task
         watchdog_task.add_done_callback(
-            lambda _t, cid=container_id: self._init_watchdogs.pop(cid, None)
+            lambda _t, wid=worker_id: self._init_watchdogs.pop(wid, None)
         )
 
-        logger.info("Resuming container %s; awaiting ready", container_id)
+        logger.info("Resuming worker %s; awaiting ready", worker_id)
         row = await self._db.fetchone(
-            "SELECT * FROM containers WHERE id = ?", (container_id,)
+            "SELECT * FROM workers WHERE id = ?", (worker_id,)
         )
         return _row_to_response(row, self._config.init_timeout_seconds)
 
-    async def _resume_container_async(
-        self, container_id: str, docker_id: str
+    async def _resume_worker_async(
+        self, worker_id: str, docker_id: str
     ) -> None:
         """Background work for resume: re-create socket, docker start, log capture.
 
-        Mirrors ``_init_container`` but for an existing Docker container.
+        Mirrors ``_init_worker`` but for an existing Docker container.
         On Docker failure, transitions the row to ``error`` with code
         ``resume_docker_error``.  On success, the row stays ``resuming``
-        until the guest agent sends ``ready`` (handled by SocketManager).
+        until the worker agent sends ``ready`` (handled by SocketManager).
         """
         try:
             # Re-create the socket listener before starting the container so
             # the agent has something to connect to when it boots back up.
-            await self._sockets.create_socket(container_id)
+            await self._sockets.create_socket(worker_id)
 
             # Read the cursor before starting so log capture resumes from
             # the last captured timestamp.  None when no logs have been
             # captured yet (e.g. capture disabled on first run).
-            cursor = self._logs.read_cursor(container_id)
+            cursor = self._logs.read_cursor(worker_id)
 
-            await self._docker.start_container(docker_id)
+            await self._docker.start_worker(docker_id)
 
             try:
-                await self._logs.start(container_id, docker_id, since=cursor)
+                await self._logs.start(worker_id, docker_id, since=cursor)
             except Exception:
                 logger.exception(
-                    "Container %s: log capture failed to resume", container_id
+                    "Worker %s: log capture failed to resume", worker_id
                 )
 
             logger.info(
-                "Container %s Docker resume complete (docker=%s); awaiting ready",
-                container_id,
+                "Worker %s Docker resume complete (docker=%s); awaiting ready",
+                worker_id,
                 docker_id[:12],
             )
         except asyncio.CancelledError:
             raise
         except Exception:
             logger.exception(
-                "Container %s failed during Docker resume", container_id
+                "Worker %s failed during Docker resume", worker_id
             )
             await self._fail_init(
-                container_id, "resume_docker_error", docker_id, "resuming"
+                worker_id, "resume_docker_error", docker_id, "resuming"
             )
 
     # -- destroy ------------------------------------------------------------
 
-    async def destroy_container(self, container_id: str) -> ContainerResponse:
+    async def destroy_worker(self, worker_id: str) -> WorkerResponse:
         row = await self._db.fetchone(
-            "SELECT * FROM containers WHERE id = ?", (container_id,)
+            "SELECT * FROM workers WHERE id = ?", (worker_id,)
         )
         if not row:
-            raise ContainerNotFound(container_id)
+            raise WorkerNotFound(worker_id)
         if row["status"] == "destroyed":
-            raise ContainerStateConflict(container_id, row["status"], "destroy")
+            raise WorkerStateConflict(worker_id, row["status"], "destroy")
 
         await self._db.execute_insert(
-            "UPDATE containers SET status = 'destroying' WHERE id = ?",
-            (container_id,),
+            "UPDATE workers SET status = 'destroying' WHERE id = ?",
+            (worker_id,),
         )
 
         # Close and remove the socket, then stop and remove the Docker container
-        await self._sockets.destroy_socket(container_id)
+        await self._sockets.destroy_socket(worker_id)
 
         docker_id = row["docker_id"]
-        # docker_id may be NULL for containers that failed init before the
+        # docker_id may be NULL for workers that failed init before the
         # Docker create call completed (status 'error').
         if docker_id:
             try:
-                await self._docker.stop_container(docker_id)
-            except (ContainerNotFoundError, ContainerConflictError):
+                await self._docker.stop_worker(docker_id)
+            except (WorkerNotFoundError, WorkerConflictError):
                 pass  # Already stopped or gone
 
             try:
-                await self._docker.remove_container(docker_id, force=True)
-            except ContainerNotFoundError:
+                await self._docker.remove_worker(docker_id, force=True)
+            except WorkerNotFoundError:
                 pass  # Already removed
 
-        # Drop the captured logs along with the rest of the container's
+        # Drop the captured logs along with the rest of the worker's
         # state — applies to errored and initializing rows too.
         try:
-            await self._logs.discard(container_id)
+            await self._logs.discard(worker_id)
         except Exception:
             logger.exception(
-                "Failed to discard log capture for container %s", container_id
+                "Failed to discard log capture for worker %s", worker_id
             )
 
-        # Preserve existing stopped_at if already set (container was stopped
+        # Preserve existing stopped_at if already set (worker was stopped
         # before being destroyed), otherwise record the current time.
         stopped_at = row["stopped_at"] or _now_iso()
         await self._db.execute_insert(
-            "UPDATE containers SET status = 'destroyed', stopped_at = ? WHERE id = ?",
-            (stopped_at, container_id),
+            "UPDATE workers SET status = 'destroyed', stopped_at = ? WHERE id = ?",
+            (stopped_at, worker_id),
         )
 
-        logger.info("Destroyed container %s", container_id)
+        logger.info("Destroyed worker %s", worker_id)
         row = await self._db.fetchone(
-            "SELECT * FROM containers WHERE id = ?", (container_id,)
+            "SELECT * FROM workers WHERE id = ?", (worker_id,)
         )
         return _row_to_response(row, _DOCKER_STOP_TIMEOUT)
 
     # -- exec ---------------------------------------------------------------
 
     async def _assert_capability(self, image_name: str, capability: str) -> None:
-        """Deny the operation unless the container's image declares ``capability``.
+        """Deny the operation unless the worker's image declares ``capability``.
 
-        Resolves the container's stored image short name to its Drover labels
+        Resolves the worker's stored image short name to its Drover labels
         and parses ``drover.capabilities``.  An absent/empty label, or an
         image that can no longer be resolved (deleted/renamed since launch),
         means the capability is unavailable — deny rather than assume.
@@ -809,18 +809,18 @@ class ContainerManager:
         if capability not in parse_capabilities(labels.get(CAPABILITIES_LABEL)):
             raise CapabilityNotSupported(capability)
 
-    async def exec_command(self, container_id: str, command: str) -> str:
-        """Send a command to a running container.  Returns the command ID."""
+    async def exec_command(self, worker_id: str, command: str) -> str:
+        """Send a command to a running worker.  Returns the command ID."""
         row = await self._db.fetchone(
-            "SELECT * FROM containers WHERE id = ?", (container_id,)
+            "SELECT * FROM workers WHERE id = ?", (worker_id,)
         )
         if not row:
-            raise ContainerNotFound(container_id)
+            raise WorkerNotFound(worker_id)
         if row["status"] != "running":
-            raise ContainerStateConflict(container_id, row["status"], "exec on")
+            raise WorkerStateConflict(worker_id, row["status"], "exec on")
 
-        if not self._sockets.is_connected(container_id):
-            raise ContainerNotConnected(container_id)
+        if not self._sockets.is_connected(worker_id):
+            raise WorkerNotConnected(worker_id)
 
         await self._assert_capability(row["image"], CAPABILITY_EXEC)
 
@@ -828,33 +828,33 @@ class ContainerManager:
         now = _now_iso()
 
         await self._db.execute_insert(
-            "INSERT INTO commands (id, container_id, command, status, created_at) "
+            "INSERT INTO commands (id, worker_id, command, status, created_at) "
             "VALUES (?, ?, ?, 'pending', ?)",
-            (command_id, container_id, command, now),
+            (command_id, worker_id, command, now),
         )
 
-        await self._sockets.send_command(container_id, command_id, command)
+        await self._sockets.send_command(worker_id, command_id, command)
 
         logger.info(
-            "Exec command %s on container %s: %s",
+            "Exec command %s on worker %s: %s",
             command_id,
-            container_id,
+            worker_id,
             command[:80],
         )
         return command_id
 
-    async def list_commands(self, container_id: str) -> list[CommandSummary]:
-        """Return all commands for a container, newest first."""
-        container = await self._db.fetchone(
-            "SELECT id FROM containers WHERE id = ?", (container_id,)
+    async def list_commands(self, worker_id: str) -> list[CommandSummary]:
+        """Return all commands for a worker, newest first."""
+        worker = await self._db.fetchone(
+            "SELECT id FROM workers WHERE id = ?", (worker_id,)
         )
-        if not container:
-            raise ContainerNotFound(container_id)
+        if not worker:
+            raise WorkerNotFound(worker_id)
 
         rows = await self._db.fetchall(
             "SELECT id, command, status, exit_code, created_at FROM commands "
-            "WHERE container_id = ? ORDER BY created_at DESC",
-            (container_id,),
+            "WHERE worker_id = ? ORDER BY created_at DESC",
+            (worker_id,),
         )
         return [
             CommandSummary(
@@ -868,23 +868,23 @@ class ContainerManager:
         ]
 
     async def get_command_status(
-        self, container_id: str, command_id: str
+        self, worker_id: str, command_id: str
     ) -> ExecStatusResponse:
         """Get the status and output of a command."""
-        # Verify container exists
-        container = await self._db.fetchone(
-            "SELECT id FROM containers WHERE id = ?", (container_id,)
+        # Verify worker exists
+        worker = await self._db.fetchone(
+            "SELECT id FROM workers WHERE id = ?", (worker_id,)
         )
-        if not container:
-            raise ContainerNotFound(container_id)
+        if not worker:
+            raise WorkerNotFound(worker_id)
 
         # Fetch command
         cmd_row = await self._db.fetchone(
-            "SELECT * FROM commands WHERE id = ? AND container_id = ?",
-            (command_id, container_id),
+            "SELECT * FROM commands WHERE id = ? AND worker_id = ?",
+            (command_id, worker_id),
         )
         if not cmd_row:
-            raise CommandNotFound(container_id, command_id)
+            raise CommandNotFound(worker_id, command_id)
 
         # Fetch messages ordered by seq
         msg_rows = await self._db.fetchall(

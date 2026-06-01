@@ -1,8 +1,8 @@
 import { Router } from 'express';
 import { OrchestratorHttpError } from '../orchestrator.js';
 import { layout } from '../views/layout.js';
-import { containerDetailPage } from '../views/partials/container-detail.js';
-import { containerListPage, containerRows } from '../views/partials/containers-list.js';
+import { workerDetailPage } from '../views/partials/worker-detail.js';
+import { workerListPage, workerRows } from '../views/partials/workers-list.js';
 import { describeOrchestratorError, errorPanel, renderOrchestratorError } from '../views/partials/errors.js';
 import { execOutputPage } from '../views/partials/exec-output.js';
 import { imagesListPage } from '../views/partials/images-list.js';
@@ -25,7 +25,7 @@ function sendFragment(res, fragment, status = 200) {
 
 async function fetchCommands(orchestrator, encodedId) {
 	try {
-		const commands = await orchestrator.getJson(`/containers/${encodedId}/execs`);
+		const commands = await orchestrator.getJson(`/workers/${encodedId}/execs`);
 		return Array.isArray(commands) ? commands : [];
 	} catch (err) {
 		if (err instanceof OrchestratorHttpError && err.status === 404) {
@@ -52,7 +52,7 @@ function imageCapabilities(images, imageName) {
 
 async function fetchLogFiles(orchestrator, encodedId) {
 	try {
-		const logFiles = await orchestrator.getJson(`/containers/${encodedId}/logs/files`);
+		const logFiles = await orchestrator.getJson(`/workers/${encodedId}/logs/files`);
 		return { logFiles: Array.isArray(logFiles) ? logFiles : [], filesUnavailable: false };
 	} catch (err) {
 		if (err instanceof OrchestratorHttpError && err.status === 409) {
@@ -91,9 +91,9 @@ async function fetchLogContent(orchestrator, encodedId, rawLogSource, logFiles) 
 		return { logSource: resolved.value, logContent: null, logUnavailable: false, logError: 'log file not found' };
 	}
 	let path;
-	if (resolved.kind === 'live') path = `/containers/${encodedId}/logs`;
-	else if (resolved.kind === 'orchestrator') path = `/containers/${encodedId}/logs/orchestrator`;
-	else path = `/containers/${encodedId}/logs/files/${encodeURIComponent(resolved.filename)}`;
+	if (resolved.kind === 'live') path = `/workers/${encodedId}/logs`;
+	else if (resolved.kind === 'orchestrator') path = `/workers/${encodedId}/logs/orchestrator`;
+	else path = `/workers/${encodedId}/logs/files/${encodeURIComponent(resolved.filename)}`;
 
 	try {
 		const text = await orchestrator.getText(path);
@@ -114,18 +114,18 @@ async function fetchLogContent(orchestrator, encodedId, rawLogSource, logFiles) 
 export function createViewsRouter({ orchestrator }) {
 	const router = Router();
 
-	router.get('/containers', async (req, res) => {
+	router.get('/workers', async (req, res) => {
 		try {
-			const containers = await orchestrator.getJson('/containers');
-			const visible = containers.filter((c) => ACTIVE_STATUSES.has(c.status));
+			const workers = await orchestrator.getJson('/workers');
+			const visible = workers.filter((c) => ACTIVE_STATUSES.has(c.status));
 			if (isHtmx(req)) {
-				sendFragment(res, containerRows(visible));
+				sendFragment(res, workerRows(visible));
 				return;
 			}
 			sendPage(res, layout({
-				title: 'Containers',
-				activePath: '/views/containers',
-				body: containerListPage(visible),
+				title: 'Workers',
+				activePath: '/views/workers',
+				body: workerListPage(visible),
 			}));
 		} catch (err) {
 			const { status } = describeOrchestratorError(err);
@@ -134,19 +134,19 @@ export function createViewsRouter({ orchestrator }) {
 				return;
 			}
 			res.status(status).type('html').send(layout({
-				title: 'Containers',
-				activePath: '/views/containers',
+				title: 'Workers',
+				activePath: '/views/workers',
 				body: renderOrchestratorError(err),
 			}).toString());
 		}
 	});
 
-	router.get('/containers/:id', async (req, res) => {
+	router.get('/workers/:id', async (req, res) => {
 		const id = req.params.id;
 		const encodedId = encodeURIComponent(id);
 		try {
-			const [container, filesResult, commands, images] = await Promise.all([
-				orchestrator.getJson(`/containers/${encodedId}`),
+			const [worker, filesResult, commands, images] = await Promise.all([
+				orchestrator.getJson(`/workers/${encodedId}`),
 				fetchLogFiles(orchestrator, encodedId),
 				fetchCommands(orchestrator, encodedId),
 				fetchImages(orchestrator),
@@ -158,11 +158,11 @@ export function createViewsRouter({ orchestrator }) {
 				req.query.log_source,
 				logFiles,
 			);
-			const canExec = imageCapabilities(images, container.image).has('exec');
+			const canExec = imageCapabilities(images, worker.image).has('exec');
 			sendPage(res, layout({
-				title: `Container ${container.id}`,
-				activePath: '/views/containers',
-				body: containerDetailPage(container, {
+				title: `Worker ${worker.id}`,
+				activePath: '/views/workers',
+				body: workerDetailPage(worker, {
 					logFiles,
 					filesUnavailable,
 					logSource,
@@ -173,33 +173,33 @@ export function createViewsRouter({ orchestrator }) {
 		} catch (err) {
 			const { status } = describeOrchestratorError(err);
 			res.status(status).type('html').send(layout({
-				title: 'Container',
-				activePath: '/views/containers',
+				title: 'Worker',
+				activePath: '/views/workers',
 				body: renderOrchestratorError(err),
 			}).toString());
 		}
 	});
 
-	router.get('/containers/:id/execs/:commandId', async (req, res) => {
+	router.get('/workers/:id/execs/:commandId', async (req, res) => {
 		const id = req.params.id;
 		const commandId = req.params.commandId;
 		const encodedId = encodeURIComponent(id);
 		const encodedCommandId = encodeURIComponent(commandId);
 		try {
-			const [container, exec] = await Promise.all([
-				orchestrator.getJson(`/containers/${encodedId}`),
-				orchestrator.getJson(`/containers/${encodedId}/execs/${encodedCommandId}`),
+			const [worker, exec] = await Promise.all([
+				orchestrator.getJson(`/workers/${encodedId}`),
+				orchestrator.getJson(`/workers/${encodedId}/execs/${encodedCommandId}`),
 			]);
 			sendPage(res, layout({
 				title: `Exec ${exec.command_id}`,
-				activePath: '/views/containers',
-				body: execOutputPage(container, exec),
+				activePath: '/views/workers',
+				body: execOutputPage(worker, exec),
 			}));
 		} catch (err) {
 			const { status } = describeOrchestratorError(err);
 			res.status(status).type('html').send(layout({
 				title: 'Exec',
-				activePath: '/views/containers',
+				activePath: '/views/workers',
 				body: renderOrchestratorError(err),
 			}).toString());
 		}

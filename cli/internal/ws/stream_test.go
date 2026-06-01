@@ -37,11 +37,11 @@ func wsServer(t *testing.T, frames []string, closeClean bool) string {
 
 func TestURL(t *testing.T) {
 	got, err := URL("https://drover.example.com", "c1")
-	if err != nil || got != "wss://drover.example.com/containers/c1/ws" {
+	if err != nil || got != "wss://drover.example.com/workers/c1/ws" {
 		t.Fatalf("URL = %q, err %v", got, err)
 	}
 	got, _ = URL("http://localhost:8000", "c1")
-	if got != "ws://localhost:8000/containers/c1/ws" {
+	if got != "ws://localhost:8000/workers/c1/ws" {
 		t.Errorf("URL = %q", got)
 	}
 }
@@ -49,7 +49,7 @@ func TestURL(t *testing.T) {
 func TestStreamPassthroughAndExitCode(t *testing.T) {
 	frames := []string{
 		`{"type":"output","command_id":"cmd-1","stream":"stdout","data":"hi"}`,
-		`{"type":"log","stream":"stdout","data":"container log line"}`,
+		`{"type":"log","stream":"stdout","data":"worker log line"}`,
 		`{"type":"output","command_id":"other","stream":"stdout","data":"nope"}`,
 		`{"type":"status","command_id":"cmd-1","status":"complete","exit_code":3}`,
 	}

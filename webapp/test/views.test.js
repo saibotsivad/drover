@@ -33,7 +33,7 @@ function startApp(orchestrator) {
 	});
 }
 
-const SAMPLE_CONTAINERS = [
+const SAMPLE_WORKERS = [
 	{
 		id: 'c-aaa',
 		image: 'python-runner',
@@ -77,23 +77,23 @@ const SAMPLE_IMAGES = [
 	},
 ];
 
-// --- /views/containers ----------------------------------------------------
+// --- /views/workers -------------------------------------------------------
 
-test('GET /views/containers renders the table and hides destroyed rows', async () => {
+test('GET /views/workers renders the table and hides destroyed rows', async () => {
 	const orchestrator = makeFakeOrchestrator({
 		getJson: async (path) => {
-			assert.equal(path, '/containers');
-			return SAMPLE_CONTAINERS;
+			assert.equal(path, '/workers');
+			return SAMPLE_WORKERS;
 		},
 	});
 	const { url, close } = await startApp(orchestrator);
 	try {
-		const res = await fetch(`${url}/views/containers`);
+		const res = await fetch(`${url}/views/workers`);
 		assert.equal(res.status, 200);
 		const text = await res.text();
-		assert.match(text, /<title>Containers — Drover<\/title>/);
-		assert.match(text, /id="container-c-aaa"/);
-		assert.equal(text.includes('id="container-c-bbb"'), false, 'destroyed container should be filtered out');
+		assert.match(text, /<title>Workers — Drover<\/title>/);
+		assert.match(text, /id="worker-c-aaa"/);
+		assert.equal(text.includes('id="worker-c-bbb"'), false, 'destroyed worker should be filtered out');
 		assert.match(text, /experiment-1/);
 		assert.match(text, /hx-trigger="every 5s"/);
 	} finally {
@@ -101,28 +101,28 @@ test('GET /views/containers renders the table and hides destroyed rows', async (
 	}
 });
 
-test('GET /views/containers returns just rows when HX-Request is set', async () => {
-	const orchestrator = makeFakeOrchestrator({ getJson: async () => SAMPLE_CONTAINERS });
+test('GET /views/workers returns just rows when HX-Request is set', async () => {
+	const orchestrator = makeFakeOrchestrator({ getJson: async () => SAMPLE_WORKERS });
 	const { url, close } = await startApp(orchestrator);
 	try {
-		const res = await fetch(`${url}/views/containers`, { headers: { 'HX-Request': 'true' } });
+		const res = await fetch(`${url}/views/workers`, { headers: { 'HX-Request': 'true' } });
 		assert.equal(res.status, 200);
 		const text = await res.text();
 		assert.equal(text.includes('<title>'), false, 'fragment must not include the layout');
 		assert.equal(text.includes('<table'), false, 'fragment must not include the table wrapper');
-		assert.match(text, /<tr id="container-c-aaa">/);
+		assert.match(text, /<tr id="worker-c-aaa">/);
 	} finally {
 		await close();
 	}
 });
 
-test('GET /views/containers renders an error page when the orchestrator is unreachable', async () => {
+test('GET /views/workers renders an error page when the orchestrator is unreachable', async () => {
 	const orchestrator = makeFakeOrchestrator({
 		getJson: async () => { throw new OrchestratorUnreachableError(new Error('econnrefused')); },
 	});
 	const { url, close } = await startApp(orchestrator);
 	try {
-		const res = await fetch(`${url}/views/containers`);
+		const res = await fetch(`${url}/views/workers`);
 		assert.equal(res.status, 502);
 		const text = await res.text();
 		assert.match(text, /Orchestrator unreachable/);
@@ -131,34 +131,34 @@ test('GET /views/containers renders an error page when the orchestrator is unrea
 	}
 });
 
-// --- /views/containers/:id ------------------------------------------------
+// --- /views/workers/:id ---------------------------------------------------
 
-test('GET /views/containers/:id renders metadata', async () => {
+test('GET /views/workers/:id renders metadata', async () => {
 	const orchestrator = makeFakeOrchestrator({
 		getJson: async (path) => {
-			if (path === '/containers/c-aaa') return SAMPLE_CONTAINERS[0];
-			if (path === '/containers/c-aaa/logs/files') return [];
-			if (path === '/containers/c-aaa/execs') return [];
+			if (path === '/workers/c-aaa') return SAMPLE_WORKERS[0];
+			if (path === '/workers/c-aaa/logs/files') return [];
+			if (path === '/workers/c-aaa/execs') return [];
 			if (path === '/images') return SAMPLE_IMAGES;
 			throw new Error(`unexpected getJson: ${path}`);
 		},
 		getText: async (path) => {
-			assert.equal(path, '/containers/c-aaa/logs');
+			assert.equal(path, '/workers/c-aaa/logs');
 			return 'log line\n';
 		},
 	});
 	const { url, close } = await startApp(orchestrator);
 	try {
-		const res = await fetch(`${url}/views/containers/c-aaa`);
+		const res = await fetch(`${url}/views/workers/c-aaa`);
 		assert.equal(res.status, 200);
 		const text = await res.text();
-		assert.match(text, /Container <code>c-aaa<\/code>/);
+		assert.match(text, /Worker <code>c-aaa<\/code>/);
 		assert.match(text, /python-runner/);
 		assert.match(text, /experiment-1/);
-		assert.match(text, /id="container-meta"/);
-		assert.match(text, /id="container-detail"/);
+		assert.match(text, /id="worker-meta"/);
+		assert.match(text, /id="worker-detail"/);
 		assert.match(text, /<select[^>]*class="log-source-select"/);
-		assert.match(text, /Live container logs/);
+		assert.match(text, /Live worker logs/);
 		assert.match(text, /Orchestrator logs/);
 		assert.match(text, /<pre id="log-viewer"[^>]*>log line\n<\/pre>/);
 		assert.match(text, /Exec Commands/);
@@ -168,14 +168,14 @@ test('GET /views/containers/:id renders metadata', async () => {
 	}
 });
 
-test('GET /views/containers/:id renders 404 when orchestrator returns 404', async () => {
+test('GET /views/workers/:id renders 404 when orchestrator returns 404', async () => {
 	const orchestrator = makeFakeOrchestrator({
 		getJson: async () => { throw new OrchestratorHttpError(404, { detail: 'not found' }); },
 		getText: async () => { throw new OrchestratorHttpError(404, { detail: 'not found' }); },
 	});
 	const { url, close } = await startApp(orchestrator);
 	try {
-		const res = await fetch(`${url}/views/containers/missing`);
+		const res = await fetch(`${url}/views/workers/missing`);
 		assert.equal(res.status, 404);
 		const text = await res.text();
 		assert.match(text, /Not found/);
@@ -184,19 +184,19 @@ test('GET /views/containers/:id renders 404 when orchestrator returns 404', asyn
 	}
 });
 
-test('GET /views/containers/:id lists log files in the source dropdown', async () => {
+test('GET /views/workers/:id lists log files in the source dropdown', async () => {
 	const orchestrator = makeFakeOrchestrator({
 		getJson: async (path) => {
-			if (path === '/containers/c-aaa') return SAMPLE_CONTAINERS[0];
-			if (path === '/containers/c-aaa/logs/files') return ['0.log', '1.log'];
-			if (path === '/containers/c-aaa/execs') return [];
+			if (path === '/workers/c-aaa') return SAMPLE_WORKERS[0];
+			if (path === '/workers/c-aaa/logs/files') return ['0.log', '1.log'];
+			if (path === '/workers/c-aaa/execs') return [];
 			throw new Error(`unexpected getJson: ${path}`);
 		},
 		getText: async () => '',
 	});
 	const { url, close } = await startApp(orchestrator);
 	try {
-		const res = await fetch(`${url}/views/containers/c-aaa`);
+		const res = await fetch(`${url}/views/workers/c-aaa`);
 		assert.equal(res.status, 200);
 		const text = await res.text();
 		assert.match(text, /<option\s+value="file:0\.log"[^>]*>0\.log<\/option>/);
@@ -207,19 +207,19 @@ test('GET /views/containers/:id lists log files in the source dropdown', async (
 	}
 });
 
-test('GET /views/containers/:id shows note when log files endpoint returns 409', async () => {
+test('GET /views/workers/:id shows note when log files endpoint returns 409', async () => {
 	const orchestrator = makeFakeOrchestrator({
 		getJson: async (path) => {
-			if (path === '/containers/c-aaa') return SAMPLE_CONTAINERS[0];
-			if (path === '/containers/c-aaa/logs/files') throw new OrchestratorHttpError(409, { detail: 'disabled' });
-			if (path === '/containers/c-aaa/execs') return [];
+			if (path === '/workers/c-aaa') return SAMPLE_WORKERS[0];
+			if (path === '/workers/c-aaa/logs/files') throw new OrchestratorHttpError(409, { detail: 'disabled' });
+			if (path === '/workers/c-aaa/execs') return [];
 			throw new Error(`unexpected getJson: ${path}`);
 		},
 		getText: async () => 'live logs',
 	});
 	const { url, close } = await startApp(orchestrator);
 	try {
-		const res = await fetch(`${url}/views/containers/c-aaa`);
+		const res = await fetch(`${url}/views/workers/c-aaa`);
 		assert.equal(res.status, 200);
 		const text = await res.text();
 		assert.match(text, /DROVER_LOG_DIR/);
@@ -228,13 +228,13 @@ test('GET /views/containers/:id shows note when log files endpoint returns 409',
 	}
 });
 
-test('GET /views/containers/:id?log_source=orchestrator fetches orchestrator logs', async () => {
+test('GET /views/workers/:id?log_source=orchestrator fetches orchestrator logs', async () => {
 	let textPath = null;
 	const orchestrator = makeFakeOrchestrator({
 		getJson: async (path) => {
-			if (path === '/containers/c-aaa') return SAMPLE_CONTAINERS[0];
-			if (path === '/containers/c-aaa/logs/files') return [];
-			if (path === '/containers/c-aaa/execs') return [];
+			if (path === '/workers/c-aaa') return SAMPLE_WORKERS[0];
+			if (path === '/workers/c-aaa/logs/files') return [];
+			if (path === '/workers/c-aaa/execs') return [];
 			throw new Error(`unexpected getJson: ${path}`);
 		},
 		getText: async (path) => {
@@ -244,9 +244,9 @@ test('GET /views/containers/:id?log_source=orchestrator fetches orchestrator log
 	});
 	const { url, close } = await startApp(orchestrator);
 	try {
-		const res = await fetch(`${url}/views/containers/c-aaa?log_source=orchestrator`);
+		const res = await fetch(`${url}/views/workers/c-aaa?log_source=orchestrator`);
 		assert.equal(res.status, 200);
-		assert.equal(textPath, '/containers/c-aaa/logs/orchestrator');
+		assert.equal(textPath, '/workers/c-aaa/logs/orchestrator');
 		const text = await res.text();
 		assert.match(text, /<option\s+value="orchestrator"\s+selected/);
 		assert.match(text, /orchestrator log line/);
@@ -255,13 +255,13 @@ test('GET /views/containers/:id?log_source=orchestrator fetches orchestrator log
 	}
 });
 
-test('GET /views/containers/:id?log_source=file:X fetches the file when listed', async () => {
+test('GET /views/workers/:id?log_source=file:X fetches the file when listed', async () => {
 	let textPath = null;
 	const orchestrator = makeFakeOrchestrator({
 		getJson: async (path) => {
-			if (path === '/containers/c-aaa') return SAMPLE_CONTAINERS[0];
-			if (path === '/containers/c-aaa/logs/files') return ['0.log'];
-			if (path === '/containers/c-aaa/execs') return [];
+			if (path === '/workers/c-aaa') return SAMPLE_WORKERS[0];
+			if (path === '/workers/c-aaa/logs/files') return ['0.log'];
+			if (path === '/workers/c-aaa/execs') return [];
 			throw new Error(`unexpected getJson: ${path}`);
 		},
 		getText: async (path) => {
@@ -271,9 +271,9 @@ test('GET /views/containers/:id?log_source=file:X fetches the file when listed',
 	});
 	const { url, close } = await startApp(orchestrator);
 	try {
-		const res = await fetch(`${url}/views/containers/c-aaa?log_source=file:0.log`);
+		const res = await fetch(`${url}/views/workers/c-aaa?log_source=file:0.log`);
 		assert.equal(res.status, 200);
-		assert.equal(textPath, '/containers/c-aaa/logs/files/0.log');
+		assert.equal(textPath, '/workers/c-aaa/logs/files/0.log');
 		const text = await res.text();
 		assert.match(text, /file content/);
 	} finally {
@@ -281,20 +281,20 @@ test('GET /views/containers/:id?log_source=file:X fetches the file when listed',
 	}
 });
 
-test('GET /views/containers/:id?log_source=file:missing shows log file not found', async () => {
+test('GET /views/workers/:id?log_source=file:missing shows log file not found', async () => {
 	let textCalled = false;
 	const orchestrator = makeFakeOrchestrator({
 		getJson: async (path) => {
-			if (path === '/containers/c-aaa') return SAMPLE_CONTAINERS[0];
-			if (path === '/containers/c-aaa/logs/files') return ['0.log'];
-			if (path === '/containers/c-aaa/execs') return [];
+			if (path === '/workers/c-aaa') return SAMPLE_WORKERS[0];
+			if (path === '/workers/c-aaa/logs/files') return ['0.log'];
+			if (path === '/workers/c-aaa/execs') return [];
 			throw new Error(`unexpected getJson: ${path}`);
 		},
 		getText: async () => { textCalled = true; return ''; },
 	});
 	const { url, close } = await startApp(orchestrator);
 	try {
-		const res = await fetch(`${url}/views/containers/c-aaa?log_source=file:nope.log`);
+		const res = await fetch(`${url}/views/workers/c-aaa?log_source=file:nope.log`);
 		assert.equal(res.status, 200);
 		assert.equal(textCalled, false, 'should not fetch log content for invalid filename');
 		const text = await res.text();
@@ -304,19 +304,19 @@ test('GET /views/containers/:id?log_source=file:missing shows log file not found
 	}
 });
 
-test('GET /views/containers/:id treats live 404 as empty log output', async () => {
+test('GET /views/workers/:id treats live 404 as empty log output', async () => {
 	const orchestrator = makeFakeOrchestrator({
 		getJson: async (path) => {
-			if (path === '/containers/c-aaa') return SAMPLE_CONTAINERS[0];
-			if (path === '/containers/c-aaa/logs/files') return [];
-			if (path === '/containers/c-aaa/execs') return [];
+			if (path === '/workers/c-aaa') return SAMPLE_WORKERS[0];
+			if (path === '/workers/c-aaa/logs/files') return [];
+			if (path === '/workers/c-aaa/execs') return [];
 			throw new Error(`unexpected getJson: ${path}`);
 		},
 		getText: async () => { throw new OrchestratorHttpError(404, { detail: 'no docker' }); },
 	});
 	const { url, close } = await startApp(orchestrator);
 	try {
-		const res = await fetch(`${url}/views/containers/c-aaa`);
+		const res = await fetch(`${url}/views/workers/c-aaa`);
 		assert.equal(res.status, 200);
 		const text = await res.text();
 		assert.match(text, /\(no log output\)/);
@@ -325,22 +325,22 @@ test('GET /views/containers/:id treats live 404 as empty log output', async () =
 	}
 });
 
-test('GET /views/containers/:id?log_source=orchestrator handles 503', async () => {
+test('GET /views/workers/:id?log_source=orchestrator handles 503', async () => {
 	const orchestrator = makeFakeOrchestrator({
 		getJson: async (path) => {
-			if (path === '/containers/c-aaa') return SAMPLE_CONTAINERS[0];
-			if (path === '/containers/c-aaa/logs/files') return [];
-			if (path === '/containers/c-aaa/execs') return [];
+			if (path === '/workers/c-aaa') return SAMPLE_WORKERS[0];
+			if (path === '/workers/c-aaa/logs/files') return [];
+			if (path === '/workers/c-aaa/execs') return [];
 			throw new Error(`unexpected getJson: ${path}`);
 		},
 		getText: async () => { throw new OrchestratorHttpError(503, { detail: 'cannot detect' }); },
 	});
 	const { url, close } = await startApp(orchestrator);
 	try {
-		const res = await fetch(`${url}/views/containers/c-aaa?log_source=orchestrator`);
+		const res = await fetch(`${url}/views/workers/c-aaa?log_source=orchestrator`);
 		assert.equal(res.status, 200);
 		const text = await res.text();
-		assert.match(text, /Container logging not configured/);
+		assert.match(text, /Worker logging not configured/);
 	} finally {
 		await close();
 	}
@@ -348,47 +348,47 @@ test('GET /views/containers/:id?log_source=orchestrator handles 503', async () =
 
 // --- action bar (Stop / Resume / Destroy) --------------------------------
 
-test('GET /views/containers/:id renders a Resume button when the container is stopped', async () => {
-	const stoppedContainer = {
-		...SAMPLE_CONTAINERS[0],
+test('GET /views/workers/:id renders a Resume button when the worker is stopped', async () => {
+	const stoppedWorker = {
+		...SAMPLE_WORKERS[0],
 		status: 'stopped',
 		stopped_at: '2026-05-04T01:00:00Z',
 	};
 	const orchestrator = makeFakeOrchestrator({
 		getJson: async (path) => {
-			if (path === '/containers/c-aaa') return stoppedContainer;
-			if (path === '/containers/c-aaa/logs/files') return [];
-			if (path === '/containers/c-aaa/execs') return [];
+			if (path === '/workers/c-aaa') return stoppedWorker;
+			if (path === '/workers/c-aaa/logs/files') return [];
+			if (path === '/workers/c-aaa/execs') return [];
 			throw new Error(`unexpected getJson: ${path}`);
 		},
 		getText: async () => '',
 	});
 	const { url, close } = await startApp(orchestrator);
 	try {
-		const res = await fetch(`${url}/views/containers/c-aaa`);
+		const res = await fetch(`${url}/views/workers/c-aaa`);
 		assert.equal(res.status, 200);
 		const text = await res.text();
-		assert.match(text, /<button[^>]*class="btn btn-primary btn-resume"[^>]*hx-post="\/actions\/containers\/c-aaa\/resume"[^>]*>Resume<\/button>/);
-		// Stop button must not be rendered on a stopped container.
+		assert.match(text, /<button[^>]*class="btn btn-primary btn-resume"[^>]*hx-post="\/actions\/workers\/c-aaa\/resume"[^>]*>Resume<\/button>/);
+		// Stop button must not be rendered on a stopped worker.
 		assert.equal(text.includes('btn-stop'), false, 'Stop button must not appear when stopped');
 	} finally {
 		await close();
 	}
 });
 
-test('GET /views/containers/:id does not render a Resume button when the container is running', async () => {
+test('GET /views/workers/:id does not render a Resume button when the worker is running', async () => {
 	const orchestrator = makeFakeOrchestrator({
 		getJson: async (path) => {
-			if (path === '/containers/c-aaa') return SAMPLE_CONTAINERS[0];
-			if (path === '/containers/c-aaa/logs/files') return [];
-			if (path === '/containers/c-aaa/execs') return [];
+			if (path === '/workers/c-aaa') return SAMPLE_WORKERS[0];
+			if (path === '/workers/c-aaa/logs/files') return [];
+			if (path === '/workers/c-aaa/execs') return [];
 			throw new Error(`unexpected getJson: ${path}`);
 		},
 		getText: async () => '',
 	});
 	const { url, close } = await startApp(orchestrator);
 	try {
-		const res = await fetch(`${url}/views/containers/c-aaa`);
+		const res = await fetch(`${url}/views/workers/c-aaa`);
 		assert.equal(res.status, 200);
 		const text = await res.text();
 		assert.equal(text.includes('btn-resume'), false, 'Resume button must not appear when running');
@@ -417,12 +417,12 @@ const SAMPLE_COMMANDS = [
 	},
 ];
 
-test('GET /views/containers/:id renders the exec commands table when commands exist', async () => {
+test('GET /views/workers/:id renders the exec commands table when commands exist', async () => {
 	const orchestrator = makeFakeOrchestrator({
 		getJson: async (path) => {
-			if (path === '/containers/c-aaa') return SAMPLE_CONTAINERS[0];
-			if (path === '/containers/c-aaa/logs/files') return [];
-			if (path === '/containers/c-aaa/execs') return SAMPLE_COMMANDS;
+			if (path === '/workers/c-aaa') return SAMPLE_WORKERS[0];
+			if (path === '/workers/c-aaa/logs/files') return [];
+			if (path === '/workers/c-aaa/execs') return SAMPLE_COMMANDS;
 			if (path === '/images') return SAMPLE_IMAGES;
 			throw new Error(`unexpected getJson: ${path}`);
 		},
@@ -430,7 +430,7 @@ test('GET /views/containers/:id renders the exec commands table when commands ex
 	});
 	const { url, close } = await startApp(orchestrator);
 	try {
-		const res = await fetch(`${url}/views/containers/c-aaa`);
+		const res = await fetch(`${url}/views/workers/c-aaa`);
 		assert.equal(res.status, 200);
 		const text = await res.text();
 		assert.match(text, /id="command-rows"/);
@@ -438,7 +438,7 @@ test('GET /views/containers/:id renders the exec commands table when commands ex
 		assert.match(text, /id="command-cmd-002"/);
 		assert.match(text, /echo hello/);
 		assert.match(text, /sleep 5/);
-		assert.match(text, /href="\/views\/containers\/c-aaa\/execs\/cmd-001"/);
+		assert.match(text, /href="\/views\/workers\/c-aaa\/execs\/cmd-001"/);
 		assert.match(text, /status-complete/);
 		assert.match(text, /status-running/);
 		assert.equal(text.includes('No exec commands yet'), false);
@@ -447,12 +447,12 @@ test('GET /views/containers/:id renders the exec commands table when commands ex
 	}
 });
 
-test('GET /views/containers/:id swallows 404 from /execs (matches missing-container path)', async () => {
+test('GET /views/workers/:id swallows 404 from /execs (matches missing-worker path)', async () => {
 	const orchestrator = makeFakeOrchestrator({
 		getJson: async (path) => {
-			if (path === '/containers/c-aaa') return SAMPLE_CONTAINERS[0];
-			if (path === '/containers/c-aaa/logs/files') return [];
-			if (path === '/containers/c-aaa/execs') throw new OrchestratorHttpError(404, { detail: 'gone' });
+			if (path === '/workers/c-aaa') return SAMPLE_WORKERS[0];
+			if (path === '/workers/c-aaa/logs/files') return [];
+			if (path === '/workers/c-aaa/execs') throw new OrchestratorHttpError(404, { detail: 'gone' });
 			if (path === '/images') return SAMPLE_IMAGES;
 			throw new Error(`unexpected getJson: ${path}`);
 		},
@@ -460,7 +460,7 @@ test('GET /views/containers/:id swallows 404 from /execs (matches missing-contai
 	});
 	const { url, close } = await startApp(orchestrator);
 	try {
-		const res = await fetch(`${url}/views/containers/c-aaa`);
+		const res = await fetch(`${url}/views/workers/c-aaa`);
 		assert.equal(res.status, 200);
 		const text = await res.text();
 		assert.match(text, /No exec commands yet/);
@@ -469,12 +469,12 @@ test('GET /views/containers/:id swallows 404 from /execs (matches missing-contai
 	}
 });
 
-test('GET /views/containers/:id shows the exec input form when the image declares exec', async () => {
+test('GET /views/workers/:id shows the exec input form when the image declares exec', async () => {
 	const orchestrator = makeFakeOrchestrator({
 		getJson: async (path) => {
-			if (path === '/containers/c-aaa') return SAMPLE_CONTAINERS[0];
-			if (path === '/containers/c-aaa/logs/files') return [];
-			if (path === '/containers/c-aaa/execs') return [];
+			if (path === '/workers/c-aaa') return SAMPLE_WORKERS[0];
+			if (path === '/workers/c-aaa/logs/files') return [];
+			if (path === '/workers/c-aaa/execs') return [];
 			if (path === '/images') return SAMPLE_IMAGES;
 			throw new Error(`unexpected getJson: ${path}`);
 		},
@@ -482,7 +482,7 @@ test('GET /views/containers/:id shows the exec input form when the image declare
 	});
 	const { url, close } = await startApp(orchestrator);
 	try {
-		const res = await fetch(`${url}/views/containers/c-aaa`);
+		const res = await fetch(`${url}/views/workers/c-aaa`);
 		assert.equal(res.status, 200);
 		const text = await res.text();
 		assert.match(text, /class="exec-input-form"/);
@@ -492,13 +492,13 @@ test('GET /views/containers/:id shows the exec input form when the image declare
 	}
 });
 
-test('GET /views/containers/:id hides the exec UI when the image lacks the exec capability', async () => {
-	const nodeContainer = { ...SAMPLE_CONTAINERS[0], image: 'node-runner' };
+test('GET /views/workers/:id hides the exec UI when the image lacks the exec capability', async () => {
+	const nodeWorker = { ...SAMPLE_WORKERS[0], image: 'node-runner' };
 	const orchestrator = makeFakeOrchestrator({
 		getJson: async (path) => {
-			if (path === '/containers/c-aaa') return nodeContainer;
-			if (path === '/containers/c-aaa/logs/files') return [];
-			if (path === '/containers/c-aaa/execs') return SAMPLE_COMMANDS;
+			if (path === '/workers/c-aaa') return nodeWorker;
+			if (path === '/workers/c-aaa/logs/files') return [];
+			if (path === '/workers/c-aaa/execs') return SAMPLE_COMMANDS;
 			if (path === '/images') return SAMPLE_IMAGES;
 			throw new Error(`unexpected getJson: ${path}`);
 		},
@@ -506,7 +506,7 @@ test('GET /views/containers/:id hides the exec UI when the image lacks the exec 
 	});
 	const { url, close } = await startApp(orchestrator);
 	try {
-		const res = await fetch(`${url}/views/containers/c-aaa`);
+		const res = await fetch(`${url}/views/workers/c-aaa`);
 		assert.equal(res.status, 200);
 		const text = await res.text();
 		assert.match(text, /This image does not support exec commands/);
@@ -519,12 +519,12 @@ test('GET /views/containers/:id hides the exec UI when the image lacks the exec 
 	}
 });
 
-test('GET /views/containers/:id hides the exec UI when the image is unknown / images fetch fails', async () => {
+test('GET /views/workers/:id hides the exec UI when the image is unknown / images fetch fails', async () => {
 	const orchestrator = makeFakeOrchestrator({
 		getJson: async (path) => {
-			if (path === '/containers/c-aaa') return SAMPLE_CONTAINERS[0];
-			if (path === '/containers/c-aaa/logs/files') return [];
-			if (path === '/containers/c-aaa/execs') return [];
+			if (path === '/workers/c-aaa') return SAMPLE_WORKERS[0];
+			if (path === '/workers/c-aaa/logs/files') return [];
+			if (path === '/workers/c-aaa/execs') return [];
 			if (path === '/images') throw new OrchestratorHttpError(503, { detail: 'unreachable' });
 			throw new Error(`unexpected getJson: ${path}`);
 		},
@@ -532,7 +532,7 @@ test('GET /views/containers/:id hides the exec UI when the image is unknown / im
 	});
 	const { url, close } = await startApp(orchestrator);
 	try {
-		const res = await fetch(`${url}/views/containers/c-aaa`);
+		const res = await fetch(`${url}/views/workers/c-aaa`);
 		assert.equal(res.status, 200);
 		const text = await res.text();
 		assert.match(text, /This image does not support exec commands/);
@@ -542,7 +542,7 @@ test('GET /views/containers/:id hides the exec UI when the image is unknown / im
 	}
 });
 
-test('GET /views/containers/:id/execs/:commandId renders the exec output page', async () => {
+test('GET /views/workers/:id/execs/:commandId renders the exec output page', async () => {
 	const exec = {
 		command_id: 'cmd-001',
 		command: 'echo hello',
@@ -555,14 +555,14 @@ test('GET /views/containers/:id/execs/:commandId renders the exec output page', 
 	};
 	const orchestrator = makeFakeOrchestrator({
 		getJson: async (path) => {
-			if (path === '/containers/c-aaa') return SAMPLE_CONTAINERS[0];
-			if (path === '/containers/c-aaa/execs/cmd-001') return exec;
+			if (path === '/workers/c-aaa') return SAMPLE_WORKERS[0];
+			if (path === '/workers/c-aaa/execs/cmd-001') return exec;
 			throw new Error(`unexpected getJson: ${path}`);
 		},
 	});
 	const { url, close } = await startApp(orchestrator);
 	try {
-		const res = await fetch(`${url}/views/containers/c-aaa/execs/cmd-001`);
+		const res = await fetch(`${url}/views/workers/c-aaa/execs/cmd-001`);
 		assert.equal(res.status, 200);
 		const text = await res.text();
 		assert.match(text, /id="exec-detail"/);
@@ -572,13 +572,13 @@ test('GET /views/containers/:id/execs/:commandId renders the exec output page', 
 		assert.match(text, /Exit code/);
 		assert.match(text, /<span class="output-chunk">hello\n<\/span>/);
 		assert.match(text, /<span class="output-chunk output-stderr">warn: something\n<\/span>/);
-		assert.match(text, /href="\/views\/containers\/c-aaa"/);
+		assert.match(text, /href="\/views\/workers\/c-aaa"/);
 	} finally {
 		await close();
 	}
 });
 
-test('GET /views/containers/:id/execs/:commandId renders empty output state', async () => {
+test('GET /views/workers/:id/execs/:commandId renders empty output state', async () => {
 	const exec = {
 		command_id: 'cmd-002',
 		command: 'sleep 5',
@@ -588,14 +588,14 @@ test('GET /views/containers/:id/execs/:commandId renders empty output state', as
 	};
 	const orchestrator = makeFakeOrchestrator({
 		getJson: async (path) => {
-			if (path === '/containers/c-aaa') return SAMPLE_CONTAINERS[0];
-			if (path === '/containers/c-aaa/execs/cmd-002') return exec;
+			if (path === '/workers/c-aaa') return SAMPLE_WORKERS[0];
+			if (path === '/workers/c-aaa/execs/cmd-002') return exec;
 			throw new Error(`unexpected getJson: ${path}`);
 		},
 	});
 	const { url, close } = await startApp(orchestrator);
 	try {
-		const res = await fetch(`${url}/views/containers/c-aaa/execs/cmd-002`);
+		const res = await fetch(`${url}/views/workers/c-aaa/execs/cmd-002`);
 		assert.equal(res.status, 200);
 		const text = await res.text();
 		assert.match(text, /\(no output yet\)/);
@@ -605,11 +605,11 @@ test('GET /views/containers/:id/execs/:commandId renders empty output state', as
 	}
 });
 
-test('GET /views/containers/:id/execs/:commandId returns 404 when the command is missing', async () => {
+test('GET /views/workers/:id/execs/:commandId returns 404 when the command is missing', async () => {
 	const orchestrator = makeFakeOrchestrator({
 		getJson: async (path) => {
-			if (path === '/containers/c-aaa') return SAMPLE_CONTAINERS[0];
-			if (path === '/containers/c-aaa/execs/missing') {
+			if (path === '/workers/c-aaa') return SAMPLE_WORKERS[0];
+			if (path === '/workers/c-aaa/execs/missing') {
 				throw new OrchestratorHttpError(404, { detail: 'not found' });
 			}
 			throw new Error(`unexpected getJson: ${path}`);
@@ -617,7 +617,7 @@ test('GET /views/containers/:id/execs/:commandId returns 404 when the command is
 	});
 	const { url, close } = await startApp(orchestrator);
 	try {
-		const res = await fetch(`${url}/views/containers/c-aaa/execs/missing`);
+		const res = await fetch(`${url}/views/workers/c-aaa/execs/missing`);
 		assert.equal(res.status, 404);
 		const text = await res.text();
 		assert.match(text, /Not found/);
@@ -673,7 +673,7 @@ test('GET /views/launch renders the form with image options', async () => {
 		const res = await fetch(`${url}/views/launch`);
 		assert.equal(res.status, 200);
 		const text = await res.text();
-		assert.match(text, /<form[^>]*hx-post="\/actions\/containers"/);
+		assert.match(text, /<form[^>]*hx-post="\/actions\/workers"/);
 		assert.match(text, /<option\s+value="python-runner"/);
 		assert.match(text, /<option\s+value="node-runner"/);
 	} finally {
@@ -699,8 +699,8 @@ test('GET /views/launch falls back to a free-text image input when /images fails
 
 // --- escape regression ----------------------------------------------------
 
-test('GET /views/containers/:id escapes attacker-controlled fields', async () => {
-	const evilContainer = {
+test('GET /views/workers/:id escapes attacker-controlled fields', async () => {
+	const evilWorker = {
 		id: '<script>alert(1)</script>',
 		image: '"><script>',
 		privileged: false,
@@ -716,13 +716,13 @@ test('GET /views/containers/:id escapes attacker-controlled fields', async () =>
 		getJson: async (path) => {
 			if (path.endsWith('/logs/files')) return [];
 			if (path.endsWith('/execs')) return [];
-			return evilContainer;
+			return evilWorker;
 		},
 		getText: async () => '',
 	});
 	const { url, close } = await startApp(orchestrator);
 	try {
-		const res = await fetch(`${url}/views/containers/anything`);
+		const res = await fetch(`${url}/views/workers/anything`);
 		const text = await res.text();
 		assert.equal(text.includes('<script>alert(1)</script>'), false, 'id leaked unescaped');
 		assert.equal(text.includes('<img src=x>'), false, 'label leaked unescaped');

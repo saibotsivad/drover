@@ -1,6 +1,6 @@
 # drover-executor
 
-Guest-agent library that runs inside Drover micro-containers. It connects to the orchestrator's Unix socket at `/var/run/drover/sockets/orchestrator.sock`, receives commands, executes them as subprocesses, streams stdout/stderr back, and reports exit codes.
+Worker-agent library that runs inside Drover workers. It connects to the orchestrator's Unix socket at `/var/run/drover/sockets/orchestrator.sock`, receives commands, executes them as subprocesses, streams stdout/stderr back, and reports exit codes.
 
 Zero external dependencies — Python 3.11+ stdlib only.
 
@@ -23,7 +23,7 @@ RUN pip install --no-cache-dir \
 CMD ["drover-executor"]
 ```
 
-The `drover-executor` command connects to `/var/run/drover/sockets/orchestrator.sock` (inside the per-container folder the orchestrator bind-mounts into every container at `/var/run/drover/sockets/`) and processes commands indefinitely.
+The `drover-executor` command connects to `/var/run/drover/sockets/orchestrator.sock` (inside the per-worker folder the orchestrator bind-mounts into every worker at `/var/run/drover/sockets/`) and processes commands indefinitely.
 
 ### Pinning a version
 
@@ -98,7 +98,7 @@ asyncio.run(MyAgent().run())
 |---|---|
 | `Agent(socket_path, heartbeat_interval, max_concurrent_commands, auto_heartbeat)` | Constructor with sensible defaults |
 | `await agent.run()` | Connect and process commands until the socket closes or a signal is received |
-| `await agent.send_done()` | Tell the orchestrator this container is finished (triggers early stop) |
+| `await agent.send_done()` | Tell the orchestrator this worker is finished (triggers early stop) |
 | `await agent.send_heartbeat()` | Send a single heartbeat manually (useful with `auto_heartbeat=False`) |
 | `async on_connect()` | Override point, called after connection |
 | `async on_command(cmd_id, exec_str)` | Override point, called for each command |
@@ -106,8 +106,8 @@ asyncio.run(MyAgent().run())
 
 ### Heartbeat Modes
 
-- **`auto_heartbeat=True`** (default): A background task sends heartbeats for the lifetime of the connection. The container stays alive as long as the agent is running.
-- **`auto_heartbeat=False`**: No automatic heartbeats. Call `send_heartbeat()` on your own schedule. This is useful when you want the orchestrator's idle timeout to reap the container if your agent stalls.
+- **`auto_heartbeat=True`** (default): A background task sends heartbeats for the lifetime of the connection. The worker stays alive as long as the agent is running.
+- **`auto_heartbeat=False`**: No automatic heartbeats. Call `send_heartbeat()` on your own schedule. This is useful when you want the orchestrator's idle timeout to reap the worker if your agent stalls.
 
 ### Done Signal
 

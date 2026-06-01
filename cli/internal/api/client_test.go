@@ -25,22 +25,22 @@ func TestAuthAndAcceptHeaders(t *testing.T) {
 		}
 		w.Write([]byte("[]"))
 	})
-	if _, err := c.ListContainers(context.Background()); err != nil {
-		t.Fatalf("ListContainers: %v", err)
+	if _, err := c.ListWorkers(context.Background()); err != nil {
+		t.Fatalf("ListWorkers: %v", err)
 	}
 }
 
 func TestErrorDetailString(t *testing.T) {
 	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
-		w.Write([]byte(`{"detail":"container not found"}`))
+		w.Write([]byte(`{"detail":"worker not found"}`))
 	})
-	_, err := c.GetContainer(context.Background(), "missing")
+	_, err := c.GetWorker(context.Background(), "missing")
 	ae, ok := err.(*Error)
 	if !ok {
 		t.Fatalf("err type = %T, want *Error", err)
 	}
-	if ae.Status != 404 || ae.Detail != "container not found" || ae.ExitCode() != 1 {
+	if ae.Status != 404 || ae.Detail != "worker not found" || ae.ExitCode() != 1 {
 		t.Errorf("Error = %+v (exit %d)", ae, ae.ExitCode())
 	}
 	if !IsNotFound(err) {
@@ -53,7 +53,7 @@ func TestErrorDetailValidationList(t *testing.T) {
 		w.WriteHeader(http.StatusUnprocessableEntity)
 		w.Write([]byte(`{"detail":[{"loc":["body","image"],"msg":"field required"}]}`))
 	})
-	_, err := c.GetContainer(context.Background(), "x")
+	_, err := c.GetWorker(context.Background(), "x")
 	ae := err.(*Error)
 	if !strings.Contains(ae.Detail, "field required") {
 		t.Errorf("detail = %q, want it to contain the validation message", ae.Detail)
@@ -65,7 +65,7 @@ func TestErrorNonJSONBody(t *testing.T) {
 		w.WriteHeader(http.StatusInternalServerError)
 		w.Write([]byte("upstream boom"))
 	})
-	_, err := c.GetContainer(context.Background(), "x")
+	_, err := c.GetWorker(context.Background(), "x")
 	ae := err.(*Error)
 	if ae.Detail != "upstream boom" {
 		t.Errorf("detail = %q", ae.Detail)
@@ -77,7 +77,7 @@ func TestTransportError(t *testing.T) {
 	url := srv.URL
 	srv.Close() // close so the connection is refused
 	c := New(url, "sk-test")
-	_, err := c.ListContainers(context.Background())
+	_, err := c.ListWorkers(context.Background())
 	ae, ok := err.(*Error)
 	if !ok || ae.Kind != "request_failed" {
 		t.Fatalf("err = %v (%T), want request_failed Error", err, err)

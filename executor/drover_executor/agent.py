@@ -1,4 +1,4 @@
-"""Core guest agent that connects to the orchestrator's Unix socket."""
+"""Core worker agent that connects to the orchestrator's Unix socket."""
 
 import asyncio
 import logging
@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 
 
 class Agent:
-    """Guest agent that runs inside a Drover container.
+    """Worker agent that runs inside a Drover worker.
 
     Connects to the orchestrator's Unix socket, receives commands, executes
     them as subprocesses, streams stdout/stderr back, and reports exit codes.
@@ -62,9 +62,9 @@ class Agent:
         except ConnectionRefusedError:
             logger.error(
                 "Connection refused on orchestrator socket %s. "
-                "If this container runs under gVisor (runsc), the Docker daemon "
+                "If this worker runs under gVisor (runsc), the Docker daemon "
                 "must have '--host-uds=all' in the runsc runtimeArgs — without it "
-                "gVisor blocks Unix socket connections across the container boundary. "
+                "gVisor blocks Unix socket connections across the worker boundary. "
                 "See the Drover docs (docs/install-runsc-gvisor.md) for setup "
                 "instructions.",
                 self.socket_path,
@@ -77,7 +77,7 @@ class Agent:
             # Signal readiness to the orchestrator after any subclass
             # startup work in on_connect has completed.  If on_connect
             # raises, this is skipped and the orchestrator's init timeout
-            # watchdog eventually fails the container.
+            # watchdog eventually fails the worker.
             await self._send(protocol.encode_ready())
 
             if self.auto_heartbeat:

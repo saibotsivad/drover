@@ -1,7 +1,7 @@
 # drover CLI
 
 A single-binary command-line client for the Drover orchestrator. Lets you
-list images, launch and manage micro-containers, and run commands in them
+list images, launch and manage workers, and run commands in them
 without hand-writing HTTP requests.
 
 This README is the **contributor** quickstart: how to build, test, and lint

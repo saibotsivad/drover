@@ -69,7 +69,7 @@ test('routes errors to the error stream', () => {
 	assert.equal(errorStream.records.length, 1);
 });
 
-function fakeReqRes({ method = 'POST', url = '/containers', headers = {}, body, status = 200 } = {}) {
+function fakeReqRes({ method = 'POST', url = '/workers', headers = {}, body, status = 200 } = {}) {
 	const req = { method, url, originalUrl: url, headers, body };
 	const res = new EventEmitter();
 	res.statusCode = status;

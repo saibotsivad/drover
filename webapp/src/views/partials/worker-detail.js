@@ -1,5 +1,5 @@
 import { html, safe } from '../render.js';
-import { statusPill } from './containers-list.js';
+import { statusPill } from './workers-list.js';
 
 function metadataRow(label, value) {
 	return html`<div class="meta-row">
@@ -8,32 +8,32 @@ function metadataRow(label, value) {
 	</div>`;
 }
 
-function actionBar(container) {
-	const id = container.id;
-	const isStoppable = container.status === 'running' || container.status === 'initializing';
-	const isResumable = container.status === 'stopped';
-	const isDestroyable = container.status !== 'destroying' && container.status !== 'destroyed';
+function actionBar(worker) {
+	const id = worker.id;
+	const isStoppable = worker.status === 'running' || worker.status === 'initializing';
+	const isResumable = worker.status === 'stopped';
+	const isDestroyable = worker.status !== 'destroying' && worker.status !== 'destroyed';
 	if (!isStoppable && !isResumable && !isDestroyable) return null;
 	return html`<div class="action-bar">
 		${isResumable ? html`<button
 			type="button"
 			class="btn btn-primary btn-resume"
-			hx-post="/actions/containers/${id}/resume"
+			hx-post="/actions/workers/${id}/resume"
 		>Resume</button>` : null}
 		${isStoppable ? html`<button
 			type="button"
 			class="btn btn-secondary btn-stop"
-			hx-post="/actions/containers/${id}/stop"
-			hx-target="#container-meta"
+			hx-post="/actions/workers/${id}/stop"
+			hx-target="#worker-meta"
 			hx-swap="outerHTML"
 		>Stop</button>` : null}
 		${isDestroyable ? html`<button
 			type="button"
 			class="btn btn-danger btn-destroy"
-			hx-delete="/actions/containers/${id}"
-			hx-target="#container-meta"
+			hx-delete="/actions/workers/${id}"
+			hx-target="#worker-meta"
 			hx-swap="outerHTML"
-			hx-confirm="Destroy this container?"
+			hx-confirm="Destroy this worker?"
 		>Destroy</button>` : null}
 	</div>`;
 }
@@ -54,10 +54,10 @@ function formatRelative(iso) {
 	return `${Math.floor(diff / 86400)}d ago`;
 }
 
-function commandRow(containerId, command) {
-	const encodedContainer = encodeURIComponent(containerId);
+function commandRow(workerId, command) {
+	const encodedWorker = encodeURIComponent(workerId);
 	const encodedCommand = encodeURIComponent(command.command_id);
-	const href = `/views/containers/${encodedContainer}/execs/${encodedCommand}`;
+	const href = `/views/workers/${encodedWorker}/execs/${encodedCommand}`;
 	const exitCode = command.exit_code === null || command.exit_code === undefined
 		? html`<span class="muted">—</span>`
 		: command.exit_code;
@@ -69,17 +69,17 @@ function commandRow(containerId, command) {
 	</tr>`;
 }
 
-export function commandRows(containerId, commands) {
+export function commandRows(workerId, commands) {
 	return commands.length === 0
 		? html`<tr class="empty"><td colspan="4">No exec commands yet</td></tr>`
-		: commands.map((c) => commandRow(containerId, c));
+		: commands.map((c) => commandRow(workerId, c));
 }
 
-function execInputSection(containerId) {
+function execInputSection(workerId) {
 	return html`<section class="exec-input-section">
 		<form
 			class="exec-input-form"
-			hx-post="/actions/containers/${containerId}/execs"
+			hx-post="/actions/workers/${workerId}/execs"
 			hx-target="#command-rows"
 			hx-swap="innerHTML"
 			hx-on::after-request="if(event.detail.successful){this.reset();this.querySelector('[data-replicated-value]').dataset.replicatedValue=''}"
@@ -97,7 +97,7 @@ function execInputSection(containerId) {
 	</section>`;
 }
 
-function execSection(containerId, commands) {
+function execSection(workerId, commands) {
 	return html`<section class="exec-section">
 		<h3>Exec Commands</h3>
 		<table class="data-table">
@@ -109,7 +109,7 @@ function execSection(containerId, commands) {
 					<th>Started</th>
 				</tr>
 			</thead>
-			<tbody id="command-rows">${commandRows(containerId, commands)}</tbody>
+			<tbody id="command-rows">${commandRows(workerId, commands)}</tbody>
 		</table>
 	</section>`;
 }
@@ -129,7 +129,7 @@ function logsSection(id, opts) {
 	} = opts || {};
 	const encodedId = encodeURIComponent(id);
 	const onchange = safe(
-		`window.location.href='/views/containers/${encodedId}?log_source='+encodeURIComponent(this.value)`,
+		`window.location.href='/views/workers/${encodedId}?log_source='+encodeURIComponent(this.value)`,
 	);
 	const fileOptions = logFiles.map((name) =>
 		logSourceOption(`file:${encodeURIComponent(name)}`, name, logSource),
@@ -137,7 +137,7 @@ function logsSection(id, opts) {
 	let viewer;
 	if (logContent === null) {
 		const message = logUnavailable
-			? 'Container logging not configured'
+			? 'Worker logging not configured'
 			: 'Log file not found';
 		viewer = html`<p class="muted log-viewer-empty">${message}</p>`;
 	} else if (logContent === '') {
@@ -150,7 +150,7 @@ function logsSection(id, opts) {
 		<label class="log-source-label">
 			Source
 			<select class="log-source-select" onchange="${onchange}">
-				${logSourceOption('live', 'Live container logs', logSource)}
+				${logSourceOption('live', 'Live worker logs', logSource)}
 				${fileOptions}
 				${logSourceOption('orchestrator', 'Orchestrator logs', logSource)}
 			</select>
@@ -160,30 +160,30 @@ function logsSection(id, opts) {
 	</section>`;
 }
 
-export function containerDetailPage(container, logOpts = null, commands = null, { canExec = false } = {}) {
-	return html`<section id="container-detail">
+export function workerDetailPage(worker, logOpts = null, commands = null, { canExec = false } = {}) {
+	return html`<section id="worker-detail">
 		<div class="page-header">
-			<h2>Container <code>${container.id}</code></h2>
-			<a class="btn btn-secondary" href="/views/containers">Back to list</a>
+			<h2>Worker <code>${worker.id}</code></h2>
+			<a class="btn btn-secondary" href="/views/workers">Back to list</a>
 		</div>
-		<dl id="container-meta" class="meta-grid">
-			${metadataRow('Status', statusPill(container.status))}
-			${metadataRow('Image', html`<code>${container.image}</code>`)}
-			${metadataRow('Label', container.label || html`<span class="muted">—</span>`)}
-			${metadataRow('Privileged', container.privileged ? 'yes' : 'no')}
-			${metadataRow('Timeout (seconds)', container.timeout_seconds)}
-			${metadataRow('Created', html`<time datetime="${container.created_at}">${container.created_at}</time>`)}
-			${container.last_seen ? metadataRow('Last seen', html`<time datetime="${container.last_seen}">${container.last_seen}</time>`) : null}
-			${container.stopped_at ? metadataRow('Stopped', html`<time datetime="${container.stopped_at}">${container.stopped_at}</time>`) : null}
-			${container.error_code ? metadataRow('Error code', html`<code>${container.error_code}</code>`) : null}
+		<dl id="worker-meta" class="meta-grid">
+			${metadataRow('Status', statusPill(worker.status))}
+			${metadataRow('Image', html`<code>${worker.image}</code>`)}
+			${metadataRow('Label', worker.label || html`<span class="muted">—</span>`)}
+			${metadataRow('Privileged', worker.privileged ? 'yes' : 'no')}
+			${metadataRow('Timeout (seconds)', worker.timeout_seconds)}
+			${metadataRow('Created', html`<time datetime="${worker.created_at}">${worker.created_at}</time>`)}
+			${worker.last_seen ? metadataRow('Last seen', html`<time datetime="${worker.last_seen}">${worker.last_seen}</time>`) : null}
+			${worker.stopped_at ? metadataRow('Stopped', html`<time datetime="${worker.stopped_at}">${worker.stopped_at}</time>`) : null}
+			${worker.error_code ? metadataRow('Error code', html`<code>${worker.error_code}</code>`) : null}
 		</dl>
-		${actionBar(container)}
-		${canExec && commands !== null ? execInputSection(container.id) : null}
-		${canExec && commands !== null ? execSection(container.id, commands) : null}
+		${actionBar(worker)}
+		${canExec && commands !== null ? execInputSection(worker.id) : null}
+		${canExec && commands !== null ? execSection(worker.id, commands) : null}
 		${!canExec ? html`<section class="exec-section">
 			<h3>Exec Commands</h3>
 			<p class="muted">This image does not support exec commands.</p>
 		</section>` : null}
-		${logOpts ? logsSection(container.id, logOpts) : null}
+		${logOpts ? logsSection(worker.id, logOpts) : null}
 	</section>`;
 }

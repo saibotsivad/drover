@@ -2,7 +2,7 @@
 
 End-user usage reference for the `drover` command-line client. Read this
 when you want to drive the orchestrator from a terminal or a script:
-listing images, launching and tearing down micro-containers, and running
+listing images, launching and tearing down workers, and running
 exec commands. Everything the CLI prints on success is JSON, so it composes
 with `jq` and standard shell plumbing.
 
@@ -68,11 +68,11 @@ newline-delimited JSON frames (see [§5](#5-exec-streaming)).
 |---|---|---|
 | `drover images` | `GET /images` | List available Drover-managed images. |
 | `drover image <name>` | `GET /images/{name}` | Show details for one image. |
-| `drover ps` | `GET /containers` | List micro-containers. |
-| `drover start <image>` | `POST /containers` | Launch a micro-container from a managed image. |
-| `drover stop <id>` | `POST /containers/{id}/stop` | Stop a container (resumable). |
-| `drover destroy <id>` | `DELETE /containers/{id}` | Stop and destroy a container. |
-| `drover exec <id> -- <cmd...>` | `POST /containers/{id}/execs` then `GET /containers/{id}/ws` | Run a command in a container and stream its output. |
+| `drover ps` | `GET /workers` | List workers. |
+| `drover start <image>` | `POST /workers` | Launch a worker from a managed image. |
+| `drover stop <id>` | `POST /workers/{id}/stop` | Stop a worker (resumable). |
+| `drover destroy <id>` | `DELETE /workers/{id}` | Stop and destroy a worker. |
+| `drover exec <id> -- <cmd...>` | `POST /workers/{id}/execs` then `GET /workers/{id}/ws` | Run a command in a worker and stream its output. |
 | `drover keygen` | _(local)_ | Generate a new API key and its SHA-256 hash. |
 
 ### Read-only commands
@@ -89,18 +89,18 @@ drover ps | jq -r '.[] | select(.status=="running") | .id'
 ### Lifecycle commands
 
 `start`, `stop`, and `destroy` make their transition request and then
-**block until the container reaches its terminal state** (`running`,
-`stopped`, or `destroyed` respectively) before printing the final container
+**block until the worker reaches its terminal state** (`running`,
+`stopped`, or `destroyed` respectively) before printing the final worker
 JSON. See [§4](#4-lifecycle-polling) for the polling semantics.
 
 `drover start` flags:
 
 | Flag | Default | Description |
 |---|---|---|
-| `--privileged` | off | Run as a privileged micro-container. |
-| `--label <s>` | _(none)_ | Arbitrary label string attached to the container. |
+| `--privileged` | off | Run as a privileged worker. |
+| `--label <s>` | _(none)_ | Arbitrary label string attached to the worker. |
 | `--env KEY=VALUE` | _(none)_ | Set an environment variable. Repeatable; a value without `=` or with an empty key is rejected. |
-| `--timeout <secs>` | `0` | Server-side container lifetime cap in seconds. `0` means the server default. |
+| `--timeout <secs>` | `0` | Server-side worker lifetime cap in seconds. `0` means the server default. |
 | `--no-wait` | off | Return the transitional state immediately instead of blocking. |
 | `--interval <secs>` | `1` | Seconds between poll requests while waiting. |
 
@@ -124,15 +124,15 @@ drover start python-runner --no-wait
 
 ## 4. Lifecycle polling
 
-By default a lifecycle command blocks until the container reaches its
-terminal state, polling `GET /containers/{id}` every `--interval` seconds.
+By default a lifecycle command blocks until the worker reaches its
+terminal state, polling `GET /workers/{id}` every `--interval` seconds.
 The deadline for that polling is the orchestrator's
 `transition_timeout_seconds` value from the initial transition response — the
 CLI does not invent its own timeout.
 
 | Situation | Behaviour |
 |---|---|
-| Terminal state reached | Prints the final container JSON, exit 0. |
+| Terminal state reached | Prints the final worker JSON, exit 0. |
 | `--no-wait` | Prints the transitional state (e.g. `initializing`, `stopping`) immediately, exit 0; no polling. |
 | `transition_timeout_seconds` is `null` | Prints a warning object to stderr and returns the transitional state without waiting. |
 | Deadline elapses before terminal state | `{"error":"timeout","id":"...","status":"..."}`, exit 3. |
@@ -149,20 +149,20 @@ The null-timeout warning looks like:
 
 ## 5. Exec streaming
 
-`drover exec <id> -- <cmd...>` runs a command inside a running container and
+`drover exec <id> -- <cmd...>` runs a command inside a running worker and
 streams its output. Everything after the `--` separator is forwarded
-**verbatim** as the command string; flags placed *before* the container id
+**verbatim** as the command string; flags placed *before* the worker id
 are still parsed normally (an unknown one is rejected).
 
 A bare `drover exec <id>` with no `--` is an error:
 
 ```sh
 $ drover exec abc123
-{"error":"interactive_exec_unsupported","detail":"interactive exec is not yet supported; use: drover exec <container-id> -- <command...>"}
+{"error":"interactive_exec_unsupported","detail":"interactive exec is not yet supported; use: drover exec <worker-id> -- <command...>"}
 ```
 
-Under the hood the CLI POSTs to `/containers/{id}/execs` to obtain a
-`command_id`, then opens the per-container WebSocket `/containers/{id}/ws`,
+Under the hood the CLI POSTs to `/workers/{id}/execs` to obtain a
+`command_id`, then opens the per-worker WebSocket `/workers/{id}/ws`,
 filters frames to that `command_id`, and writes each matching frame to
 stdout as one line of JSON — **no reshaping**. When the command's
 `status:complete` frame arrives, the CLI exits with that command's

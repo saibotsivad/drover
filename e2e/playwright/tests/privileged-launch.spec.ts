@@ -5,37 +5,37 @@ const DROVER_API_KEY = process.env.DROVER_API_KEY ?? 'drover-e2e-test-key';
 
 const AUTH_HEADERS = { Authorization: `Bearer ${DROVER_API_KEY}` };
 
-interface ContainerResponse {
+interface WorkerResponse {
 	id: string;
 	status: string;
 }
 
-async function getContainer(request: APIRequestContext, id: string): Promise<ContainerResponse> {
-	const res = await request.get(`${ORCHESTRATOR_URL}/containers/${id}`, { headers: AUTH_HEADERS });
-	expect(res.ok(), `GET /containers/${id} returned ${res.status()}`).toBeTruthy();
-	return (await res.json()) as ContainerResponse;
+async function getWorker(request: APIRequestContext, id: string): Promise<WorkerResponse> {
+	const res = await request.get(`${ORCHESTRATOR_URL}/workers/${id}`, { headers: AUTH_HEADERS });
+	expect(res.ok(), `GET /workers/${id} returned ${res.status()}`).toBeTruthy();
+	return (await res.json()) as WorkerResponse;
 }
 
-async function waitForContainerStatus(
+async function waitForWorkerStatus(
 	request: APIRequestContext,
 	id: string,
 	targetStatus: string,
 	timeoutMs: number,
-): Promise<ContainerResponse> {
+): Promise<WorkerResponse> {
 	const deadline = Date.now() + timeoutMs;
-	let last: ContainerResponse | null = null;
+	let last: WorkerResponse | null = null;
 	while (Date.now() < deadline) {
-		last = await getContainer(request, id);
+		last = await getWorker(request, id);
 		if (last.status === targetStatus) return last;
 		await new Promise((resolve) => setTimeout(resolve, 500));
 	}
 	throw new Error(
-		`Container ${id} did not reach status "${targetStatus}" within ${timeoutMs}ms; last status was "${last?.status ?? 'unknown'}"`,
+		`Worker ${id} did not reach status "${targetStatus}" within ${timeoutMs}ms; last status was "${last?.status ?? 'unknown'}"`,
 	);
 }
 
 async function listLogFiles(request: APIRequestContext, id: string): Promise<string[]> {
-	const res = await request.get(`${ORCHESTRATOR_URL}/containers/${id}/logs/files`, {
+	const res = await request.get(`${ORCHESTRATOR_URL}/workers/${id}/logs/files`, {
 		headers: AUTH_HEADERS,
 	});
 	if (!res.ok()) return [];
@@ -55,7 +55,7 @@ async function waitForLogFile(
 		if (files.includes(filename)) return;
 		await new Promise((resolve) => setTimeout(resolve, 500));
 	}
-	throw new Error(`Log file "${filename}" did not appear for container ${id} within ${timeoutMs}ms`);
+	throw new Error(`Log file "${filename}" did not appear for worker ${id} within ${timeoutMs}ms`);
 }
 
 async function waitForExecComplete(page: Page, timeoutMs: number): Promise<void> {
@@ -69,7 +69,7 @@ async function waitForExecComplete(page: Page, timeoutMs: number): Promise<void>
 }
 
 async function waitForLogViewerAttached(page: Page, timeoutMs: number): Promise<void> {
-	// The container detail page renders #log-viewer only when the
+	// The worker detail page renders #log-viewer only when the
 	// configured log source has non-empty content. We reload the page
 	// between polls because logs are fetched server-side on render.
 	const deadline = Date.now() + timeoutMs;
@@ -81,13 +81,13 @@ async function waitForLogViewerAttached(page: Page, timeoutMs: number): Promise<
 	throw new Error(`#log-viewer did not attach within ${timeoutMs}ms`);
 }
 
-// Tests 2–5 share a single launched container. The `e2e/run.sh down` step
+// Tests 2–5 share a single launched worker. The `e2e/run.sh down` step
 // already cleans up every `drover.managed=true` container, so no afterAll
 // teardown is needed here — matches the existing bash suite.
-test.describe.serial('privileged container UI flows', () => {
-	let containerId: string;
+test.describe.serial('privileged worker UI flows', () => {
+	let workerId: string;
 
-	test('launches a privileged container and execs a shell echo', async ({ page, request }) => {
+	test('launches a privileged worker and execs a shell echo', async ({ page, request }) => {
 		await page.goto('/views/launch');
 		await expect(page.locator('#launch-form')).toBeVisible();
 
@@ -98,17 +98,17 @@ test.describe.serial('privileged container UI flows', () => {
 		// HX-Redirect arrives as a 201 with a header — htmx triggers
 		// window.location, so wait on the URL change explicitly.
 		await Promise.all([
-			page.waitForURL(/\/views\/containers\/[^/]+$/),
+			page.waitForURL(/\/views\/workers\/[^/]+$/),
 			page.locator('#launch-form button[type="submit"]').click(),
 		]);
 
-		const match = page.url().match(/\/views\/containers\/([^/?#]+)/);
-		expect(match, `launch should redirect to /views/containers/<id>, got ${page.url()}`).not.toBeNull();
-		containerId = match![1];
+		const match = page.url().match(/\/views\/workers\/([^/?#]+)/);
+		expect(match, `launch should redirect to /views/workers/<id>, got ${page.url()}`).not.toBeNull();
+		workerId = match![1];
 
-		await waitForContainerStatus(request, containerId, 'running', 30_000);
+		await waitForWorkerStatus(request, workerId, 'running', 30_000);
 		await page.reload();
-		await expect(page.locator('#container-detail')).toBeVisible();
+		await expect(page.locator('#worker-detail')).toBeVisible();
 
 		await page.locator('.exec-input-form textarea[name="command"]').fill('echo $DROVER_TEST_VAR');
 		await page.locator('.exec-input-form button[type="submit"]').click();
@@ -124,7 +124,7 @@ test.describe.serial('privileged container UI flows', () => {
 		const commandId = commandRowId!.slice('command-'.length);
 
 		await firstCommandRow.locator('a').first().click();
-		await page.waitForURL(new RegExp(`/views/containers/${containerId}/execs/${commandId}`));
+		await page.waitForURL(new RegExp(`/views/workers/${workerId}/execs/${commandId}`));
 
 		await waitForExecComplete(page, 15_000);
 
@@ -133,12 +133,12 @@ test.describe.serial('privileged container UI flows', () => {
 	});
 
 	test('exec docker container ls confirms privileged docker socket access', async ({ page }) => {
-		expect(containerId, 'containerId must be set by the launch test').toBeTruthy();
+		expect(workerId, 'workerId must be set by the launch test').toBeTruthy();
 
 		// Capture the existing top command-id so we can detect the new row
 		// when it arrives — the table is newest-first, so the new exec
 		// becomes the first matching tr after submission.
-		await page.goto(`/views/containers/${containerId}`);
+		await page.goto(`/views/workers/${workerId}`);
 		const existingTopRow = page.locator('#command-rows tr[id^="command-"]').first();
 		const existingTopId = (await existingTopRow.count()) > 0
 			? await existingTopRow.getAttribute('id')
@@ -162,7 +162,7 @@ test.describe.serial('privileged container UI flows', () => {
 		const commandId = newRowId!.slice('command-'.length);
 
 		await newTopRow.locator('a').first().click();
-		await page.waitForURL(new RegExp(`/views/containers/${containerId}/execs/${commandId}`));
+		await page.waitForURL(new RegExp(`/views/workers/${workerId}/execs/${commandId}`));
 
 		await waitForExecComplete(page, 30_000);
 
@@ -170,13 +170,13 @@ test.describe.serial('privileged container UI flows', () => {
 		await expect(page.locator('#exec-meta')).toContainText('0');
 	});
 
-	test('launched container appears in the containers list', async ({ page }) => {
-		expect(containerId, 'containerId must be set by the launch test').toBeTruthy();
+	test('launched worker appears in the workers list', async ({ page }) => {
+		expect(workerId, 'workerId must be set by the launch test').toBeTruthy();
 
-		await page.goto('/views/containers');
-		await expect(page.locator('#containers-list')).toBeVisible();
+		await page.goto('/views/workers');
+		await expect(page.locator('#workers-list')).toBeVisible();
 
-		const row = page.locator(`#containers-list tbody#container-rows #container-${cssEscape(containerId)}`);
+		const row = page.locator(`#workers-list tbody#worker-rows #worker-${cssEscape(workerId)}`);
 		await expect(row).toBeVisible();
 
 		const statusBadge = row.locator('.status-running, .status-initializing');
@@ -184,15 +184,15 @@ test.describe.serial('privileged container UI flows', () => {
 	});
 
 	test('log viewer renders content for each log source', async ({ page, request }) => {
-		expect(containerId, 'containerId must be set by the launch test').toBeTruthy();
+		expect(workerId, 'workerId must be set by the launch test').toBeTruthy();
 
 		// 1. Live source (default).
-		await page.goto(`/views/containers/${containerId}`);
+		await page.goto(`/views/workers/${workerId}`);
 		await waitForLogViewerAttached(page, 10_000);
 		await expect(page.locator('pre#log-viewer')).toContainText('Connecting to /var/run/drover/sockets/orchestrator.sock');
 
 		// 2. File source — wait for 0.log to be available before switching.
-		await waitForLogFile(request, containerId, '0.log', 15_000);
+		await waitForLogFile(request, workerId, '0.log', 15_000);
 		await page.reload();
 		await page.locator('select.log-source-select').selectOption('file:0.log');
 		await page.waitForURL(/log_source=file%3A0\.log/);
@@ -200,16 +200,16 @@ test.describe.serial('privileged container UI flows', () => {
 		await expect(page.locator('pre#log-viewer')).toContainText('Connecting to');
 
 		// 3. Orchestrator source — endpoint substring-matches on the
-		// container ID, so at least one orchestrator log line mentioning
-		// the container must have been written by now. Verify the API
+		// worker ID, so at least one orchestrator log line mentioning
+		// the worker must have been written by now. Verify the API
 		// is healthy first so a 503 (orchestrator could not detect its
 		// own Docker container id — see _detect_own_container_id) fails
 		// with a clearer message than the UI's empty-state placeholder.
-		await waitForOrchestratorLogContent(request, containerId, 15_000);
+		await waitForOrchestratorLogContent(request, workerId, 15_000);
 		await page.locator('select.log-source-select').selectOption('orchestrator');
 		await page.waitForURL(/log_source=orchestrator/);
 		await waitForLogViewerAttached(page, 10_000);
-		await expect(page.locator('pre#log-viewer')).toContainText(containerId);
+		await expect(page.locator('pre#log-viewer')).toContainText(workerId);
 	});
 });
 
@@ -221,13 +221,13 @@ async function waitForOrchestratorLogContent(
 	const deadline = Date.now() + timeoutMs;
 	let lastStatus = 0;
 	while (Date.now() < deadline) {
-		const res = await request.get(`${ORCHESTRATOR_URL}/containers/${id}/logs/orchestrator`, {
+		const res = await request.get(`${ORCHESTRATOR_URL}/workers/${id}/logs/orchestrator`, {
 			headers: AUTH_HEADERS,
 		});
 		lastStatus = res.status();
 		if (res.status() === 503) {
 			throw new Error(
-				`GET /containers/${id}/logs/orchestrator returned 503 — the orchestrator could not detect its own Docker container id. ` +
+				`GET /workers/${id}/logs/orchestrator returned 503 — the orchestrator could not detect its own Docker container id. ` +
 				'Check orchestrator startup logs for "Could not detect orchestrator\'s own Docker container ID" and verify the cgroup layout.',
 			);
 		}
@@ -238,7 +238,7 @@ async function waitForOrchestratorLogContent(
 		await new Promise((resolve) => setTimeout(resolve, 500));
 	}
 	throw new Error(
-		`Orchestrator log endpoint never returned non-empty content for container ${id} within ${timeoutMs}ms (last status ${lastStatus}).`,
+		`Orchestrator log endpoint never returned non-empty content for worker ${id} within ${timeoutMs}ms (last status ${lastStatus}).`,
 	);
 }
 

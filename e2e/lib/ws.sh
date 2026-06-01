@@ -2,7 +2,7 @@
 # WebSocket testing helpers for the e2e suite.
 #
 # The bash tests run on the host and talk to the orchestrator over
-# localhost. To exercise the per-container WebSocket endpoint we need a
+# localhost. To exercise the per-worker WebSocket endpoint we need a
 # WS client; we use the `websockets` Python package inside a dedicated
 # venv at $E2E_WS_VENV so the host's system Python isn't touched.
 #

@@ -13,8 +13,8 @@ most one of the thing on the page at any moment.
 states. Use a class when an element is one of several of the same kind, or when
 the name identifies the *role* rather than the *instance*.
 
-A selector typically combines both: `#container-abc123 .btn-stop`,
-`select.log-source-select`, `tbody#container-rows tr`.
+A selector typically combines both: `#worker-abc123 .btn-stop`,
+`select.log-source-select`, `tbody#worker-rows tr`.
 
 ---
 
@@ -26,9 +26,9 @@ elements.
 
 | View | `id` |
 |------|------|
-| `/views/containers` | `containers-list` |
-| `/views/containers/:id` | `container-detail` |
-| `/views/containers/:id/execs/:commandId` | `exec-detail` |
+| `/views/workers` | `workers-list` |
+| `/views/workers/:id` | `worker-detail` |
+| `/views/workers/:id/execs/:commandId` | `exec-detail` |
 | `/views/images` | `images-list` |
 | `/views/launch` | `launch-form` |
 
@@ -41,14 +41,14 @@ Individual rows that represent a keyed record carry an `id` of the form
 `{resource}-{key}`.
 
 ```
-tbody#container-rows          container list body (also the HTMX refresh target)
-tr#container-{id}             one container row; key is the container UUID
+tbody#worker-rows             worker list body (also the HTMX refresh target)
+tr#worker-{id}                one worker row; key is the worker UUID
 
 tbody#image-rows              image list body
 tr#image-{name}               one image row; key is the drover.name label value
 ```
 
-The key is the raw value from the API with no transformation. Container UUIDs
+The key is the raw value from the API with no transformation. Worker UUIDs
 (hex + hyphens) and drover image names (lowercase slugs) are both safe as CSS
 id values without encoding.
 
@@ -69,10 +69,10 @@ looks:
 
 | Action | Semantic class | Visual class |
 |--------|---------------|--------------|
-| Stop a container | `btn-stop` | `btn-secondary` |
-| Destroy a container | `btn-destroy` | `btn-danger` |
+| Stop a worker | `btn-stop` | `btn-secondary` |
+| Destroy a worker | `btn-destroy` | `btn-danger` |
 
-Both classes appear on the same element. A test selects `#container-abc123
+Both classes appear on the same element. A test selects `#worker-abc123
 .btn-stop`; CSS targets `.btn-secondary`. The two concerns stay independent.
 
 A form's primary submit button is the only `button[type="submit"]` in its form,

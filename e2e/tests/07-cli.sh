@@ -14,7 +14,7 @@
 #
 # Uses the privileged path (matching test 06) so it runs on any host with
 # Docker, avoiding the gVisor requirement of test 04. The image is `builder`
-# — the same discoverable image every other container test launches.
+# — the same discoverable image every other worker test launches.
 
 # shellcheck source=../lib/common.sh
 . "$(dirname "$0")/../lib/common.sh"
@@ -32,14 +32,14 @@ DROVER_BIN="$REPO_ROOT/cli/bin/drover"
 export DROVER_API_URL="$ORCHESTRATOR_URL"
 export DROVER_API_KEY="$DROVER_API_KEY"
 
-# Clean up the container we start even if an assertion aborts midway. The
+# Clean up the worker we start even if an assertion aborts midway. The
 # ERR trap from common.sh writes the partial chunk; this trap (chained after
-# it) is best-effort container teardown so a failed run doesn't leak a
-# micro-container. drover destroy is idempotent enough for our needs here.
-CLI_CONTAINER_ID=""
+# it) is best-effort worker teardown so a failed run doesn't leak a
+# worker. drover destroy is idempotent enough for our needs here.
+CLI_WORKER_ID=""
 cleanup_cli() {
-	if [ -n "$CLI_CONTAINER_ID" ]; then
-		"$DROVER_BIN" destroy "$CLI_CONTAINER_ID" >/dev/null 2>&1 || true
+	if [ -n "$CLI_WORKER_ID" ]; then
+		"$DROVER_BIN" destroy "$CLI_WORKER_ID" >/dev/null 2>&1 || true
 	fi
 }
 trap cleanup_cli EXIT
@@ -55,7 +55,7 @@ e2e_pass "drover binary built"
 step_end
 
 # --- 1. ps -----------------------------------------------------------------
-# `drover ps` prints a JSON array of containers. We don't assert on its
+# `drover ps` prints a JSON array of workers. We don't assert on its
 # contents (other tests may have left state); we assert it exits zero and
 # emits valid JSON, proving auth + base URL are wired correctly.
 
@@ -67,16 +67,16 @@ assert_equals "array" "$PS_TYPE" "drover ps prints a JSON array"
 step_end
 
 # --- 2. start --------------------------------------------------------------
-# `drover start <image>` blocks until running and prints the container JSON
+# `drover start <image>` blocks until running and prints the worker JSON
 # (with .id and .status). Use the privileged path so no gVisor is required.
 
-step_begin "start-container"
+step_begin "start-worker"
 step_set_wait "running" 30
 START_OUT=$("$DROVER_BIN" start builder --privileged) \
 	|| e2e_fail "drover start exited non-zero"
-CLI_CONTAINER_ID=$(printf '%s' "$START_OUT" | jq -r '.id')
-assert_not_empty "$CLI_CONTAINER_ID" "drover start returned a container id"
-echo "  container_id=$CLI_CONTAINER_ID"
+CLI_WORKER_ID=$(printf '%s' "$START_OUT" | jq -r '.id')
+assert_not_empty "$CLI_WORKER_ID" "drover start returned a worker id"
+echo "  worker_id=$CLI_WORKER_ID"
 START_STATUS=$(printf '%s' "$START_OUT" | jq -r '.status')
 assert_equals "running" "$START_STATUS" "drover start blocks until running"
 step_end
@@ -89,7 +89,7 @@ step_end
 
 step_begin "exec-command"
 step_set_wait "complete" 30
-EXEC_OUT=$("$DROVER_BIN" exec "$CLI_CONTAINER_ID" -- echo hello) || EXEC_RC=$?
+EXEC_OUT=$("$DROVER_BIN" exec "$CLI_WORKER_ID" -- echo hello) || EXEC_RC=$?
 EXEC_RC="${EXEC_RC:-0}"
 assert_zero "$EXEC_RC" "drover exec propagated exit code"
 
@@ -107,11 +107,11 @@ step_set_exec_result "$EXEC_EXIT_CODE" "$EXEC_STDOUT" ""
 step_end
 
 # --- 4. stop ---------------------------------------------------------------
-# `drover stop <id>` blocks until stopped and prints the container JSON.
+# `drover stop <id>` blocks until stopped and prints the worker JSON.
 
-step_begin "stop-container"
+step_begin "stop-worker"
 step_set_wait "stopped" 30
-STOP_OUT=$("$DROVER_BIN" stop "$CLI_CONTAINER_ID") \
+STOP_OUT=$("$DROVER_BIN" stop "$CLI_WORKER_ID") \
 	|| e2e_fail "drover stop exited non-zero"
 STOP_STATUS=$(printf '%s' "$STOP_OUT" | jq -r '.status')
 assert_equals "stopped" "$STOP_STATUS" "drover stop blocks until stopped"
@@ -121,12 +121,12 @@ step_end
 # Tidy up explicitly so the assertions cover the full lifecycle; the EXIT
 # trap is only a fallback for the failure path.
 
-step_begin "destroy-container"
-DESTROY_OUT=$("$DROVER_BIN" destroy "$CLI_CONTAINER_ID") \
+step_begin "destroy-worker"
+DESTROY_OUT=$("$DROVER_BIN" destroy "$CLI_WORKER_ID") \
 	|| e2e_fail "drover destroy exited non-zero"
 DESTROY_STATUS=$(printf '%s' "$DESTROY_OUT" | jq -r '.status')
 assert_equals "destroyed" "$DESTROY_STATUS" "drover destroy blocks until destroyed"
-CLI_CONTAINER_ID=""
+CLI_WORKER_ID=""
 step_end
 
 echo "[test] 07-cli: ok"

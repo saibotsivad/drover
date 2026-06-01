@@ -10,7 +10,7 @@ import (
 
 func TestCreateExec(t *testing.T) {
 	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost || r.URL.Path != "/containers/c1/execs" {
+		if r.Method != http.MethodPost || r.URL.Path != "/workers/c1/execs" {
 			t.Errorf("got %s %s", r.Method, r.URL.Path)
 		}
 		b, _ := io.ReadAll(r.Body)
@@ -33,7 +33,7 @@ func TestCreateExec(t *testing.T) {
 func TestCreateExecError(t *testing.T) {
 	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
-		w.Write([]byte(`{"detail":"no such container"}`))
+		w.Write([]byte(`{"detail":"no such worker"}`))
 	})
 	id, err := c.CreateExec(context.Background(), "missing", "ls")
 	if id != "" || !IsNotFound(err) {

@@ -5,7 +5,7 @@ stream per running container, parses the multiplex frame format, and
 writes one ``{log, stream, time}`` JSON object per parsed frame to a
 size-rotated file under ``/var/lib/drover/logs/{container_id}/``.
 
-Capture is opt-in: it runs only when ``DROVER_ENABLE_CONTAINER_LOGS`` is
+Capture is opt-in: it runs only when ``DROVER_ENABLE_WORKER_LOGS`` is
 set to the exact string ``"true"``.  The on-disk format matches
 Docker's ``json-file`` driver line format so log shippers (Promtail,
 Vector, Fluent Bit) recognize it without Drover-specific configuration.
@@ -29,7 +29,7 @@ from pathlib import Path
 from typing import AsyncIterator, Awaitable, Callable
 
 from orchestrator.config import Config
-from orchestrator.errors import ContainerError, LoggingNotEnabled, LogFileNotFound
+from orchestrator.errors import WorkerError, LoggingNotEnabled, LogFileNotFound
 
 logger = logging.getLogger(__name__)
 
@@ -177,7 +177,7 @@ class LogCaptureManager:
         # Allow tests to inject a streamer that returns canned bytes; the
         # production path uses ``docker.stream_container_logs``.
         self._streamer: Streamer = streamer or (
-            docker.stream_container_logs if docker is not None else None
+            docker.stream_worker_logs if docker is not None else None
         )
         self._captures: dict[str, _Capture] = {}
         self._disk_disabled: bool = False
@@ -220,7 +220,7 @@ class LogCaptureManager:
         """Return the captured filenames for *container_id*, ordered.
 
         Raises ``LoggingNotEnabled`` when
-        ``DROVER_ENABLE_CONTAINER_LOGS`` is not ``"true"``.  Returns
+        ``DROVER_ENABLE_WORKER_LOGS`` is not ``"true"``.  Returns
         ``[]`` when the directory does not exist (covers both the
         never-captured and post-``discard`` cases).
         """
@@ -268,7 +268,7 @@ class LogCaptureManager:
     ) -> None:
         """Begin (or restart) capturing logs for *container_id*.
 
-        No-op when ``DROVER_ENABLE_CONTAINER_LOGS`` is not ``"true"``,
+        No-op when ``DROVER_ENABLE_WORKER_LOGS`` is not ``"true"``,
         when global disk-write has been disabled (after a persistent
         OSError), or when a capture is already running for the
         container.
@@ -332,7 +332,7 @@ class LogCaptureManager:
     async def discard(self, container_id: str) -> None:
         """Stop the capture (if any) and remove the on-disk directory.
 
-        No-op when ``DROVER_ENABLE_CONTAINER_LOGS`` is not ``"true"``.
+        No-op when ``DROVER_ENABLE_WORKER_LOGS`` is not ``"true"``.
         Idempotent.
         """
         if self._config.log_dir is None:

@@ -36,10 +36,10 @@ jobs:
           chmod 755 runsc
           sudo mv runsc /usr/local/bin/
           sudo runsc install
-          # Without --host-uds=all, gVisor blocks the guest agent from
-          # connecting back to the per-container orchestrator socket
-          # bind-mounted into the container, and every non-privileged
-          # container hits init_timeout. See docs/full-e2e-suite.md.
+          # Without --host-uds=all, gVisor blocks the worker agent from
+          # connecting back to the per-worker orchestrator socket
+          # bind-mounted into the worker, and every non-privileged
+          # worker hits init_timeout. See docs/full-e2e-suite.md.
           sudo python3 -c "import json; p='/etc/docker/daemon.json'; d=json.load(open(p)); d['runtimes']['runsc']['runtimeArgs']=['--host-uds=all']; json.dump(d,open(p,'w'),indent=2)"
           sudo systemctl reload docker
 

@@ -28,13 +28,13 @@ export function launchFormPage({ images = [], values = {}, error = null } = {}) 
 
 	return html`<section id="launch-form">
 		<div class="page-header">
-			<h2>Launch container</h2>
-			<a class="btn btn-secondary" href="/views/containers">Cancel</a>
+			<h2>Launch worker</h2>
+			<a class="btn btn-secondary" href="/views/workers">Cancel</a>
 		</div>
 		${error}
 		<form
 			class="launch-form"
-			hx-post="/actions/containers"
+			hx-post="/actions/workers"
 			hx-target="this"
 			hx-swap="outerHTML"
 		>

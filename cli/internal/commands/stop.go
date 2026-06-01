@@ -14,14 +14,14 @@ func newStopCmd() *cobra.Command {
 		interval int
 	)
 	cmd := &cobra.Command{
-		Use:   "stop <container-id>",
-		Short: "Stop a container (blocks until stopped by default)",
+		Use:   "stop <worker-id>",
+		Short: "Stop a worker (blocks until stopped by default)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			id := args[0]
 			return runLifecycle(cmd, noWait, interval,
-				func(ctx context.Context, c *api.Client) (*api.ContainerResult, error) {
-					return c.StopContainer(ctx, id)
+				func(ctx context.Context, c *api.Client) (*api.WorkerResult, error) {
+					return c.StopWorker(ctx, id)
 				},
 				lifecycleSpec{target: api.StatusStopped},
 			)

@@ -152,7 +152,7 @@ changes:
           Renamed /api/orchestrator/* proxy endpoints to /api/v2/*.
       - bump: minor
         description: |
-          Added a new dashboard view for container logs.
+          Added a new dashboard view for worker logs.
 ```
 
 Notes:

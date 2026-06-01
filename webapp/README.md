@@ -1,6 +1,6 @@
 # Drover Webapp
 
-Optional management UI for [Drover](../README.md). Runs as its own container, talks to an [orchestrator](../orchestrator) over HTTP, and serves an htmx-based PWA. See [`docs/rfc/2026-05-02-management-ui-container.md`](../docs/rfc/2026-05-02-management-ui-container.md) for the design rationale and [`docs/planning/webapp-implementation-plan.md`](../docs/planning/webapp-implementation-plan.md) for the phased build plan.
+Optional management UI for [Drover](../README.md). Runs as its own container, talks to an [orchestrator](../orchestrator) over HTTP, and serves an htmx-based PWA. See [`docs/rfc/2026-05-02-management-ui-worker.md`](../docs/rfc/2026-05-02-management-ui-worker.md) for the design rationale and [`docs/planning/webapp-implementation-plan.md`](../docs/planning/webapp-implementation-plan.md) for the phased build plan.
 
 ## Stack
 
@@ -69,12 +69,12 @@ htmx is pulled in as a `devDependency` and copied into `public/vendor/htmx.min.j
 
   ```sh
   curl http://localhost:8080/api/orchestrator/health
-  curl http://localhost:8080/api/orchestrator/containers
+  curl http://localhost:8080/api/orchestrator/workers
   ```
 
 - `GET /` — rendered home page.
-- `GET /views/containers`, `GET /views/containers/:id`, `GET /views/images`, `GET /views/launch` — server-rendered HTML pages.
-- `POST /actions/containers`, `POST /actions/containers/:id/stop`, `DELETE /actions/containers/:id` — form/htmx-driven actions that forward to the orchestrator and return HTML fragments.
+- `GET /views/workers`, `GET /views/workers/:id`, `GET /views/images`, `GET /views/launch` — server-rendered HTML pages.
+- `POST /actions/workers`, `POST /actions/workers/:id/stop`, `DELETE /actions/workers/:id` — form/htmx-driven actions that forward to the orchestrator and return HTML fragments.
 
 ## Tests
 
@@ -90,4 +90,4 @@ Structured JSON, one line per record. The request middleware logs `method`, `pat
 
 ## Trust boundary
 
-The webapp container holds the bearer token and adds it to every outbound orchestrator request. **Anyone who can reach the webapp's published port has full Drover access.** For LAN-only homelab use this is fine; for wider exposure, front the webapp with whatever auth you already use (basic auth, an OAuth proxy, an IP allowlist, a VPN, etc.). The RFC has the full discussion.
+The webapp holds the bearer token and adds it to every outbound orchestrator request. **Anyone who can reach the webapp's published port has full Drover access.** For LAN-only homelab use this is fine; for wider exposure, front the webapp with whatever auth you already use (basic auth, an OAuth proxy, an IP allowlist, a VPN, etc.). The RFC has the full discussion.

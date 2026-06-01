@@ -1,6 +1,6 @@
 # Orchestrator Container
 
-The orchestrator is the core of Drover. It runs as a Docker container on the host, exposes a REST API for managing ephemeral micro-containers, and communicates with guest agents inside those containers over Unix sockets.
+The orchestrator is the core of Drover. It runs as a Docker container on the host, exposes a REST API for managing ephemeral workers, and communicates with worker agents inside those workers over Unix sockets.
 
 For a full system overview, see the [top-level README](../README.md).
 
@@ -24,13 +24,13 @@ For a full system overview, see the [top-level README](../README.md).
 Host (bare metal, rootless Docker)
 └── orchestrator container
     ├── REST API  ←  callers (webapp, scripts, CI)
-    ├── Docker client  →  creates/stops micro-containers
-    └── Unix sockets  ↔  guest agents inside micro-containers
+    ├── Docker client  →  creates/stops workers
+    └── Unix sockets  ↔  worker agents inside workers
 ```
 
-The orchestrator talks to the Docker daemon through the host socket (mounted in). It creates one Unix socket per micro-container, placed in a shared directory also mounted into each micro-container. The guest agent inside each container connects to that socket to send a `ready` signal and receive `exec` commands.
+The orchestrator talks to the Docker daemon through the host socket (mounted in). It creates one Unix socket per worker, placed in a shared directory also mounted into each worker. The worker agent inside each worker connects to that socket to send a `ready` signal and receive `exec` commands.
 
-The optional [webapp](../webapp/README.md) is a management UI that sits in front of the orchestrator API. The [executor](../executor/README.md) library is what micro-container images use to implement the guest agent.
+The optional [webapp](../webapp/README.md) is a management UI that sits in front of the orchestrator API. The [executor](../executor/README.md) library is what worker images use to implement the worker agent.
 
 ## Configuration
 
@@ -40,7 +40,7 @@ for any path. The orchestrator always reads/writes:
 - SQLite at `/var/lib/drover/data/db.sqlite`
 - Captured logs under `/var/lib/drover/logs/`
 - Host Docker socket at `/var/run/docker.sock`
-- Per-micro-container Unix sockets at `/var/run/drover/sockets/`
+- Per-worker Unix sockets at `/var/run/drover/sockets/`
 
 See [Mounts](#mounts) for the host-side bindings.
 
@@ -49,11 +49,11 @@ Tunable environment variables:
 | Variable | Default | Description |
 |---|---|---|
 | `DROVER_API_KEY` | _(unset)_ | SHA-256 hash of the bearer token. When unset, authentication is disabled. |
-| `PRIVILEGED_IMAGE` | _(unset)_ | Docker image name for privileged micro-containers. Required to use `"privileged": true` on container create. |
+| `PRIVILEGED_IMAGE` | _(unset)_ | Docker image name for privileged workers. Required to use `"privileged": true` on worker create. |
 | `REAPER_INTERVAL_SECONDS` | `5` | How often (in seconds) the idle-timeout reaper runs. |
-| `DROVER_INIT_TIMEOUT_SECONDS` | `20` | Seconds the guest agent has to send `ready` before being marked `error`. Applies to both the initial `initializing → running` handshake and the `resuming → running` handshake after `POST /containers/{id}/resume`. |
+| `DROVER_INIT_TIMEOUT_SECONDS` | `20` | Seconds the worker agent has to send `ready` before being marked `error`. Applies to both the initial `initializing → running` handshake and the `resuming → running` handshake after `POST /workers/{id}/resume`. |
 | `LOG_LEVEL` | `INFO` | Log verbosity (`DEBUG`, `INFO`, `WARNING`, `ERROR`). |
-| `DROVER_ENABLE_CONTAINER_LOGS` | _(unset)_ | Set to the exact string `"true"` to capture each micro-container's stdout/stderr under `/var/lib/drover/logs/`. Any other value (or unset) leaves capture off. |
+| `DROVER_ENABLE_WORKER_LOGS` | _(unset)_ | Set to the exact string `"true"` to capture each worker's stdout/stderr under `/var/lib/drover/logs/`. Any other value (or unset) leaves capture off. |
 | `DROVER_LOG_MAX_FILE_BYTES` | `10485760` | Rotation threshold for captured log files. Ignored when capture is disabled. |
 
 To enable authentication, generate a random token and store its SHA-256 hash:
@@ -69,21 +69,21 @@ See [Authentication](#authentication) for details on how tokens are verified.
 ## Mounts
 
 The orchestrator expects four host bindings (the fourth is only needed
-when `DROVER_ENABLE_CONTAINER_LOGS=true`):
+when `DROVER_ENABLE_WORKER_LOGS=true`):
 
 | Host path | Container path | Purpose |
 |---|---|---|
 | `/var/run/docker.sock` (or `$XDG_RUNTIME_DIR/docker.sock` for rootless) | `/var/run/docker.sock` | Docker-out-of-Docker. Host path overridable in the sample compose via `DROVER_HOST_DOCKER_SOCK`. |
-| `./sockets/` (overridable via `DROVER_SOCKETS_DIR`) | `/var/run/drover/sockets/` | Per-container Unix sockets. The host path can be anything — the orchestrator discovers it at startup by self-inspecting its own container's mounts (see below), so the two sides need not match. The entrypoint chowns the directory to UID 1000 on startup. |
+| `./sockets/` (overridable via `DROVER_SOCKETS_DIR`) | `/var/run/drover/sockets/` | Per-worker Unix sockets. The host path can be anything — the orchestrator discovers it at startup by self-inspecting its own container's mounts (see below), so the two sides need not match. The entrypoint chowns the directory to UID 1000 on startup. |
 | `./data/` (overridable via `DROVER_DATA_DIR`) | `/var/lib/drover/data/` | Persistent SQLite database (and future config files). The SQLite file is created automatically on first start. |
-| `./logs/` (overridable via `DROVER_LOGS_DIR`) | `/var/lib/drover/logs/` | Captured micro-container stdout/stderr. Only needed when `DROVER_ENABLE_CONTAINER_LOGS=true`. |
+| `./logs/` (overridable via `DROVER_LOGS_DIR`) | `/var/lib/drover/logs/` | Captured worker stdout/stderr. Only needed when `DROVER_ENABLE_WORKER_LOGS=true`. |
 
-The container entrypoint runs as root just long enough to (a) detect the GID of the mounted `docker.sock` and add the `orchestrator` user to a group with that GID, and (b) chown `/var/run/drover/sockets` to UID 1000 so the orchestrator can write per-container sockets there. It then drops privileges via `gosu`. This works for both rootful Docker (socket owned by `root:docker`) and rootless Docker (socket owned by the invoking user) without baking a GID into the image.
+The container entrypoint runs as root just long enough to (a) detect the GID of the mounted `docker.sock` and add the `orchestrator` user to a group with that GID, and (b) chown `/var/run/drover/sockets` to UID 1000 so the orchestrator can write per-worker sockets there. It then drops privileges via `gosu`. This works for both rootful Docker (socket owned by `root:docker`) and rootless Docker (socket owned by the invoking user) without baking a GID into the image.
 
-Whenever the orchestrator bind-mounts something into a micro-container, it needs that thing's path **on the host** to use as the bind source — Docker resolves nested bind-mount sources against the host filesystem, not the orchestrator's filesystem. This applies to two mounts:
+Whenever the orchestrator bind-mounts something into a worker, it needs that thing's path **on the host** to use as the bind source — Docker resolves nested bind-mount sources against the host filesystem, not the orchestrator's filesystem. This applies to two mounts:
 
-- the per-container socket directory (`/var/run/drover/sockets/`), whose per-container subfolders are each bind-mounted into the corresponding micro-container at `/var/run/drover/sockets/`, and
-- the host Docker socket (`/var/run/docker.sock`), bind-mounted into privileged micro-containers at `/run/docker.sock`.
+- the per-worker socket directory (`/var/run/drover/sockets/`), whose per-worker subfolders are each bind-mounted into the corresponding worker at `/var/run/drover/sockets/`, and
+- the host Docker socket (`/var/run/docker.sock`), bind-mounted into privileged workers at `/run/docker.sock`.
 
 For both, the orchestrator self-inspects through the Docker API at startup to discover the host path: it reads its own container's `Mounts` and uses the `Source` of the mount whose `Destination` matches the in-container path. Because of this, the host-side paths can be anything — they need not match the in-container paths — and no environment variable is needed. If self-inspection fails, it falls back to assuming the host path equals the in-container path and logs a warning.
 
@@ -101,22 +101,22 @@ GET /health
 
 Returns `{"healthy": true, "privileged_image": "<name or null>"}`. Not auth-gated; suitable for liveness probes.
 
-### Containers
+### Workers
 
 ```
-POST   /containers                              Create a micro-container
-GET    /containers/{id}                         Get container state
-POST   /containers/{id}/stop                    Stop (resumable)
-POST   /containers/{id}/resume                  Resume a stopped container
-DELETE /containers/{id}                         Stop and permanently destroy
-POST   /containers/{id}/execs                   Send a shell command
-GET    /containers/{id}/execs                   List all commands for a container (newest first)
-GET    /containers/{id}/execs/{cmd_id}          Poll command output
-GET    /containers/{id}/logs                    Live container log tail (text/plain)
-GET    /containers/{id}/logs/files              List on-disk captured log files; 409 if capture disabled
-GET    /containers/{id}/logs/files/{filename}   Fetch a captured log file; 409 if capture disabled
-GET    /containers/{id}/logs/orchestrator       Orchestrator logs filtered to this container
-WS     /containers/{id}/ws                      Real-time stream of exec output and Docker logs
+POST   /workers                              Create a worker
+GET    /workers/{id}                         Get worker state
+POST   /workers/{id}/stop                    Stop (resumable)
+POST   /workers/{id}/resume                  Resume a stopped worker
+DELETE /workers/{id}                         Stop and permanently destroy
+POST   /workers/{id}/execs                   Send a shell command
+GET    /workers/{id}/execs                   List all commands for a worker (newest first)
+GET    /workers/{id}/execs/{cmd_id}          Poll command output
+GET    /workers/{id}/logs                    Live worker log tail (text/plain)
+GET    /workers/{id}/logs/files              List on-disk captured log files; 409 if capture disabled
+GET    /workers/{id}/logs/files/{filename}   Fetch a captured log file; 409 if capture disabled
+GET    /workers/{id}/logs/orchestrator       Orchestrator logs filtered to this worker
+WS     /workers/{id}/ws                      Real-time stream of exec output and Docker logs
 ```
 
 **Create request body:**
@@ -139,11 +139,11 @@ WS     /containers/{id}/ws                      Real-time stream of exec output 
 | `label` | string | `null` | Printable chars; max 1024 chars. |
 | `timeout_seconds` | int | `300` | Range 1–86400 (1 second to 24 hours). |
 
-`POST /containers` returns immediately with the container in `initializing` state. Poll `GET /containers/{id}` until status is `running` before sending commands. See [Container lifecycle](#container-lifecycle) and the [container initialization doc](../docs/container-initialization.md) for details.
+`POST /workers` returns immediately with the worker in `initializing` state. Poll `GET /workers/{id}` until status is `running` before sending commands. See [Container lifecycle](#container-lifecycle) and the [container initialization doc](../docs/container-initialization.md) for details.
 
 **Exec request/response:**
 
-`POST /containers/{id}/execs` accepts `{"command": "git clone ..."}` and returns `{"command_id": "<id>"}` immediately. Poll `GET /containers/{id}/execs/{cmd_id}` for output:
+`POST /workers/{id}/execs` accepts `{"command": "git clone ..."}` and returns `{"command_id": "<id>"}` immediately. Poll `GET /workers/{id}/execs/{cmd_id}` for output:
 
 ```json
 {
@@ -161,7 +161,7 @@ WS     /containers/{id}/ws                      Real-time stream of exec output 
 
 **WebSocket stream:**
 
-`/containers/{id}/ws` is a one-way (server → client) WebSocket that pushes both exec output and the container's Docker logs as they happen. Use it to avoid polling for long-running commands. Commands are still issued via `POST /containers/{id}/execs`; the WebSocket only delivers output. Historical exec output is still fetched via the polling endpoint — the WebSocket only carries new messages from the moment it connects.
+`/workers/{id}/ws` is a one-way (server → client) WebSocket that pushes both exec output and the worker's Docker logs as they happen. Use it to avoid polling for long-running commands. Commands are still issued via `POST /workers/{id}/execs`; the WebSocket only delivers output. Historical exec output is still fetched via the polling endpoint — the WebSocket only carries new messages from the moment it connects.
 
 | Query param | Type | Description |
 |---|---|---|
@@ -193,10 +193,10 @@ Minimal Python client:
 ```python
 import asyncio, json, websockets
 
-async def stream(container_id, token):
+async def stream(worker_id, token):
     headers = {"Authorization": f"Bearer {token}"}
     async with websockets.connect(
-        f"ws://localhost:8000/containers/{container_id}/ws",
+        f"ws://localhost:8000/workers/{worker_id}/ws",
         additional_headers=headers,
     ) as ws:
         async for raw in ws:
@@ -239,13 +239,13 @@ States:
 
 | Status | Meaning |
 |---|---|
-| `initializing` | Container created; waiting for guest agent to send `ready`. |
-| `running` | Guest agent connected and ready; commands can be sent. |
+| `initializing` | Worker created; waiting for worker agent to send `ready`. |
+| `running` | Worker agent connected and ready; commands can be sent. |
 | `stopping` | Stop requested; Docker stop in progress. |
 | `stopped` | Paused; can be resumed. The socket file is preserved. |
-| `resuming` | Resume requested; Docker start in progress and waiting for the guest agent to reconnect and send `ready`. |
+| `resuming` | Resume requested; Docker start in progress and waiting for the worker agent to reconnect and send `ready`. |
 | `destroying` | Delete requested; Docker remove in progress. |
-| `destroyed` | Terminal state; container and socket are gone. |
+| `destroyed` | Terminal state; worker and socket are gone. |
 | `error` | Initialization or resume failed. DB row kept for diagnostics; `DELETE` to remove. |
 
 Error codes (set when status is `error`):
@@ -253,12 +253,12 @@ Error codes (set when status is `error`):
 | `error_code` | Cause |
 |---|---|
 | `init_docker_error` | Docker create or start call failed during initialization. |
-| `init_timeout` | Guest did not send `ready` within `DROVER_INIT_TIMEOUT_SECONDS` during initialization. |
+| `init_timeout` | Worker agent did not send `ready` within `DROVER_INIT_TIMEOUT_SECONDS` during initialization. |
 | `resume_docker_error` | Docker start call failed during resume. |
-| `resume_timeout` | Guest did not reconnect and send `ready` within `DROVER_INIT_TIMEOUT_SECONDS` during resume. |
-| `orchestrator_crash` | Orchestrator restarted while container was in `initializing` or `resuming`. |
+| `resume_timeout` | Worker agent did not reconnect and send `ready` within `DROVER_INIT_TIMEOUT_SECONDS` during resume. |
+| `orchestrator_crash` | Orchestrator restarted while worker was in `initializing` or `resuming`. |
 
-A background reaper task runs every `REAPER_INTERVAL_SECONDS` and stops any running container whose `last_seen` timestamp is older than its `timeout_seconds`. Heartbeats from the guest agent update `last_seen`. A guest can also send `done` to request an immediate stop without waiting for the timeout.
+A background reaper task runs every `REAPER_INTERVAL_SECONDS` and stops any running worker whose `last_seen` timestamp is older than its `timeout_seconds`. Heartbeats from the worker agent update `last_seen`. A worker agent can also send `done` to request an immediate stop without waiting for the timeout.
 
 See [container initialization](../docs/container-initialization.md) and [exec commands](../docs/exec-commands.md) for deeper detail.
 
@@ -278,9 +278,9 @@ The [webapp](../webapp/README.md) can hold the token and inject it into proxied 
 
 ## Socket protocol
 
-The orchestrator and guest agents communicate over a per-container Unix socket using newline-delimited JSON. For each container the orchestrator creates a folder `/var/run/drover/sockets/{container_id}/` containing `orchestrator.sock` before the container starts, then bind-mounts that folder into the micro-container at `/var/run/drover/sockets/`, so the guest agent connects to `/var/run/drover/sockets/orchestrator.sock`.
+The orchestrator and worker agents communicate over a per-worker Unix socket using newline-delimited JSON. For each worker the orchestrator creates a folder `/var/run/drover/sockets/{worker_id}/` containing `orchestrator.sock` before the worker starts, then bind-mounts that folder into the worker at `/var/run/drover/sockets/`, so the worker agent connects to `/var/run/drover/sockets/orchestrator.sock`.
 
-**Guest → Orchestrator:**
+**Worker agent → Orchestrator:**
 
 ```jsonc
 {"type": "ready"}                                               // initialization complete
@@ -290,13 +290,13 @@ The orchestrator and guest agents communicate over a per-container Unix socket u
 {"type": "done"}                                                // request immediate stop
 ```
 
-**Orchestrator → Guest:**
+**Orchestrator → Worker:**
 
 ```jsonc
 {"type": "command", "id": "<cmd_id>", "exec": "git clone ..."}
 ```
 
-The [executor](../executor/README.md) library implements this protocol for Python-based guest agents. For other languages or shells, write directly to the socket. See the main README for a minimal bash example.
+The [executor](../executor/README.md) library implements this protocol for Python-based worker agents. For other languages or shells, write directly to the socket. See the main README for a minimal bash example.
 
 ## Database
 

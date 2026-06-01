@@ -89,7 +89,7 @@ class TestAgentConnection:
 
         The Agent base class emits ``ready`` immediately after
         ``on_connect()`` returns so the orchestrator can transition the
-        container from ``initializing`` to ``running``.
+        worker from ``initializing`` to ``running``.
         """
         path = _socket_path(tmp_path)
         connected = asyncio.Event()

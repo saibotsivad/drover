@@ -21,15 +21,15 @@ type lifecycleServer struct {
 func (s *lifecycleServer) handler(t *testing.T) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		switch {
-		case r.Method == http.MethodGet && r.URL.Path == "/containers/c1":
+		case r.Method == http.MethodGet && r.URL.Path == "/workers/c1":
 			s.getCalls.Add(1)
 			fmt.Fprintf(w, `{"id":"c1","status":%q}`, s.getStatus)
-		case r.Method == http.MethodPost && r.URL.Path == "/containers":
+		case r.Method == http.MethodPost && r.URL.Path == "/workers":
 			w.WriteHeader(http.StatusCreated)
 			s.writeTransition(w)
-		case r.Method == http.MethodPost && r.URL.Path == "/containers/c1/stop":
+		case r.Method == http.MethodPost && r.URL.Path == "/workers/c1/stop":
 			s.writeTransition(w)
-		case r.Method == http.MethodDelete && r.URL.Path == "/containers/c1":
+		case r.Method == http.MethodDelete && r.URL.Path == "/workers/c1":
 			s.writeTransition(w)
 		default:
 			t.Errorf("unexpected %s %s", r.Method, r.URL.Path)

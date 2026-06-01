@@ -2,14 +2,14 @@
 
 Matches the format defined in orchestrator/socket_manager.py.
 
-Guest -> Orchestrator:
+Worker -> Orchestrator:
   - ready:     {"type": "ready"}
   - heartbeat: {"type": "heartbeat"}
   - output:    {"type": "output", "id": "<cmd_id>", "stream": "stdout|stderr", "data": "..."}
   - result:    {"type": "result", "id": "<cmd_id>", "exit_code": N}
   - done:      {"type": "done"}
 
-Orchestrator -> Guest:
+Orchestrator -> Worker:
   - command:   {"type": "command", "id": "<cmd_id>", "exec": "..."}
 """
 
@@ -19,8 +19,8 @@ import json
 def encode_ready() -> bytes:
     """Encode a ready message.
 
-    Sent once by the guest agent after startup work completes, signalling
-    to the orchestrator that the container should transition from
+    Sent once by the worker agent after startup work completes, signalling
+    to the orchestrator that the worker should transition from
     ``initializing`` to ``running``.
     """
     return json.dumps({"type": "ready"}).encode() + b"\n"

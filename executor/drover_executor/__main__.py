@@ -9,7 +9,7 @@ from drover_executor.agent import Agent
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Drover executor — guest agent for micro-containers",
+        description="Drover executor — worker agent for workers",
     )
     parser.add_argument(
         "--socket",

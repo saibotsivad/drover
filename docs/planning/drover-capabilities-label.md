@@ -3,7 +3,7 @@
 ## Summary
 
 Add a `drover.capabilities` label to Drover-managed images that advertises, as
-a comma-separated list, the set of capabilities a container launched from that
+a comma-separated list, the set of capabilities a worker launched from that
 image actually supports. The webapp reads this label at render time and
 conditionally disables UI controls that require a capability the image does not
 declare.
@@ -37,7 +37,7 @@ here before it appears on any image label.
 
 | Key | What it grants | Notes |
 |---|---|---|
-| `exec` | The container responds to exec requests via the orchestrator socket. Commands submitted through the "Exec Commands" UI will be queued and executed by the guest agent (`drover-executor`). | All images that ship `drover-executor` as their `CMD` should declare this. |
+| `exec` | The worker responds to exec requests via the orchestrator socket. Commands submitted through the "Exec Commands" UI will be queued and executed by the worker agent (`drover-executor`). | All images that ship `drover-executor` as their `CMD` should declare this. |
 
 ---
 
@@ -65,15 +65,15 @@ request that requires a capability the image has not explicitly declared.
 An absent or empty `drover.capabilities` label means *no capabilities* —
 there is no implicit allowlist.
 
-A new error class is added (alongside the existing `ContainerError` subclasses):
+A new error class is added (alongside the existing `WorkerError` subclasses):
 
 ```python
-class CapabilityNotSupported(ContainerError):
+class CapabilityNotSupported(WorkerError):
     status_code = 422
     detail = "image does not declare the required capability"
 ```
 
-**File:** `orchestrator/container_manager.py` (exec path)
+**File:** `orchestrator/worker_manager.py` (exec path)
 
 Before queuing a command, the orchestrator resolves the container's `image`
 field to an image, parses `drover.capabilities`, and asserts `exec` is present.

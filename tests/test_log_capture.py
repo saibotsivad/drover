@@ -4,7 +4,7 @@ The manager has three failure modes that are easy to get subtly wrong —
 frame parsing, file rotation, and disk-full handling — so each gets its
 own focused test rather than rolling them into a larger integration
 fixture.  Lifecycle wiring (start/stop on container transitions) is
-covered in tests/test_container_manager.py.
+covered in tests/test_worker_manager.py.
 """
 
 import asyncio

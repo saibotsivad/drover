@@ -1,8 +1,8 @@
 # Installing gVisor (`runsc`)
 
-Part of the Drover architecture is to serve micro-containers with reasonably well isolated environments.
+Part of the Drover architecture is to serve workers with reasonably well isolated environments.
 
-That means non-privileged micro-containers are launched using the `runsc` runtime ([gVisor](https://gvisor.dev/docs/)) which "provides a strong layer of isolation between running applications and the host operating system".
+That means non-privileged workers are launched using the `runsc` runtime ([gVisor](https://gvisor.dev/docs/)) which "provides a strong layer of isolation between running applications and the host operating system".
 
 ## Installing
 
@@ -37,8 +37,8 @@ Both flags are required:
 
 - **`--ignore-cgroups`** — needed for rootless Docker, where the sandbox cannot
   manipulate cgroups directly.
-- **`--host-uds=all`** — permits the guest agent inside each micro-container to
-  connect to the per-container Unix socket that the orchestrator bind-mounts in.
+- **`--host-uds=all`** — permits the worker agent inside each worker to
+  connect to the per-worker Unix socket that the orchestrator bind-mounts in.
   Without this flag, gVisor blocks all host Unix-socket traffic and every
-  non-privileged container times out with `init_timeout` (the error surfaces
-  inside the container as `ConnectionRefusedError` on `/var/run/drover/sockets/orchestrator.sock`).
+  non-privileged worker times out with `init_timeout` (the error surfaces
+  inside the worker as `ConnectionRefusedError` on `/var/run/drover/sockets/orchestrator.sock`).

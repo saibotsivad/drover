@@ -1,7 +1,7 @@
-"""Per-container WebSocket streaming endpoint.
+"""Per-worker WebSocket streaming endpoint.
 
-A single endpoint ``/containers/{container_id}/ws`` streams both exec
-output (from commands issued via the REST API) and the container's
+A single endpoint ``/workers/{worker_id}/ws`` streams both exec
+output (from commands issued via the REST API) and the worker's
 Docker log stream over one connection.  The ``type`` field on each JSON
 message distinguishes the two sources.
 
@@ -10,7 +10,7 @@ Architecture:
 * A ``ConnectionManager`` queue is registered for the connection on
   accept.
 * The ``SocketManager`` pushes ``output`` and ``status`` messages into
-  the queue when the guest agent reports them.
+  the queue when the worker agent reports them.
 * A background task started by this handler streams Docker logs from
   ``DockerClient.stream_container_logs`` into the same queue.
 * The handler loops on ``queue.get()`` and writes to the WebSocket — a
@@ -32,7 +32,7 @@ from orchestrator.docker_client import DockerClient
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/containers", tags=["websockets"])
+router = APIRouter(prefix="/workers", tags=["websockets"])
 
 
 def _parse_docker_frames(buf: bytes) -> tuple[list[dict], bytes]:
@@ -92,9 +92,9 @@ async def _stream_docker_logs(
             pass
 
 
-@router.websocket("/{container_id}/ws")
-async def container_ws(ws: WebSocket, container_id: str) -> None:
-    """Stream all exec output and Docker logs for a container.
+@router.websocket("/{worker_id}/ws")
+async def worker_ws(ws: WebSocket, worker_id: str) -> None:
+    """Stream all exec output and Docker logs for a worker.
 
     Message format (server -> client only, JSON):
       {"type": "output", "command_id": "...", "stream": "stdout|stderr", "data": "..."}
@@ -127,12 +127,12 @@ async def container_ws(ws: WebSocket, container_id: str) -> None:
     connection_manager: ConnectionManager = ws.app.state.connection_manager
 
     row = await db.fetchone(
-        "SELECT docker_id FROM containers WHERE id = ?", (container_id,)
+        "SELECT docker_id FROM workers WHERE id = ?", (worker_id,)
     )
     if row is None:
         await ws.close(
             code=status.WS_1008_POLICY_VIOLATION,
-            reason=f"Container '{container_id}' not found",
+            reason=f"Worker '{worker_id}' not found",
         )
         return
     docker_id = row["docker_id"]
@@ -153,7 +153,7 @@ async def container_ws(ws: WebSocket, container_id: str) -> None:
 
     await ws.accept()
 
-    queue = connection_manager.connect(container_id)
+    queue = connection_manager.connect(worker_id)
     log_task: asyncio.Task | None = None
     if docker_id is not None:
         log_task = asyncio.create_task(
@@ -170,7 +170,7 @@ async def container_ws(ws: WebSocket, container_id: str) -> None:
         raise
     except Exception:
         logger.exception(
-            "WebSocket handler error for container %s", container_id
+            "WebSocket handler error for worker %s", worker_id
         )
     finally:
         if log_task is not None and not log_task.done():
@@ -179,4 +179,4 @@ async def container_ws(ws: WebSocket, container_id: str) -> None:
                 await log_task
             except (asyncio.CancelledError, Exception):
                 pass
-        connection_manager.disconnect(container_id, queue)
+        connection_manager.disconnect(worker_id, queue)

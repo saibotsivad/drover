@@ -7,8 +7,8 @@ import httpx
 
 from orchestrator.config import Config
 from orchestrator.errors import (
-    ContainerConflictError,
-    ContainerNotFoundError,
+    WorkerConflictError,
+    WorkerNotFoundError,
     DockerError,
     ImageNotFoundError,
 )
@@ -47,10 +47,10 @@ class DockerClient:
             if entity == "image":
                 raise ImageNotFoundError(resp.status_code, msg)
             if entity == "container":
-                raise ContainerNotFoundError(resp.status_code, msg)
+                raise WorkerNotFoundError(resp.status_code, msg)
             raise DockerError(resp.status_code, msg)
         if resp.status_code == 409:
-            raise ContainerConflictError(resp.status_code, msg)
+            raise WorkerConflictError(resp.status_code, msg)
         raise DockerError(resp.status_code, msg)
 
     # --- Images ---
@@ -91,71 +91,71 @@ class DockerClient:
 
     # --- Containers ---
 
-    async def create_container(self, config: dict) -> dict:
+    async def create_worker(self, config: dict) -> dict:
         logger.debug("POST /containers/create")
         resp = await self._client.post("/containers/create", json=config)
         logger.debug("POST /containers/create -> %s", resp.status_code)
         self._check(resp, entity="container")
         return resp.json()
 
-    async def start_container(self, container_id: str) -> None:
-        logger.debug("POST /containers/%s/start", container_id)
+    async def start_worker(self, worker_id: str) -> None:
+        logger.debug("POST /containers/%s/start", worker_id)
         resp = await self._client.post(
-            f"/containers/{container_id}/start",
+            f"/containers/{worker_id}/start",
         )
-        logger.debug("POST /containers/%s/start -> %s", container_id, resp.status_code)
+        logger.debug("POST /containers/%s/start -> %s", worker_id, resp.status_code)
         if resp.status_code == 304:
             return  # already started
         self._check(resp, entity="container")
 
-    async def stop_container(
-        self, container_id: str, timeout: int = 10
+    async def stop_worker(
+        self, worker_id: str, timeout: int = 10
     ) -> None:
-        logger.debug("POST /containers/%s/stop", container_id)
+        logger.debug("POST /containers/%s/stop", worker_id)
         resp = await self._client.post(
-            f"/containers/{container_id}/stop",
+            f"/containers/{worker_id}/stop",
             params={"t": timeout},
         )
-        logger.debug("POST /containers/%s/stop -> %s", container_id, resp.status_code)
+        logger.debug("POST /containers/%s/stop -> %s", worker_id, resp.status_code)
         if resp.status_code == 304:
             return  # already stopped
         self._check(resp, entity="container")
 
-    async def remove_container(
-        self, container_id: str, *, force: bool = False
+    async def remove_worker(
+        self, worker_id: str, *, force: bool = False
     ) -> None:
-        logger.debug("DELETE /containers/%s force=%s", container_id, force)
+        logger.debug("DELETE /containers/%s force=%s", worker_id, force)
         resp = await self._client.delete(
-            f"/containers/{container_id}",
+            f"/containers/{worker_id}",
             params={"force": str(force).lower(), "v": "true"},
         )
-        logger.debug("DELETE /containers/%s -> %s", container_id, resp.status_code)
+        logger.debug("DELETE /containers/%s -> %s", worker_id, resp.status_code)
         self._check(resp, entity="container")
 
-    async def inspect_container(self, container_id: str) -> dict:
-        logger.debug("GET /containers/%s/json", container_id)
+    async def inspect_worker(self, worker_id: str) -> dict:
+        logger.debug("GET /containers/%s/json", worker_id)
         resp = await self._client.get(
-            f"/containers/{container_id}/json",
+            f"/containers/{worker_id}/json",
         )
-        logger.debug("GET /containers/%s/json -> %s", container_id, resp.status_code)
+        logger.debug("GET /containers/%s/json -> %s", worker_id, resp.status_code)
         self._check(resp, entity="container")
         return resp.json()
 
-    async def get_container_logs(
-        self, container_id: str, tail: str = "all"
+    async def get_worker_logs(
+        self, worker_id: str, tail: str = "all"
     ) -> str:
-        logger.debug("GET /containers/%s/logs tail=%s", container_id, tail)
+        logger.debug("GET /containers/%s/logs tail=%s", worker_id, tail)
         resp = await self._client.get(
-            f"/containers/{container_id}/logs",
+            f"/containers/{worker_id}/logs",
             params={"stdout": "true", "stderr": "true", "tail": tail},
         )
-        logger.debug("GET /containers/%s/logs -> %s", container_id, resp.status_code)
+        logger.debug("GET /containers/%s/logs -> %s", worker_id, resp.status_code)
         self._check(resp, entity="container")
         return resp.text
 
-    async def stream_container_logs(
+    async def stream_worker_logs(
         self,
-        container_id: str,
+        worker_id: str,
         *,
         since: float | int | None = None,
         follow: bool = True,
@@ -180,14 +180,14 @@ class DockerClient:
             params["tail"] = str(tail)
         logger.debug(
             "GET /containers/%s/logs (stream) since=%s follow=%s tail=%s",
-            container_id,
+            worker_id,
             since,
             follow,
             tail,
         )
         async with self._client.stream(
             "GET",
-            f"/containers/{container_id}/logs",
+            f"/containers/{worker_id}/logs",
             params=params,
             timeout=httpx.Timeout(None, connect=5.0),
         ) as resp:

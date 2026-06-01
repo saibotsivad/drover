@@ -9,7 +9,7 @@ send.
 
 Slow consumers don't backpressure the SocketManager: when a queue is
 full we drop the message for that connection rather than blocking the
-guest-agent read loop.
+worker-agent read loop.
 """
 
 import asyncio

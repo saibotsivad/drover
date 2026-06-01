@@ -7,10 +7,10 @@ import (
 	"net/url"
 )
 
-// CreateExec posts a command to POST /containers/{id}/execs and returns the
+// CreateExec posts a command to POST /workers/{id}/execs and returns the
 // command_id the WebSocket stream is then filtered by.
 func (c *Client) CreateExec(ctx context.Context, id, command string) (string, error) {
-	data, err := c.do(ctx, http.MethodPost, "/containers/"+url.PathEscape(id)+"/execs", ExecRequest{Command: command})
+	data, err := c.do(ctx, http.MethodPost, "/workers/"+url.PathEscape(id)+"/execs", ExecRequest{Command: command})
 	if err != nil {
 		return "", err
 	}

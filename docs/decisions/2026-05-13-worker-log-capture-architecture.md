@@ -5,9 +5,9 @@
 
 ## Context
 
-Drover needs to retain micro-container stdout/stderr beyond the
+Drover needs to retain worker stdout/stderr beyond the
 lifetime of the underlying Docker container, so operators can debug
-containers that have stopped or errored. The decision space:
+workers that have stopped or errored. The decision space:
 
 - How the orchestrator gets at the container's output.
 - What "retention" actually means — what file survives `docker rm`.
@@ -34,20 +34,20 @@ The on-disk format is decided in the sibling ADR
 
 ## Decision
 
-For each running micro-container, the orchestrator opens a follow
+For each running worker, the orchestrator opens a follow
 stream against Docker's logs API
 (`GET /containers/{docker_id}/logs?follow=1&stdout=1&stderr=1&timestamps=1&since=...`),
 parses the multiplex frames, and appends them to a per-container
 directory under `/var/lib/drover/logs/` (the fixed in-container log
-path; enabled by `DROVER_ENABLE_CONTAINER_LOGS=true`). A `.cursor`
+path; enabled by `DROVER_ENABLE_WORKER_LOGS=true`). A `.cursor`
 file in that directory
 holds the timestamp of the most recently written record so the stream
 can resume after orchestrator restart.
 
 Capture begins immediately after `docker start` succeeds — *before*
-the guest agent connects — so init-failure stdout is captured.
+the worker agent connects — so init-failure stdout is captured.
 
-When `DROVER_ENABLE_CONTAINER_LOGS` is unset (or set to anything other
+When `DROVER_ENABLE_WORKER_LOGS` is unset (or set to anything other
 than the exact string `"true"`), no capture happens at all and
 operators rely on whatever Docker's daemon log driver retains.
 
@@ -74,13 +74,13 @@ independent of Drover's capture and unaffected by it.
 ### Negative
 
 - **Two copies of every byte by default.** When
-  `DROVER_ENABLE_CONTAINER_LOGS=true` and the daemon also writes (the
+  `DROVER_ENABLE_WORKER_LOGS=true` and the daemon also writes (the
   `json-file` default), every
   container's stdout exists twice. `docs/observability.md` §5 walks
   the operator through disabling one or the other.
-- **One follow-stream task per running container.** Cheap (asyncio
-  task + buffered I/O) but it is a per-container resource that scales
-  linearly with container count.
+- **One follow-stream task per running worker.** Cheap (asyncio
+  task + buffered I/O) but it is a per-worker resource that scales
+  linearly with worker count.
 - **Capture lags if the asyncio loop is blocked.** Docker streams in
   real time as long as we hold the connection; if the orchestrator
   event loop is starved, captured records arrive late. We treat this
@@ -133,7 +133,7 @@ Rejected because:
 - Forcing a log driver fights any operator who has globally configured
   a different one (e.g. `--log-driver=loki`). Drover should not
   override the host daemon's policy.
-- Removes the operator's freedom to fan their micro-container stdout
+- Removes the operator's freedom to fan their worker stdout
   out to their own stack, which is one of the explicit goals.
 
 ### D. Bundle a "Drover ships with Loki/Grafana" stack
@@ -157,6 +157,6 @@ Rejected because:
 - `docs/decisions/2026-05-13-on-disk-log-format.md` — sibling ADR
   about the on-disk line format and the per-frame-vs-per-line split.
 - `orchestrator/log_capture.py` — the writer implementation.
-- `orchestrator/container_manager.py` — lifecycle hooks (`_init_container`,
+- `orchestrator/worker_manager.py` — lifecycle hooks (`_init_container`,
   `_fail_init`, `stop_container`, `resume_container`,
   `destroy_container`, `sync_containers`).

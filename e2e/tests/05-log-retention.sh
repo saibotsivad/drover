@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Container-log retention checks that need a dedicated container.
+# Worker-log retention checks that need a dedicated worker.
 #
 # Tests 03 and 04 already cover the post-exec / post-destroy log-files
-# assertions for a single happy-path container.  This test exists to
+# assertions for a single happy-path worker.  This test exists to
 # exercise the case the others can't:
 #
-#   Stop / resume continuity: stop a running container, resume it, and
+#   Stop / resume continuity: stop a running worker, resume it, and
 #   assert that the captured 0.log contains output from BOTH segments.
 #   The drover-executor logs "Connecting to /var/run/drover/sockets/orchestrator.sock" each
 #   time it (re)starts, so we look for that line appearing at least
@@ -14,7 +14,7 @@
 # Init-window capture and init-timeout retention are deferred to a
 # follow-up because they require a custom image whose entrypoint
 # delays before exec'ing the agent (or never execs it).  They are
-# already covered by the unit tests in tests/test_container_manager.py
+# already covered by the unit tests in tests/test_worker_manager.py
 # (test_init_starts_log_capture, test_fail_init_persists_cursor_and_
 # keeps_directory).
 
@@ -25,16 +25,16 @@ echo "[test] 05-log-retention: stop/resume continuity"
 
 # --- 1. create -------------------------------------------------------------
 
-step_begin "create-container"
+step_begin "create-worker"
 step_set_wait "running" 30
 REQUEST_BODY='{"image": "builder", "privileged": true, "env": {"DROVER_TEST_VAR": "hello_drover"}}'
-api_post "${ORCHESTRATOR_URL}/containers" "$REQUEST_BODY"
-assert_equals "201" "$E2E_RESPONSE_STATUS" "POST /containers status"
-CONTAINER_ID=$(printf '%s' "$E2E_RESPONSE_BODY" | jq -r '.id')
-assert_not_empty "$CONTAINER_ID" "container id returned"
-echo "  container_id=$CONTAINER_ID"
-wait_container_status "$CONTAINER_ID" "running" 30 \
-	|| e2e_fail "container did not reach running"
+api_post "${ORCHESTRATOR_URL}/workers" "$REQUEST_BODY"
+assert_equals "201" "$E2E_RESPONSE_STATUS" "POST /workers status"
+WORKER_ID=$(printf '%s' "$E2E_RESPONSE_BODY" | jq -r '.id')
+assert_not_empty "$WORKER_ID" "worker id returned"
+echo "  worker_id=$WORKER_ID"
+wait_worker_status "$WORKER_ID" "running" 30 \
+	|| e2e_fail "worker did not reach running"
 step_end
 
 # --- 2. capture first segment ---------------------------------------------
@@ -42,38 +42,38 @@ step_end
 step_begin "capture-first-segment"
 # Wait briefly so the executor has flushed its connect log.
 sleep 1
-assert_log_files_contains "$CONTAINER_ID" "0.log"
-assert_log_file_contains "$CONTAINER_ID" "0.log" "Connecting to"
+assert_log_files_contains "$WORKER_ID" "0.log"
+assert_log_file_contains "$WORKER_ID" "0.log" "Connecting to"
 # Snapshot the captured size so we can verify it grows after resume.
-api_get "${ORCHESTRATOR_URL}/containers/${CONTAINER_ID}/logs/files/0.log"
+api_get "${ORCHESTRATOR_URL}/workers/${WORKER_ID}/logs/files/0.log"
 INITIAL_SIZE=$(printf '%s' "$E2E_RESPONSE_BODY" | wc -c | tr -d ' ')
 echo "  initial_0.log_size=$INITIAL_SIZE"
 step_end
 
 # --- 3. stop ---------------------------------------------------------------
 
-step_begin "stop-container"
+step_begin "stop-worker"
 step_set_wait "stopped" 30
-api_post "${ORCHESTRATOR_URL}/containers/${CONTAINER_ID}/stop"
+api_post "${ORCHESTRATOR_URL}/workers/${WORKER_ID}/stop"
 if [ "$E2E_RESPONSE_STATUS" != "200" ] && [ "$E2E_RESPONSE_STATUS" != "202" ]; then
-	e2e_fail "POST /containers/{id}/stop returned $E2E_RESPONSE_STATUS"
+	e2e_fail "POST /workers/{id}/stop returned $E2E_RESPONSE_STATUS"
 fi
-wait_container_status "$CONTAINER_ID" "stopped" 30 \
-	|| e2e_fail "container did not reach stopped"
+wait_worker_status "$WORKER_ID" "stopped" 30 \
+	|| e2e_fail "worker did not reach stopped"
 step_end
 
 # --- 4. resume and capture second segment ---------------------------------
 
-step_begin "resume-container"
+step_begin "resume-worker"
 step_set_wait "running" 30
-api_post "${ORCHESTRATOR_URL}/containers/${CONTAINER_ID}/resume"
+api_post "${ORCHESTRATOR_URL}/workers/${WORKER_ID}/resume"
 if [ "$E2E_RESPONSE_STATUS" != "200" ] && [ "$E2E_RESPONSE_STATUS" != "202" ]; then
-	e2e_fail "POST /containers/{id}/resume returned $E2E_RESPONSE_STATUS"
+	e2e_fail "POST /workers/{id}/resume returned $E2E_RESPONSE_STATUS"
 fi
-wait_container_status "$CONTAINER_ID" "running" 30 \
-	|| e2e_fail "container did not reach running on resume"
+wait_worker_status "$WORKER_ID" "running" 30 \
+	|| e2e_fail "worker did not reach running on resume"
 sleep 1
-api_get "${ORCHESTRATOR_URL}/containers/${CONTAINER_ID}/logs/files/0.log"
+api_get "${ORCHESTRATOR_URL}/workers/${WORKER_ID}/logs/files/0.log"
 assert_equals "200" "$E2E_RESPONSE_STATUS" "GET 0.log after resume"
 RESUMED_SIZE=$(printf '%s' "$E2E_RESPONSE_BODY" | wc -c | tr -d ' ')
 echo "  resumed_0.log_size=$RESUMED_SIZE"
@@ -92,10 +92,10 @@ step_end
 
 # --- 5. cleanup ------------------------------------------------------------
 
-step_begin "destroy-container"
-api_delete "${ORCHESTRATOR_URL}/containers/${CONTAINER_ID}"
-assert_equals "200" "$E2E_RESPONSE_STATUS" "DELETE /containers status"
-assert_log_files_empty "$CONTAINER_ID"
+step_begin "destroy-worker"
+api_delete "${ORCHESTRATOR_URL}/workers/${WORKER_ID}"
+assert_equals "200" "$E2E_RESPONSE_STATUS" "DELETE /workers status"
+assert_log_files_empty "$WORKER_ID"
 step_end
 
 echo "[test] 05-log-retention: ok"

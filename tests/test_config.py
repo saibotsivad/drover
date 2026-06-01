@@ -16,7 +16,7 @@ def _clear_env(monkeypatch):
         "DROVER_INIT_TIMEOUT_SECONDS",
         "LOG_LEVEL",
         "DROVER_API_KEY",
-        "DROVER_ENABLE_CONTAINER_LOGS",
+        "DROVER_ENABLE_WORKER_LOGS",
         "DROVER_LOG_MAX_FILE_BYTES",
     ):
         monkeypatch.delenv(name, raising=False)
@@ -67,7 +67,7 @@ def test_load_config_tunables_from_env(monkeypatch):
     monkeypatch.setenv("DROVER_INIT_TIMEOUT_SECONDS", "45")
     monkeypatch.setenv("LOG_LEVEL", "debug")
     monkeypatch.setenv("DROVER_API_KEY", "abc123hash")
-    monkeypatch.setenv("DROVER_ENABLE_CONTAINER_LOGS", "true")
+    monkeypatch.setenv("DROVER_ENABLE_WORKER_LOGS", "true")
     monkeypatch.setenv("DROVER_LOG_MAX_FILE_BYTES", "2048")
 
     config = load_config()
@@ -85,10 +85,10 @@ def test_enable_container_logs_only_true_string_enables(monkeypatch):
     """Only the exact string "true" turns capture on."""
     _clear_env(monkeypatch)
     for value in ("1", "TRUE", "True", "yes", "on", ""):
-        monkeypatch.setenv("DROVER_ENABLE_CONTAINER_LOGS", value)
+        monkeypatch.setenv("DROVER_ENABLE_WORKER_LOGS", value)
         assert load_config().log_dir is None, f"value {value!r} should not enable"
 
-    monkeypatch.setenv("DROVER_ENABLE_CONTAINER_LOGS", "true")
+    monkeypatch.setenv("DROVER_ENABLE_WORKER_LOGS", "true")
     assert load_config().log_dir == "/var/lib/drover/logs"
 
 

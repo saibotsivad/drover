@@ -95,13 +95,13 @@ cmd_down() {
 	compose down --volumes --remove-orphans
 
 	# Compose only knows about the services it created (orchestrator,
-	# webapp, builder). The micro-containers the orchestrator spawned
+	# webapp, builder). The workers the orchestrator spawned
 	# during the run aren't tracked by compose, so they'd linger across
 	# runs locally. Remove them here, best-effort.
 	local micro_ids
 	micro_ids=$(docker ps -aq --filter "label=drover.managed=true" 2>/dev/null || true)
 	if [ -n "$micro_ids" ]; then
-		echo "==> Removing drover-managed micro-containers"
+		echo "==> Removing drover-managed workers"
 		# shellcheck disable=SC2086
 		docker rm -f $micro_ids >/dev/null 2>&1 || true
 	fi
@@ -223,7 +223,7 @@ cmd_collect_logs() {
 	# written during `cmd_test` only cover per-step windows for the
 	# orchestrator and webapp; these capture everything emitted by every
 	# container across the whole run, including the spawned
-	# micro-containers' guest-agent output. See docs/full-e2e-suite.md
+	# workers' worker-agent output. See docs/full-e2e-suite.md
 	# for the rationale.
 	mkdir -p "$E2E_DIR/logs"
 	if docker inspect "$ORCHESTRATOR_CONTAINER" >/dev/null 2>&1; then
@@ -239,19 +239,19 @@ cmd_collect_logs() {
 		echo "==> Webapp container not present; nothing to capture"
 	fi
 
-	# Micro-containers spawned by the orchestrator. They inherit the
+	# Workers spawned by the orchestrator. They inherit the
 	# `drover.managed=true` label from the builder image's Dockerfile,
 	# so we can discover them by label even though their IDs are not
 	# known up front. One log file per Docker container ID — see the
-	# "Micro-container logs" section in docs/full-e2e-suite.md.
+	# "Worker logs" section in docs/full-e2e-suite.md.
 	local micro_ids
 	micro_ids=$(docker ps -a --filter "label=drover.managed=true" --format '{{.ID}}' 2>/dev/null || true)
 	if [ -z "$micro_ids" ]; then
-		echo "==> No drover-managed micro-containers found to capture"
+		echo "==> No drover-managed workers found to capture"
 		return 0
 	fi
 
-	local micro_dir="$E2E_DIR/logs/microcontainers"
+	local micro_dir="$E2E_DIR/logs/workers"
 	mkdir -p "$micro_dir"
 	while IFS= read -r id; do
 		[ -z "$id" ] && continue
@@ -259,7 +259,7 @@ cmd_collect_logs() {
 		image=$(docker inspect --format '{{.Config.Image}}' "$id" 2>/dev/null || echo "unknown")
 		# Drop the leading slash that docker inspect's `.Name` carries.
 		name=$(docker inspect --format '{{.Name}}' "$id" 2>/dev/null | sed 's|^/||' || echo "")
-		echo "==> Capturing micro-container ${id:0:12} ($image) to e2e/logs/microcontainers/${id:0:12}.log"
+		echo "==> Capturing worker ${id:0:12} ($image) to e2e/logs/workers/${id:0:12}.log"
 		{
 			printf 'DOCKER_ID:      %s\n' "$id"
 			printf 'IMAGE:          %s\n' "$image"

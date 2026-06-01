@@ -9,21 +9,21 @@
 # Container paths inside the orchestrator are FIXED and not configurable:
 #
 #   /var/lib/drover/data       SQLite database (+ future config files)
-#   /var/lib/drover/logs       captured micro-container stdout/stderr
-#                              (only written when DROVER_ENABLE_CONTAINER_LOGS=true)
+#   /var/lib/drover/logs       captured worker stdout/stderr
+#                              (only written when DROVER_ENABLE_WORKER_LOGS=true)
 #   /var/run/docker.sock       host Docker daemon socket
-#   /var/run/drover/sockets    per-micro-container Unix sockets
+#   /var/run/drover/sockets    per-worker Unix sockets
 #
 # The host-side bind paths below default to relative directories next to
 # this compose file, and can be overridden via DROVER_DATA_DIR /
 # DROVER_LOGS_DIR / DROVER_SOCKETS_DIR (e.g. in a .env file) when you want
-# the data, logs, or per-micro-container sockets on a different filesystem.
+# the data, logs, or per-worker sockets on a different filesystem.
 #
-# The per-micro-container socket directory's host path does NOT need to
+# The per-worker socket directory's host path does NOT need to
 # match its in-container path (/var/run/drover/sockets). The orchestrator
 # self-inspects through the Docker API at startup to learn the host path
 # of that mount and uses it as the bind source when launching
-# micro-containers, so whatever DROVER_SOCKETS_DIR resolves to is what
+# workers, so whatever DROVER_SOCKETS_DIR resolves to is what
 # gets used. The orchestrator entrypoint chowns the directory at startup,
 # so you don't need to pre-create it.
 #
@@ -39,7 +39,7 @@
 #
 # The orchestrator self-inspects through the Docker API at startup to
 # learn the HOST path of /var/run/docker.sock so it can pass the right
-# bind source when launching privileged micro-containers. You do NOT
+# bind source when launching privileged workers. You do NOT
 # need to pass that path in as an orchestrator environment variable —
 # whatever the compose volume above resolves to is what Docker reports
 # back to the orchestrator.
@@ -57,14 +57,14 @@ services:
       - ${DROVER_HOST_DOCKER_SOCK:-/run/user/1000/docker.sock}:/var/run/docker.sock
     environment:
       LOG_LEVEL: INFO
-      # Capture each micro-container's stdout/stderr to disk so the full
+      # Capture each worker's stdout/stderr to disk so the full
       # history survives stop/restart and is reachable through
-      # /containers/{id}/logs/files. This roughly doubles per-container
+      # /workers/{id}/logs/files. This roughly doubles per-worker
       # disk usage because Docker's own log driver also keeps a copy;
       # docs/observability.md walks through how to disable one or the
       # other if disk is tight. Set to the exact string "true" to enable;
       # any other value (or unset) leaves capture off.
-      DROVER_ENABLE_CONTAINER_LOGS: "true"
+      DROVER_ENABLE_WORKER_LOGS: "true"
       # DROVER_API_KEY: change-me
 
   webapp:

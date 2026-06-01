@@ -6,7 +6,7 @@
 #    host's "docker" group; rootless Docker uses the invoking user's
 #    group), so we resolve it at runtime instead of baking a GID into the
 #    image.
-# 2. The data, logs, and per-micro-container socket directories are
+# 2. The data, logs, and per-worker socket directories are
 #    bind-mounted from the host. Docker creates a missing host directory
 #    as root:root mode 0755 by default, which UID 1000 can't write to.
 #    We chown all three on every start so the operator never has to

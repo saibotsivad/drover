@@ -14,14 +14,14 @@ func newDestroyCmd() *cobra.Command {
 		interval int
 	)
 	cmd := &cobra.Command{
-		Use:   "destroy <container-id>",
-		Short: "Destroy a container (blocks until destroyed by default)",
+		Use:   "destroy <worker-id>",
+		Short: "Destroy a worker (blocks until destroyed by default)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			id := args[0]
 			return runLifecycle(cmd, noWait, interval,
-				func(ctx context.Context, c *api.Client) (*api.ContainerResult, error) {
-					return c.DestroyContainer(ctx, id)
+				func(ctx context.Context, c *api.Client) (*api.WorkerResult, error) {
+					return c.DestroyWorker(ctx, id)
 				},
 				lifecycleSpec{target: api.StatusDestroyed},
 			)

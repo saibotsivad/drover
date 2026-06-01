@@ -11,8 +11,8 @@ import (
 	"github.com/coder/websocket"
 )
 
-// execServer handles both the POST /containers/{id}/execs call and the
-// WebSocket upgrade at /containers/{id}/ws, replaying the given frames. It
+// execServer handles both the POST /workers/{id}/execs call and the
+// WebSocket upgrade at /workers/{id}/ws, replaying the given frames. It
 // records the command string posted so flag-passthrough can be asserted.
 type execServer struct {
 	frames     []string

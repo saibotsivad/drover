@@ -1,7 +1,7 @@
 import { html } from './render.js';
 
 const NAV_ITEMS = [
-	{ href: '/views/containers', label: 'Containers' },
+	{ href: '/views/workers', label: 'Workers' },
 	{ href: '/views/images', label: 'Images' },
 	{ href: '/views/launch', label: 'Launch' },
 ];

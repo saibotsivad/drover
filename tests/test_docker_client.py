@@ -1,7 +1,7 @@
 """Tests for the DockerClient streaming helper.
 
 The non-streaming methods are exercised end-to-end against a real Docker
-daemon by the e2e suite; this file is focused on stream_container_logs
+daemon by the e2e suite; this file is focused on stream_worker_logs
 because the rest of the system (LogCaptureManager) treats its output as
 the trust boundary.
 """
@@ -10,10 +10,8 @@ import pytest
 import httpx
 
 from orchestrator.config import Config
-from orchestrator.docker_client import (
-    ContainerNotFoundError,
-    DockerClient,
-)
+from orchestrator.docker_client import DockerClient
+from orchestrator.errors import WorkerNotFoundError
 
 
 def _make_client(handler) -> DockerClient:
@@ -51,7 +49,7 @@ async def test_stream_container_logs_yields_chunks():
 
     client = _make_client(handler)
     out = b""
-    async for chunk in client.stream_container_logs(
+    async for chunk in client.stream_worker_logs(
         "abc", since=1700000000, follow=True, tail=10
     ):
         out += chunk
@@ -78,7 +76,7 @@ async def test_stream_container_logs_without_since_or_tail():
         return httpx.Response(200, content=b"")
 
     client = _make_client(handler)
-    async for _ in client.stream_container_logs("abc"):
+    async for _ in client.stream_worker_logs("abc"):
         pass
 
     url = captured_url["url"]
@@ -95,8 +93,8 @@ async def test_stream_container_logs_404_raises_not_found():
         return httpx.Response(404, json={"message": "No such container"})
 
     client = _make_client(handler)
-    with pytest.raises(ContainerNotFoundError):
-        async for _ in client.stream_container_logs("missing"):
+    with pytest.raises(WorkerNotFoundError):
+        async for _ in client.stream_worker_logs("missing"):
             pass
 
     await client.close()

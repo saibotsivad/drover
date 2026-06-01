@@ -3,7 +3,7 @@
 This document describes the strategy and mechanics of Drover's end-to-end
 test suite, which lives at [`/e2e`](../e2e). The suite builds the orchestrator,
 webapp, and builder images from source, brings them up as a real
-multi-container stack, and exercises the public HTTP API and log output to
+multi-service stack, and exercises the public HTTP API and log output to
 catch regressions that the unit and integration tests can't see.
 
 For a developer-focused "how do I run this?" overview, see [`e2e/README.md`](../e2e/README.md).
@@ -11,7 +11,7 @@ For a developer-focused "how do I run this?" overview, see [`e2e/README.md`](../
 ## Goals
 
 1. Catch regressions across the full stack — orchestrator, webapp, builder,
-   and the per-container socket protocol — before they reach `main`.
+   and the per-worker socket protocol — before they reach `main`.
 2. Be runnable locally with a single command, with a tight inner loop for
    iterating on one service at a time.
 3. Run unattended on GitHub Actions runners, with enough log capture that
@@ -49,8 +49,8 @@ Everything the stack needs is in `e2e/docker-compose.e2e.yml`:
 
 ### Same-path socket bind-mount
 
-The orchestrator creates per-container Unix sockets and asks the host Docker
-daemon to bind-mount them into child containers. Docker resolves bind-mount
+The orchestrator creates per-worker Unix sockets and asks the host Docker
+daemon to bind-mount them into worker containers. Docker resolves bind-mount
 sources against the host filesystem, so the host path and the in-container
 path must match. The compose file uses `/tmp/drover-sockets` for both ends.
 `run.sh up` creates this directory with mode `0777` so the orchestrator user
@@ -79,21 +79,21 @@ them in lexical order and stops at the first failure.
 |---|---|
 | `01-health.sh` | Both running services answer their `/health` endpoint with `{"healthy": true}`. |
 | `02-images.sh` | The orchestrator discovers the builder image by its `drover.*` labels and returns it from `GET /images` and `GET /images/builder`. |
-| `03-privileged-container.sh` | Full privileged-container lifecycle: create, poll to `running`, exec with an env var, assert exit code and stdout, stop, poll to `stopped`, and assert the orchestrator's JSON log is free of `level=ERROR` lines. |
-| `04-standard-container.sh` | Same lifecycle as test 03 but for a non-privileged container, which the orchestrator hard-codes to run under the `runsc` runtime (gVisor). |
+| `03-privileged-container.sh` | Full privileged-worker lifecycle: create, poll to `running`, exec with an env var, assert exit code and stdout, stop, poll to `stopped`, and assert the orchestrator's JSON log is free of `level=ERROR` lines. |
+| `04-standard-container.sh` | Same lifecycle as test 03 but for a non-privileged worker, which the orchestrator hard-codes to run under the `runsc` runtime (gVisor). |
 
 ### The key test: 03-privileged-container
 
 This single test exercises the socket protocol, state machine, and log
 output in one pass:
 
-1. `POST /containers` with the builder image, `privileged: true`, and the
+1. `POST /workers` with the builder image, `privileged: true`, and the
    env var `DROVER_TEST_VAR=hello_drover`.
-2. Poll `GET /containers/{id}` until `status == running`.
-3. `POST /containers/{id}/execs` with `echo $DROVER_TEST_VAR`.
+2. Poll `GET /workers/{id}` until `status == running`.
+3. `POST /workers/{id}/execs` with `echo $DROVER_TEST_VAR`.
 4. Poll the exec endpoint until `status == complete`; assert `exit_code == 0`
    and that the joined stdout messages contain `hello_drover`.
-5. `POST /containers/{id}/stop`.
+5. `POST /workers/{id}/stop`.
 6. Poll until `status == stopped`.
 7. Dump the orchestrator's container log and assert zero lines have
    `level == "ERROR"`.
@@ -104,7 +104,7 @@ gVisor is not required.
 ## gVisor strategy
 
 Drover's orchestrator hard-codes the `runsc` runtime for non-privileged
-containers (`container_manager.py`). Test 04 therefore needs gVisor on the
+workers (`worker_manager.py`). Test 04 therefore needs gVisor on the
 host. The suite handles this in three ways:
 
 - **In GitHub Actions** — the e2e workflow installs `runsc` as a setup step.
@@ -127,15 +127,15 @@ aware of the test environment.
 
 After `runsc install`, the `runsc` runtime entry in `/etc/docker/daemon.json`
 must include `--host-uds=all` in its `runtimeArgs`. Without this flag, gVisor
-blocks the guest agent from connecting to the per-container orchestrator
-socket that is bind-mounted into the container, and every non-privileged
-container times out in `initializing` and fails with `init_timeout`.
+blocks the worker agent from connecting to the per-worker orchestrator
+socket that is bind-mounted into the worker, and every non-privileged
+worker times out in `initializing` and fails with `init_timeout`.
 
 The flag is safe in context: it permits Unix socket connections only to
-paths accessible through the container's own mount namespace, which for a
-non-privileged Drover container is exactly the one per-container
+paths accessible through the worker's own mount namespace, which for a
+non-privileged Drover worker is exactly the one per-worker
 orchestrator socket. The Docker socket is not bind-mounted into
-non-privileged containers, so it remains unreachable.
+non-privileged workers, so it remains unreachable.
 
 ```json
 "runtimes": {
@@ -152,9 +152,9 @@ gVisor install guide.
 
 ## Log strategy
 
-Drover's operations are asynchronous: `POST /containers` returns immediately
+Drover's operations are asynchronous: `POST /workers` returns immediately
 with `status: initializing`, but the real work — socket creation, `docker
-run`, the guest agent connecting and sending `ready` — happens in background
+run`, the worker agent connecting and sending `ready` — happens in background
 tasks over the next several seconds. Logs relevant to a given API call are
 emitted *after* the HTTP response. The capture window must therefore span
 from before the HTTP request through to when the background work reaches a
@@ -181,7 +181,7 @@ Each logical step produces one chunk file under
 labelled sections, readable by humans and automated systems alike:
 
 ```
-STEP:      create-container
+STEP:      create-worker
 TEST:      03-privileged-container
 RUN_ID:    2026-05-12T14-30-00Z
 STARTED:   2026-05-12T14:30:01.234Z
@@ -189,7 +189,7 @@ COMPLETED: 2026-05-12T14:30:05.923Z
 RESULT:    PASS
 
 --- REQUEST ---
-POST http://localhost:8000/containers
+POST http://localhost:8000/workers
 {"image": "builder", "privileged": true, "env": {"DROVER_TEST_VAR": "hello_drover"}}
 
 --- RESPONSE ---
@@ -224,31 +224,31 @@ logs. Both sources appear as separate sections because they cannot be
 accurately interleaved by time.
 
 The chunk-file format intentionally captures only the orchestrator and
-webapp logs per step. Logs from the *micro-containers* that the
+webapp logs per step. Logs from the *workers* that the
 orchestrator spawns are not interleaved here — see the next section for
 why and where they end up instead.
 
-### Micro-container logs
+### Worker logs
 
-Every `POST /containers` call causes the orchestrator to spawn a real
-Docker container — the *micro-container* that runs the guest agent and
+Every `POST /workers` call causes the orchestrator to spawn a real
+Docker container — the *worker* that runs the worker agent and
 whatever work the caller exec's into it. Its stdout and stderr (the
-guest agent's output, plus anything an exec'd command printed) are just
+worker agent's output, plus anything an exec'd command printed) are just
 as important to debugging as the orchestrator's own logs: they're the
-only window into what the guest agent saw, which is often where socket
-errors, gVisor misconfiguration, or guest-side crashes show up.
+only window into what the worker agent saw, which is often where socket
+errors, gVisor misconfiguration, or worker-side crashes show up.
 
 These logs are **not** interleaved into the per-step chunk files. There
 are two reasons:
 
 1. **No reliable per-step window.** A single test step can span several
-   exec calls against one micro-container, and a single micro-container
+   exec calls against one worker, and a single worker
    may outlive several test steps. The chunk file's `T1 → T2+grace`
    window — which is meaningful for the orchestrator and webapp because
    those are long-lived services — doesn't have a sensible
-   interpretation for a micro-container that started mid-test.
+   interpretation for a worker that started mid-test.
 2. **No Docker ID exposed to the test scripts.** The orchestrator's
-   public API identifies containers by its own generated ID, not by the
+   public API identifies workers by its own generated ID, not by the
    Docker ID. Filtering `docker logs <docker-id>` per step would require
    either an API change to surface `docker_id` or a side-channel query
    into the orchestrator's database — both heavier than the problem
@@ -257,22 +257,22 @@ are two reasons:
 So instead, `./e2e/run.sh ci` does a holistic post-mortem dump just
 before tear-down: every Docker container carrying the
 `drover.managed=true` label (which the builder image bakes in via its
-Dockerfile, and which every spawned container inherits) has its full
+Dockerfile, and which every spawned worker inherits) has its full
 `docker logs` output written to:
 
 ```
-e2e/logs/microcontainers/<docker-id>.log
+e2e/logs/workers/<docker-id>.log
 ```
 
 Each file starts with a small header naming the Docker ID, the image,
 and the auto-generated Docker container name, followed by the raw
 container log. The orchestrator's own log lines mention the
-micro-container's Docker ID whenever they interact with it (search for
+worker's Docker ID whenever they interact with it (search for
 `docker=<short-id>`), so a developer can grep an orchestrator log line
-for that short ID and immediately find the matching micro-container
+for that short ID and immediately find the matching worker
 file in this directory.
 
-The micro-container logs are uploaded as part of the standard
+The worker logs are uploaded as part of the standard
 `e2e/logs/` artifact when the workflow fails.
 
 ### Run directory layout
@@ -281,7 +281,7 @@ The micro-container logs are uploaded as part of the standard
 e2e/logs/
 ├── orchestrator.log                  # Full container log (ci mode only)
 ├── webapp.log                        # Full container log (ci mode only)
-├── microcontainers/                  # Full container log per spawned micro-container (ci mode only)
+├── workers/                          # Full container log per spawned worker (ci mode only)
 │   ├── <docker-id>.log
 │   └── …
 └── 2026-05-12T14-30-00Z/             # RUN_ID
@@ -292,9 +292,9 @@ e2e/logs/
     ├── 02-images/
     │   └── …
     └── 03-privileged-container/
-        ├── 01-create-container.log
+        ├── 01-create-worker.log
         ├── 02-exec-command.log
-        ├── 03-stop-container.log
+        ├── 03-stop-worker.log
         └── 04-assert-no-errors.log
 ```
 
@@ -302,7 +302,7 @@ e2e/logs/
 first failure and names the chunk file to inspect. Each chunk file is
 fully self-contained for diagnosis.
 
-The top-level `orchestrator.log`, `webapp.log`, and `microcontainers/`
+The top-level `orchestrator.log`, `webapp.log`, and `workers/`
 directory are only written by `./e2e/run.sh ci`, which captures full
 container logs to disk just before tearing the stack down. That gives
 the CI workflow something to print and upload as an artifact after the

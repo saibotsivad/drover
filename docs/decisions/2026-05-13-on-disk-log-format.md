@@ -5,9 +5,9 @@
 
 ## Context
 
-The container-log-retention feature writes captured micro-container
+The container-log-retention feature writes captured worker
 stdout/stderr to disk under `/var/lib/drover/logs/` when
-`DROVER_ENABLE_CONTAINER_LOGS=true` (see the sibling ADR
+`DROVER_ENABLE_WORKER_LOGS=true` (see the sibling ADR
 `2026-05-13-container-log-capture-architecture.md` for the capture
 pipeline). We had to pick:
 

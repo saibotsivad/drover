@@ -37,7 +37,7 @@ export function createApp({ config, logger, orchestrator }) {
 			title: 'Home',
 			body: html`<section>
 				<p>Drover management UI.</p>
-				<p>Use the navigation above to browse containers and images, or to launch a new container.</p>
+				<p>Use the navigation above to browse workers and images, or to launch a new worker.</p>
 			</section>`,
 		}).toString());
 	});

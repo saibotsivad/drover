@@ -232,7 +232,7 @@ main { padding: 1.5rem; }
 .status-pending     { background: var(--status-pending); }
 .status-complete    { background: var(--status-complete); }
 
-/* --- Container detail metadata --- */
+/* --- Worker detail metadata --- */
 
 .meta-grid {
 	display: grid;
@@ -383,7 +383,7 @@ main { padding: 1.5rem; }
 	box-shadow: var(--shadow-focus);
 }
 
-/* --- Exec commands section (container detail) --- */
+/* --- Exec commands section (worker detail) --- */
 
 .exec-section {
 	margin-top: 2rem;

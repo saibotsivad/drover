@@ -17,9 +17,9 @@ function outputChunk(message) {
 	return html`<span class="${cls}">${message.data}</span>`;
 }
 
-export function execOutputPage(container, exec) {
+export function execOutputPage(worker, exec) {
 	const messages = Array.isArray(exec.messages) ? exec.messages : [];
-	const containerHref = `/views/containers/${encodeURIComponent(container.id)}`;
+	const workerHref = `/views/workers/${encodeURIComponent(worker.id)}`;
 	const output = messages.length === 0
 		? html`<p class="muted exec-output-empty">(no output yet)</p>`
 		: html`<pre id="exec-output" class="exec-output">${messages.map(outputChunk)}</pre>`;
@@ -27,7 +27,7 @@ export function execOutputPage(container, exec) {
 	return html`<section id="exec-detail">
 		<div class="page-header">
 			<h2>Exec: <code>${exec.command}</code></h2>
-			<a class="btn btn-secondary" href="${containerHref}">Back to container</a>
+			<a class="btn btn-secondary" href="${workerHref}">Back to worker</a>
 		</div>
 		<dl id="exec-meta" class="meta-grid">
 			${metadataRow('Status', statusPill(exec.status))}

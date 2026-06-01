@@ -5,7 +5,7 @@ changes:
   entries:
   - bump: patch
     description: |
-      Hide the exec command UI on the container detail page when the image does
+      Hide the exec command UI on the worker detail page when the image does
       not declare the `exec` capability, with a note explaining why.
 - version: 0.0.11
   date: '2026-05-24'
@@ -18,34 +18,34 @@ changes:
   entries:
   - bump: patch
     description: |
-      Add a Resume button to the container-detail view that appears when the
-      container is in the `stopped` state. Clicking it calls the orchestrator's
-      `POST /containers/{id}/resume` via a new
-      `POST /actions/containers/{id}/resume` action route and redirects back to
+      Add a Resume button to the worker-detail view that appears when the
+      worker is in the `stopped` state. Clicking it calls the orchestrator's
+      `POST /workers/{id}/resume` via a new
+      `POST /actions/workers/{id}/resume` action route and redirects back to
       the detail page so the UI reflects the new `resuming` state (which then
-      transitions to `running` once the guest agent reconnects).
+      transitions to `running` once the worker agent reconnects).
 - version: 0.0.9
   date: '2026-05-18'
   entries:
   - bump: patch
     description: |
-      Container detail page now has an inline exec command input between the
+      Worker detail page now has an inline exec command input between the
       status details panel and the exec commands list. The textarea uses a
       monospace font, starts at one line tall, and auto-expands as the command
       grows. Submitting the form posts the command to the orchestrator and
       refreshes the exec commands list in place without a full page reload.
   - bump: patch
     description: |
-      Container detail page now lists every exec command that has been run
-      against the container, with status, exit code, and a relative start time.
-      Each row links to a new `/views/containers/{id}/execs/{cmd_id}` page that
+      Worker detail page now lists every exec command that has been run
+      against the worker, with status, exit code, and a relative start time.
+      Each row links to a new `/views/workers/{id}/execs/{cmd_id}` page that
       shows the interleaved stdout/stderr output, with stderr chunks highlighted.
   - bump: patch
     description: |
       Added a Playwright browser-test suite under `e2e/playwright/`,
       exercised through the new `playwright-runner` compose service and
       `./e2e/run.sh playwright`. Covers the images list, the launch form,
-      the exec input/output flow, the containers list, and the log viewer
+      the exec input/output flow, the workers list, and the log viewer
       source picker. `./e2e/run.sh ci` now runs the bash and Playwright
       suites against the same stack in one shot, and CI uploads the
       Playwright HTML report and traces as a separate artifact.
@@ -54,9 +54,9 @@ changes:
   entries:
   - bump: patch
     description: |
-      The container detail page now includes a logs section below the action
+      The worker detail page now includes a logs section below the action
       buttons. A source selector lets operators switch between the live
-      container log stream, any on-disk captured log files, and the filtered
+      worker log stream, any on-disk captured log files, and the filtered
       orchestrator log view. The selected source is preserved as a `log_source`
       query parameter so page refreshes keep the current selection.
 - version: 0.0.7
@@ -64,7 +64,7 @@ changes:
   entries:
   - bump: patch
     description: |
-      Validating release and container issues.
+      Validating release and worker issues.
 - version: 0.0.6
   date: '2026-05-11'
   entries:

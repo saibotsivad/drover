@@ -5,14 +5,14 @@ changes:
   entries:
   - bump: patch
     description: |
-      Give each micro-container its own socket folder instead of a single
-      socket file. The orchestrator now creates a per-container folder
-      `{socket_dir}/{container_id}/` containing the control socket
+      Give each worker its own socket folder instead of a single
+      socket file. The orchestrator now creates a per-worker folder
+      `{socket_dir}/{worker_id}/` containing the control socket
       `orchestrator.sock`, and bind-mounts that folder into the
-      micro-container at `/var/run/drover/sockets/` (previously a single
+      worker at `/var/run/drover/sockets/` (previously a single
       socket file was bound at `/run/orchestrator.sock`). The folder layout
-      makes room for multiple sockets per container later, e.g. one per
-      interactive shell. This is a breaking change to the orchestrator/guest
+      makes room for multiple sockets per worker later, e.g. one per
+      interactive shell. This is a breaking change to the orchestrator/worker
       socket contract; Drover is pre-production so no backwards
       compatibility is provided.
 - version: 0.0.18
@@ -34,12 +34,12 @@ changes:
   entries:
   - bump: patch
     description: |
-      Add a per-container WebSocket endpoint at `GET /containers/{id}/ws` that
-      streams both exec command output and the container's Docker logs in real
+      Add a per-worker WebSocket endpoint at `GET /workers/{id}/ws` that
+      streams both exec command output and the worker's Docker logs in real
       time. Replaces polling for long-running commands. Messages are JSON
       objects tagged with `type: "output" | "status" | "log" | "error"`;
       exec messages carry the `command_id` so clients can correlate with the
-      REST exec API. Multiple WebSocket clients per container are supported;
+      REST exec API. Multiple WebSocket clients per worker are supported;
       each gets an independent 256-message queue with drop-on-full semantics
       so a slow consumer can't back-pressure the orchestrator.
 
@@ -60,30 +60,30 @@ changes:
     description: |
       Add startup warning when gVisor (`runsc`) is registered in Docker but the
       required `--host-uds=all` flag is absent from its `runtimeArgs`. Without
-      that flag, gVisor blocks the guest agent inside every non-privileged
-      micro-container from connecting to its orchestrator socket, causing all
-      containers to time out with `init_timeout`. The orchestrator now inspects
+      that flag, gVisor blocks the worker agent inside every non-privileged
+      worker from connecting to its orchestrator socket, causing all
+      workers to time out with `init_timeout`. The orchestrator now inspects
       the Docker daemon's runtime configuration at startup and logs a clear,
       actionable warning if the flag is missing.
 
       Also logs both the in-container and host-side socket paths when launching a
-      micro-container, making path-resolution issues easier to diagnose.
+      worker, making path-resolution issues easier to diagnose.
   - bump: patch
     description: |
       Fix `docs/install-runsc-gvisor.md` to include `--host-uds=all` in the
       required `daemon.json` config. This flag was documented in
       `docs/full-e2e-suite.md` but missing from the operator install guide,
       causing operators following that guide to hit `init_timeout` failures on
-      all non-privileged containers with no obvious error message.
+      all non-privileged workers with no obvious error message.
   - bump: patch
     description: |
-      `POST /containers/{id}/resume` now mirrors the `POST /containers` init
+      `POST /workers/{id}/resume` now mirrors the `POST /workers` init
       flow: it returns immediately with status `resuming`, then transitions
-      to `running` only after Docker starts the container AND the guest agent
+      to `running` only after Docker starts the worker AND the worker agent
       reconnects to the orchestrator socket and re-sends a `ready` message.
       Previously the row flipped to `running` as soon as `docker start`
-      returned, leaving a window where the API reported the container as
-      running but exec calls failed with `409 ContainerNotConnected`.
+      returned, leaving a window where the API reported the worker as
+      running but exec calls failed with `409 WorkerNotConnected`.
 
       A new resume watchdog fires `DROVER_INIT_TIMEOUT_SECONDS` (the existing
       knob is reused) after the resume request and transitions the row to
@@ -91,7 +91,7 @@ changes:
       by the new failure paths:
 
       - `resume_docker_error` — Docker start call failed during resume.
-      - `resume_timeout` — guest agent did not reconnect/send `ready` in time.
+      - `resume_timeout` — worker agent did not reconnect/send `ready` in time.
 
       The existing `orchestrator_crash` error code now also covers rows
       interrupted while in `resuming` (previously only `initializing` was
@@ -101,7 +101,7 @@ changes:
   entries:
   - bump: patch
     description: |
-      Fix builder (micro-container) launch failure where the executor could not
+      Fix builder (worker) launch failure where the executor could not
       connect to `/run/orchestrator.sock`. The socket bind-mount source was using
       the in-container path for the sockets directory, but Docker resolves bind
       sources against the host filesystem. This worked when the sockets directory
@@ -129,21 +129,21 @@ changes:
 
       In-container paths are now fixed and not configurable:
       `/var/lib/drover/data/db.sqlite` (SQLite + future config),
-      `/var/lib/drover/logs/` (captured micro-container logs when
-      `DROVER_ENABLE_CONTAINER_LOGS=true`), `/var/run/docker.sock`
+      `/var/lib/drover/logs/` (captured worker logs when
+      `DROVER_ENABLE_WORKER_LOGS=true`), `/var/run/docker.sock`
       (host Docker daemon), and `/var/run/drover/sockets/` (per-
-      micro-container Unix sockets). Removed the path-override env
+      worker Unix sockets). Removed the path-override env
       vars `DROVER_DB_PATH`, `DROVER_SOCKET_DIR`, and
       `DROVER_DOCKER_SOCK` from the orchestrator.
 
-      Privileged-container bind fix: previously the orchestrator used
+      Privileged-worker bind fix: previously the orchestrator used
       its in-container view of the Docker socket
       (`/var/run/docker.sock`) as the bind source when launching
-      privileged micro-containers, which silently broke under rootless
+      privileged workers, which silently broke under rootless
       Docker (the host socket lives at `/run/user/$UID/docker.sock`,
       so Docker resolved the bind source against a non-existent host
       path and bound an empty directory at `/run/docker.sock` inside
-      the privileged micro-container). The orchestrator now
+      the privileged worker). The orchestrator now
       self-inspects through the Docker API at startup, reads the
       `Source` of its own `/var/run/docker.sock` mount, and uses that
       host path as the bind source. No new environment variable is
@@ -153,7 +153,7 @@ changes:
       `./data` and `./logs` (overridable via `DROVER_DATA_DIR` and
       `DROVER_LOGS_DIR` compose-level env vars) and a host-side
       `DROVER_HOST_DOCKER_SOCK` for the Docker socket. The
-      per-micro-container sockets directory is bound at
+      per-worker sockets directory is bound at
       `/var/run/drover/sockets:/var/run/drover/sockets` (the host
       path must match the container path because Docker resolves
       nested bind-mount sources against the host filesystem). The
@@ -165,14 +165,14 @@ changes:
   - bump: patch
     description: |
       Renamed exec route path segments from `/exec` to `/execs` for consistency
-      with the plural `/containers` convention. Callers must update:
-      - `POST /containers/{id}/exec` → `POST /containers/{id}/execs`
-      - `GET /containers/{id}/exec/{cmd_id}` → `GET /containers/{id}/execs/{cmd_id}`
+      with the plural `/workers` convention. Callers must update:
+      - `POST /workers/{id}/exec` → `POST /workers/{id}/execs`
+      - `GET /workers/{id}/exec/{cmd_id}` → `GET /workers/{id}/execs/{cmd_id}`
   - bump: patch
     description: |
-      New `GET /containers/{id}/execs` endpoint returns a list of every command
-      that has been submitted against a container (newest first), powering the
-      new exec command panel in the webapp. `GET /containers/{id}/execs/{cmd_id}`
+      New `GET /workers/{id}/execs` endpoint returns a list of every command
+      that has been submitted against a worker (newest first), powering the
+      new exec command panel in the webapp. `GET /workers/{id}/execs/{cmd_id}`
       also now includes the original `command` string in its response.
   - bump: patch
     description: |
@@ -181,7 +181,7 @@ changes:
       (`/<hex>` or `/<hex>.scope`), so on every other Docker × cgroup
       combination — including the systemd driver default on modern Ubuntu
       and GitHub Actions — detection silently returned `None` and
-      `GET /containers/{id}/logs/orchestrator` returned 503.
+      `GET /workers/{id}/logs/orchestrator` returned 503.
 
       Detection now tries three independent signals in order:
       (1) `/proc/self/cgroup` — strict `[/-]<hex>(.scope)?` match per line,
@@ -203,16 +203,16 @@ changes:
   entries:
   - bump: patch
     description: |
-      New `GET /containers/{id}/logs/orchestrator` endpoint returns the
-      orchestrator's own structured log lines filtered to a single container,
-      making it easy to see lifecycle events for one container without reading
+      New `GET /workers/{id}/logs/orchestrator` endpoint returns the
+      orchestrator's own structured log lines filtered to a single worker,
+      making it easy to see lifecycle events for one worker without reading
       the full orchestrator log.
   - bump: patch
     description: |
-      Captured micro-container stdout/stderr is now retained on disk
+      Captured worker stdout/stderr is now retained on disk
       under `DROVER_LOG_DIR` and reachable through
-      `GET /containers/{id}/logs/files` (and `/logs/files/{filename}`)
-      until the container is destroyed. See
+      `GET /workers/{id}/logs/files` (and `/logs/files/{filename}`)
+      until the worker is destroyed. See
       [`docs/observability.md`](../docs/observability.md) for the full
       retention model, on-disk format, and log-shipper recipes.
 - version: 0.0.9

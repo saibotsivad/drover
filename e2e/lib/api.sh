@@ -70,20 +70,20 @@ wait_healthy() {
 	return 1
 }
 
-# Poll GET /containers/$id until status == $target, the container errors
+# Poll GET /workers/$id until status == $target, the worker errors
 # out, or the timeout (in seconds) expires. On success, $E2E_RESPONSE_BODY
-# holds the final container JSON. The number of polls is recorded in
+# holds the final worker JSON. The number of polls is recorded in
 # $E2E_LAST_POLL_COUNT and the elapsed wall-clock ms in
 # $E2E_LAST_POLL_ELAPSED_MS so step_end can include them in the chunk.
-wait_container_status() {
-	local container_id="$1" target="$2" timeout="${3:-30}"
+wait_worker_status() {
+	local worker_id="$1" target="$2" timeout="${3:-30}"
 	local start_ms
 	start_ms=$(date +%s%3N)
 	local polls=0
 	local i=0
 	while [ "$i" -lt "$timeout" ]; do
 		polls=$((polls + 1))
-		if api_get "${ORCHESTRATOR_URL}/containers/${container_id}"; then
+		if api_get "${ORCHESTRATOR_URL}/workers/${worker_id}"; then
 			local status
 			status=$(printf '%s' "$E2E_RESPONSE_BODY" | jq -r '.status' 2>/dev/null || echo "")
 			if [ "$status" = "$target" ]; then
@@ -94,7 +94,7 @@ wait_container_status() {
 			if [ "$status" = "error" ] && [ "$target" != "error" ]; then
 				E2E_LAST_POLL_COUNT="$polls"
 				E2E_LAST_POLL_ELAPSED_MS=$(( $(date +%s%3N) - start_ms ))
-				echo "  container $container_id transitioned to 'error' while waiting for '$target'" >&2
+				echo "  worker $worker_id transitioned to 'error' while waiting for '$target'" >&2
 				return 1
 			fi
 		fi
@@ -103,22 +103,22 @@ wait_container_status() {
 	done
 	E2E_LAST_POLL_COUNT="$polls"
 	E2E_LAST_POLL_ELAPSED_MS=$(( $(date +%s%3N) - start_ms ))
-	echo "  container $container_id did not reach status '$target' within ${timeout}s" >&2
+	echo "  worker $worker_id did not reach status '$target' within ${timeout}s" >&2
 	return 1
 }
 
-# Poll GET /containers/$cid/execs/$cmd_id until status == "complete". Echoes
+# Poll GET /workers/$wid/execs/$cmd_id until status == "complete". Echoes
 # the final exec JSON to stdout (so callers can pipe to jq) and also leaves
 # it in $E2E_RESPONSE_BODY.
 wait_exec_complete() {
-	local container_id="$1" command_id="$2" timeout="${3:-30}"
+	local worker_id="$1" command_id="$2" timeout="${3:-30}"
 	local start_ms
 	start_ms=$(date +%s%3N)
 	local polls=0
 	local i=0
 	while [ "$i" -lt "$timeout" ]; do
 		polls=$((polls + 1))
-		if api_get "${ORCHESTRATOR_URL}/containers/${container_id}/execs/${command_id}"; then
+		if api_get "${ORCHESTRATOR_URL}/workers/${worker_id}/execs/${command_id}"; then
 			local status
 			status=$(printf '%s' "$E2E_RESPONSE_BODY" | jq -r '.status' 2>/dev/null || echo "")
 			if [ "$status" = "complete" ]; then
@@ -133,6 +133,6 @@ wait_exec_complete() {
 	done
 	E2E_LAST_POLL_COUNT="$polls"
 	E2E_LAST_POLL_ELAPSED_MS=$(( $(date +%s%3N) - start_ms ))
-	echo "  exec $command_id on $container_id did not complete within ${timeout}s" >&2
+	echo "  exec $command_id on $worker_id did not complete within ${timeout}s" >&2
 	return 1
 }

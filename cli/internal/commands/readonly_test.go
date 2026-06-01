@@ -8,7 +8,7 @@ import (
 
 func TestPs(t *testing.T) {
 	fakeOrchestrator(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/containers" {
+		if r.URL.Path != "/workers" {
 			t.Errorf("path = %s", r.URL.Path)
 		}
 		w.Write([]byte(`[{"id":"c1","image":"img","status":"running"}]`))

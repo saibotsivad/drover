@@ -1,9 +1,9 @@
 """Tests for the ``/containers/{id}/logs[/files[/<name>]]`` REST routes.
 
 Wires a real ``LogCaptureManager`` (on a ``tmp_path`` directory) into a
-minimal FastAPI app along with a fake container_manager so we can hit
+minimal FastAPI app along with a fake worker_manager so we can hit
 the 404/409/200 paths without spinning up Docker.  Lifecycle and capture
-mechanics are covered in test_log_capture.py and test_container_manager.py.
+mechanics are covered in test_log_capture.py and test_worker_manager.py.
 """
 
 from unittest.mock import AsyncMock, MagicMock
@@ -13,7 +13,7 @@ import pytest
 from fastapi import FastAPI
 
 from orchestrator.config import Config
-from orchestrator.container_manager import ContainerNotFound
+from orchestrator.worker_manager import WorkerNotFound
 from orchestrator.log_capture import LogCaptureManager
 from orchestrator.routers import containers as containers_router
 
@@ -47,12 +47,12 @@ def _build_app(
 
     cm = MagicMock()
 
-    async def fake_get(container_id):
+    async def fake_get(worker_id):
         if not container_exists:
-            raise ContainerNotFound(container_id)
-        return MagicMock(id=container_id, status="running")
+            raise WorkerNotFound(worker_id)
+        return MagicMock(id=worker_id, status="running")
 
-    cm.get_container = fake_get
+    cm.get_worker = fake_get
 
     db = MagicMock()
 
@@ -70,9 +70,9 @@ def _build_app(
             return orchestrator_logs
         return "hello\nworld\n"
 
-    docker.get_container_logs = AsyncMock(side_effect=get_logs)
+    docker.get_worker_logs = AsyncMock(side_effect=get_logs)
 
-    app.state.container_manager = cm
+    app.state.worker_manager = cm
     app.state.log_capture = log_capture
     app.state.db = db
     app.state.docker = docker

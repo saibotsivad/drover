@@ -16,12 +16,12 @@ import (
 func newExecCmd() *cobra.Command {
 	// Default (interspersed) flag parsing is what makes `--` work: cobra
 	// records its position via ArgsLenAtDash and forwards everything after it
-	// verbatim, while a flag *before* the container id (e.g. --bogus) is still
+	// verbatim, while a flag *before* the worker id (e.g. --bogus) is still
 	// rejected. SetInterspersed(false) would instead make ArgsLenAtDash always
 	// -1, so it is deliberately not used.
 	return &cobra.Command{
-		Use:   "exec <container-id> -- <command...>",
-		Short: "Run a command in a container",
+		Use:   "exec <worker-id> -- <command...>",
+		Short: "Run a command in a worker",
 		Args:  cobra.MinimumNArgs(1),
 		RunE:  runExec,
 	}
@@ -33,11 +33,11 @@ func runExec(cmd *cobra.Command, args []string) error {
 		return &output.Failure{
 			Code:   1,
 			Err:    "interactive_exec_unsupported",
-			Detail: "interactive exec is not yet supported; use: drover exec <container-id> -- <command...>",
+			Detail: "interactive exec is not yet supported; use: drover exec <worker-id> -- <command...>",
 		}
 	}
 	if dash != 1 {
-		return &output.Failure{Code: 1, Err: "usage", Detail: "expected exactly one container id before --"}
+		return &output.Failure{Code: 1, Err: "usage", Detail: "expected exactly one worker id before --"}
 	}
 	id := args[0]
 	command := args[dash:]

@@ -25,10 +25,10 @@ changes:
   - bump: patch
     description: |
       First real cut of the builder image. Replaces the stub Dockerfile
-      with one that bundles the `drover-executor` guest agent (installed
+      with one that bundles the `drover-executor` worker agent (installed
       from the sibling `/executor` folder via `COPY` + `pip install`),
       the Docker CLI (plus buildx), and git, so the orchestrator can
-      drive it as a privileged micro-container that builds, pulls, and
+      drive it as a privileged worker that builds, pulls, and
       pushes images on the host Docker daemon. Adds `builder/README.md`
       documenting the image contents, build, operator setup, and
       customisation hooks.

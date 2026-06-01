@@ -6,7 +6,7 @@ changes:
   - bump: patch
     description: |
       Default to the orchestrator socket inside the per-container folder.
-      The guest agent's default socket path changed from
+      The worker agent's default socket path changed from
       `/run/orchestrator.sock` to `/var/run/drover/sockets/orchestrator.sock`,
       matching the orchestrator's new per-container socket folder bind
       mount. Override with `--socket` if needed.
@@ -15,7 +15,7 @@ changes:
   entries:
   - bump: patch
     description: |
-      Log a clear, actionable error message when the guest agent fails to connect
+      Log a clear, actionable error message when the worker agent fails to connect
       to the orchestrator socket with `ConnectionRefusedError`. The message
       identifies gVisor's missing `--host-uds=all` flag as the likely cause and
       points to the Drover install docs.

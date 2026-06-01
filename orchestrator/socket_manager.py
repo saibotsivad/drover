@@ -1,25 +1,25 @@
-"""Per-container Unix socket lifecycle and message routing.
+"""Per-worker Unix socket lifecycle and message routing.
 
-Each running container gets its own folder
-``/var/run/drover/sockets/{container_id}/`` (fixed in-container path, see
+Each running worker gets its own folder
+``/var/run/drover/sockets/{worker_id}/`` (fixed in-container path, see
 orchestrator/config.py) containing the orchestrator control socket
 ``orchestrator.sock``.  The whole folder is bind-mounted into the
-micro-container at ``/var/run/drover/sockets/`` so the guest agent
+worker at ``/var/run/drover/sockets/`` so the worker agent
 connects to ``/var/run/drover/sockets/orchestrator.sock``.  The folder
 layout (rather than a single socket file) leaves room for additional
-per-container sockets later, e.g. one per interactive shell.
+per-worker sockets later, e.g. one per interactive shell.
 
-The guest agent inside the container connects to this socket and communicates
+The worker agent inside the container connects to this socket and communicates
 using newline-delimited JSON messages.
 
-Message types (guest -> orchestrator):
+Message types (worker agent -> orchestrator):
   - ready:     {"type": "ready"}
   - heartbeat: {"type": "heartbeat"}
   - output:    {"type": "output", "id": "<cmd_id>", "stream": "stdout|stderr", "data": "..."}
   - result:    {"type": "result", "id": "<cmd_id>", "exit_code": N}
   - done:      {"type": "done"}
 
-Message types (orchestrator -> guest):
+Message types (orchestrator -> worker agent):
   - command:   {"type": "command", "id": "<cmd_id>", "exec": "..."}
 """
 
@@ -58,14 +58,14 @@ class SocketManager:
     def set_connection_manager(self, cm: "ConnectionManager") -> None:
         """Wire up the ConnectionManager after it is created.
 
-        Output and result messages from guest agents are broadcast
+        Output and result messages from worker agents are broadcast
         through it to any WebSocket clients subscribed to the
-        container.
+        worker.
         """
         self._connection_manager = cm
 
     def set_done_callback(self, callback: Callable[[str], Awaitable[None]]) -> None:
-        """Register a callback invoked when a container sends a done signal."""
+        """Register a callback invoked when a worker sends a done signal."""
         self._done_callback = callback
 
     def set_ready_callback(self, callback: Callable[[str], Awaitable[None]]) -> None:
@@ -74,28 +74,28 @@ class SocketManager:
         Fired only when the ``ready`` message actually transitions the row
         from ``initializing`` or ``resuming`` to ``running``.  The orchestrator
         uses this to cancel the init/resume timeout watchdog for the
-        container.
+        worker.
         """
         self._ready_callback = callback
 
-    def _container_dir(self, container_id: str) -> str:
-        """Per-container socket folder bind-mounted into the micro-container."""
-        return os.path.join(self._config.socket_dir, container_id)
+    def _worker_dir(self, worker_id: str) -> str:
+        """Per-worker socket folder bind-mounted into the worker."""
+        return os.path.join(self._config.socket_dir, worker_id)
 
-    def _socket_path(self, container_id: str) -> str:
-        """Path to the orchestrator control socket inside the container folder."""
-        return os.path.join(self._container_dir(container_id), ORCHESTRATOR_SOCKET_NAME)
+    def _socket_path(self, worker_id: str) -> str:
+        """Path to the orchestrator control socket inside the worker folder."""
+        return os.path.join(self._worker_dir(worker_id), ORCHESTRATOR_SOCKET_NAME)
 
-    async def create_socket(self, container_id: str) -> str:
-        """Create a Unix socket for a container and start listening.
+    async def create_socket(self, worker_id: str) -> str:
+        """Create a Unix socket for a worker and start listening.
 
         Returns the socket path.  Must be called BEFORE the Docker container
-        starts so the per-container folder and socket file exist for the
+        starts so the per-worker folder and socket file exist for the
         bind mount.
         """
-        container_dir = self._container_dir(container_id)
-        socket_path = self._socket_path(container_id)
-        os.makedirs(container_dir, exist_ok=True)
+        worker_dir = self._worker_dir(worker_id)
+        socket_path = self._socket_path(worker_id)
+        os.makedirs(worker_dir, exist_ok=True)
 
         # Remove stale socket file if present (e.g. from a previous run)
         try:
@@ -104,72 +104,72 @@ class SocketManager:
             pass
 
         server = await asyncio.start_unix_server(
-            lambda r, w: self._handle_connection(container_id, r, w),
+            lambda r, w: self._handle_connection(worker_id, r, w),
             path=socket_path,
         )
         # Make socket world-writable so the container process can connect
         os.chmod(socket_path, 0o777)
 
-        self._servers[container_id] = server
-        logger.info("Socket created for container %s at %s", container_id, socket_path)
+        self._servers[worker_id] = server
+        logger.info("Socket created for worker %s at %s", worker_id, socket_path)
         return socket_path
 
-    async def close_socket(self, container_id: str) -> None:
+    async def close_socket(self, worker_id: str) -> None:
         """Close the socket connection but keep the socket file (for resume)."""
-        await self._cleanup_connection(container_id)
+        await self._cleanup_connection(worker_id)
 
-        server = self._servers.pop(container_id, None)
+        server = self._servers.pop(worker_id, None)
         if server:
             server.close()
             await server.wait_closed()
 
-        logger.info("Socket closed for container %s (file preserved)", container_id)
+        logger.info("Socket closed for worker %s (file preserved)", worker_id)
 
-    async def destroy_socket(self, container_id: str) -> None:
+    async def destroy_socket(self, worker_id: str) -> None:
         """Close the socket connection AND remove the socket file."""
-        await self._cleanup_connection(container_id)
+        await self._cleanup_connection(worker_id)
 
-        server = self._servers.pop(container_id, None)
+        server = self._servers.pop(worker_id, None)
         if server:
             server.close()
             await server.wait_closed()
 
         try:
-            os.unlink(self._socket_path(container_id))
+            os.unlink(self._socket_path(worker_id))
         except FileNotFoundError:
             pass
-        # Remove the now-empty per-container folder.
+        # Remove the now-empty per-worker folder.
         try:
-            os.rmdir(self._container_dir(container_id))
+            os.rmdir(self._worker_dir(worker_id))
         except (FileNotFoundError, OSError):
             pass
 
-        logger.info("Socket destroyed for container %s", container_id)
+        logger.info("Socket destroyed for worker %s", worker_id)
 
     async def send_command(
-        self, container_id: str, command_id: str, exec_str: str
+        self, worker_id: str, command_id: str, exec_str: str
     ) -> None:
-        """Send a command to the guest agent via the socket."""
-        writer = self._writers.get(container_id)
+        """Send a command to the worker agent via the socket."""
+        writer = self._writers.get(worker_id)
         if writer is None:
             raise RuntimeError(
-                f"No active connection for container '{container_id}'"
+                f"No active connection for worker '{worker_id}'"
             )
 
         msg = json.dumps({"type": "command", "id": command_id, "exec": exec_str})
         writer.write((msg + "\n").encode())
         await writer.drain()
-        logger.debug("Sent command %s to container %s", command_id, container_id)
+        logger.debug("Sent command %s to worker %s", command_id, worker_id)
 
     async def close_all(self) -> None:
         """Shut down all sockets.  Called during app shutdown."""
-        container_ids = list(self._servers.keys())
-        for cid in container_ids:
-            await self.close_socket(cid)
+        worker_ids = list(self._servers.keys())
+        for wid in worker_ids:
+            await self.close_socket(wid)
 
-    def is_connected(self, container_id: str) -> bool:
-        """Check if a guest agent is currently connected for this container."""
-        return container_id in self._writers
+    def is_connected(self, worker_id: str) -> bool:
+        """Check if a worker agent is currently connected for this worker."""
+        return worker_id in self._writers
 
     # -- internal helpers ----------------------------------------------------
 
@@ -193,23 +193,23 @@ class SocketManager:
 
     async def _handle_connection(
         self,
-        container_id: str,
+        worker_id: str,
         reader: asyncio.StreamReader,
         writer: asyncio.StreamWriter,
     ) -> None:
-        """Handle a new guest agent connection.
+        """Handle a new worker agent connection.
 
-        Only one connection per container is expected.  If a second
+        Only one connection per worker is expected.  If a second
         connection arrives, the previous one is closed first.
         """
-        # Close any previous connection for this container
-        await self._cleanup_connection(container_id)
+        # Close any previous connection for this worker
+        await self._cleanup_connection(worker_id)
 
-        self._writers[container_id] = writer
+        self._writers[worker_id] = writer
         current_task = asyncio.current_task()
-        self._tasks[container_id] = current_task
+        self._tasks[worker_id] = current_task
 
-        logger.info("Guest agent connected for container %s", container_id)
+        logger.info("Worker agent connected for worker %s", worker_id)
 
         try:
             while True:
@@ -221,52 +221,52 @@ class SocketManager:
                     msg = json.loads(line)
                 except json.JSONDecodeError:
                     logger.warning(
-                        "Invalid JSON from container %s: %r", container_id, line
+                        "Invalid JSON from worker %s: %r", worker_id, line
                     )
                     continue
 
-                await self._handle_message(container_id, msg)
+                await self._handle_message(worker_id, msg)
         except asyncio.CancelledError:
             raise
         except Exception:
-            logger.exception("Error reading from container %s", container_id)
+            logger.exception("Error reading from worker %s", worker_id)
         finally:
             # Only clean up if we are still the active connection
-            if self._writers.get(container_id) is writer:
-                self._writers.pop(container_id, None)
-            if self._tasks.get(container_id) is current_task:
-                self._tasks.pop(container_id, None)
-            logger.info("Guest agent disconnected for container %s", container_id)
+            if self._writers.get(worker_id) is writer:
+                self._writers.pop(worker_id, None)
+            if self._tasks.get(worker_id) is current_task:
+                self._tasks.pop(worker_id, None)
+            logger.info("Worker agent disconnected for worker %s", worker_id)
 
-    async def _handle_message(self, container_id: str, msg: dict) -> None:
-        """Route a message from the guest agent."""
+    async def _handle_message(self, worker_id: str, msg: dict) -> None:
+        """Route a message from the worker agent."""
         msg_type = msg.get("type")
 
         if msg_type == "ready":
-            await self._handle_ready(container_id)
+            await self._handle_ready(worker_id)
         elif msg_type == "heartbeat":
-            await self._handle_heartbeat(container_id)
+            await self._handle_heartbeat(worker_id)
         elif msg_type == "output":
-            await self._handle_output(container_id, msg)
+            await self._handle_output(worker_id, msg)
         elif msg_type == "result":
-            await self._handle_result(container_id, msg)
+            await self._handle_result(worker_id, msg)
         elif msg_type == "done":
-            await self._handle_done(container_id)
+            await self._handle_done(worker_id)
         else:
             logger.warning(
-                "Unknown message type from container %s: %s",
-                container_id,
+                "Unknown message type from worker %s: %s",
+                worker_id,
                 msg_type,
             )
 
-    async def _handle_ready(self, container_id: str) -> None:
-        """Transition an initializing or resuming container to running.
+    async def _handle_ready(self, worker_id: str) -> None:
+        """Transition an initializing or resuming worker to running.
 
         The UPDATE is conditional on the current status being
         ``initializing`` or ``resuming`` so a late-arriving ready (e.g.
         after the watchdog has already fired and transitioned the row to
         ``error``) is silently ignored.  Both paths share this gate
-        because the guest agent's connect-then-send-ready handshake is
+        because the worker agent's connect-then-send-ready handshake is
         identical for first init and for resume after stop.  Only a
         successful transition fires the ready callback so the
         orchestrator can cancel the watchdog.
@@ -274,42 +274,42 @@ class SocketManager:
         # Capture the source status before the update so we can log
         # whether this was an init or a resume transition.
         row = await self._db.fetchone(
-            "SELECT status FROM containers WHERE id = ?", (container_id,)
+            "SELECT status FROM workers WHERE id = ?", (worker_id,)
         )
         source_status = row["status"] if row else None
 
         async with self._db.execute(
-            "UPDATE containers SET status = 'running', stopped_at = NULL "
+            "UPDATE workers SET status = 'running', stopped_at = NULL "
             "WHERE id = ? AND status IN ('initializing', 'resuming')",
-            (container_id,),
+            (worker_id,),
         ) as cursor:
             rowcount = cursor.rowcount
 
         if rowcount == 0:
             logger.debug(
-                "Ignored ready from container %s (status=%s)",
-                container_id,
+                "Ignored ready from worker %s (status=%s)",
+                worker_id,
                 source_status,
             )
             return
 
         logger.info(
-            "Container %s ready; status %s -> running",
-            container_id,
+            "Worker %s ready; status %s -> running",
+            worker_id,
             source_status,
         )
         if self._ready_callback:
-            asyncio.create_task(self._ready_callback(container_id))
+            asyncio.create_task(self._ready_callback(worker_id))
 
-    async def _handle_heartbeat(self, container_id: str) -> None:
+    async def _handle_heartbeat(self, worker_id: str) -> None:
         now = _now_iso()
         await self._db.execute_insert(
-            "UPDATE containers SET last_seen = ? WHERE id = ?",
-            (now, container_id),
+            "UPDATE workers SET last_seen = ? WHERE id = ?",
+            (now, worker_id),
         )
-        logger.debug("Heartbeat from container %s", container_id)
+        logger.debug("Heartbeat from worker %s", worker_id)
 
-    async def _handle_output(self, container_id: str, msg: dict) -> None:
+    async def _handle_output(self, worker_id: str, msg: dict) -> None:
         command_id = msg.get("id")
         stream = msg.get("stream", "stdout")
         data = msg.get("data", "")
@@ -330,7 +330,7 @@ class SocketManager:
 
         if self._connection_manager is not None:
             await self._connection_manager.broadcast(
-                container_id,
+                worker_id,
                 {
                     "type": "output",
                     "command_id": command_id,
@@ -343,7 +343,7 @@ class SocketManager:
             "Output for command %s: [%s] %d bytes", command_id, stream, len(data)
         )
 
-    async def _handle_result(self, container_id: str, msg: dict) -> None:
+    async def _handle_result(self, worker_id: str, msg: dict) -> None:
         command_id = msg.get("id")
         exit_code = msg.get("exit_code")
 
@@ -354,7 +354,7 @@ class SocketManager:
 
         if self._connection_manager is not None:
             await self._connection_manager.broadcast(
-                container_id,
+                worker_id,
                 {
                     "type": "status",
                     "command_id": command_id,
@@ -367,7 +367,7 @@ class SocketManager:
             "Command %s completed with exit_code=%s", command_id, exit_code
         )
 
-    async def _handle_done(self, container_id: str) -> None:
-        logger.info("Done signal from container %s", container_id)
+    async def _handle_done(self, worker_id: str) -> None:
+        logger.info("Done signal from worker %s", worker_id)
         if self._done_callback:
-            asyncio.create_task(self._done_callback(container_id))
+            asyncio.create_task(self._done_callback(worker_id))

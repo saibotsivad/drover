@@ -3,7 +3,7 @@
 Operator-facing reference for everything log-related in Drover. Read
 this when you want to ship logs to Loki/Vector/Fluent Bit, when you're
 choosing between letting Drover retain logs vs. relying on Docker's own
-log driver, or when you need to debug a container after it has stopped.
+log driver, or when you need to debug a worker after it has stopped.
 
 ---
 
@@ -11,11 +11,11 @@ log driver, or when you need to debug a container after it has stopped.
 
 | Stream | Source | How to access | Retention |
 |---|---|---|---|
-| Orchestrator structured logs | The orchestrator process itself, written to stdout as one JSON object per line. | Whatever log driver the host Docker daemon is configured with (`json-file`, `journald`, `loki`, etc.) — `docker logs drover-orchestrator` is the simplest interactive view. For a per-container filtered view, `GET /containers/{id}/logs/orchestrator` returns only the orchestrator log lines that mention a specific container ID. | Driver-specific. Drover does not manage this. |
-| Micro-container stdout/stderr | Each Drover-managed container's own stdout/stderr. | Live tail: `GET /containers/{id}/logs` (proxies Docker's logs API). On-disk capture: `GET /containers/{id}/logs/files` and `/logs/files/{filename}` when `DROVER_ENABLE_CONTAINER_LOGS="true"` (see §2). | When `DROVER_ENABLE_CONTAINER_LOGS="true"`: kept until the container is destroyed. Otherwise: whatever Docker's log driver provides. |
-| Per-command stdout/stderr | The output of an `exec` command run inside a container, captured by the guest agent and streamed back over the per-container Unix socket. | `GET /containers/{id}/execs/{command_id}` returns the `messages` array from the `command_messages` table. | SQLite-backed; lives until the container row is destroyed. |
+| Orchestrator structured logs | The orchestrator process itself, written to stdout as one JSON object per line. | Whatever log driver the host Docker daemon is configured with (`json-file`, `journald`, `loki`, etc.) — `docker logs drover-orchestrator` is the simplest interactive view. For a per-worker filtered view, `GET /workers/{id}/logs/orchestrator` returns only the orchestrator log lines that mention a specific worker ID. | Driver-specific. Drover does not manage this. |
+| Worker stdout/stderr | Each Drover-managed worker's own stdout/stderr. | Live tail: `GET /workers/{id}/logs` (proxies Docker's logs API). On-disk capture: `GET /workers/{id}/logs/files` and `/logs/files/{filename}` when `DROVER_ENABLE_WORKER_LOGS="true"` (see §2). | When `DROVER_ENABLE_WORKER_LOGS="true"`: kept until the worker is destroyed. Otherwise: whatever Docker's log driver provides. |
+| Per-command stdout/stderr | The output of an `exec` command run inside a worker, captured by the worker agent and streamed back over the per-worker Unix socket. | `GET /workers/{id}/execs/{command_id}` returns the `messages` array from the `command_messages` table. | SQLite-backed; lives until the worker row is destroyed. |
 
-The rest of this document is about the second stream — the per-container
+The rest of this document is about the second stream — the per-worker
 stdout/stderr — because that's the one this feature changes.
 
 ---
@@ -27,25 +27,25 @@ variable. The on-disk location is fixed at `/var/lib/drover/logs/`
 inside the orchestrator container; the variable is just an on/off
 switch.
 
-**`DROVER_ENABLE_CONTAINER_LOGS="true"` (recommended for homelab).**
+**`DROVER_ENABLE_WORKER_LOGS="true"` (recommended for homelab).**
 
 Drover opens a follow stream against Docker's logs API for every
-running container and writes the captured output to disk under
-`/var/lib/drover/logs/{container_id}/`. The on-disk history survives
-container stop, orchestrator restart, and orchestrator upgrade. It is
-removed only when the container is destroyed (`DELETE /containers/{id}`).
+running worker and writes the captured output to disk under
+`/var/lib/drover/logs/{worker_id}/`. The on-disk history survives
+worker stop, orchestrator restart, and orchestrator upgrade. It is
+removed only when the worker is destroyed (`DELETE /workers/{id}`).
 
 The sample `docker-compose.yml` ships with this mode enabled and binds
 `./logs` on the host to `/var/lib/drover/logs/` inside the container.
 
-**`DROVER_ENABLE_CONTAINER_LOGS` unset or any other value (recommended if you already ship Docker logs).**
+**`DROVER_ENABLE_WORKER_LOGS` unset or any other value (recommended if you already ship Docker logs).**
 
 Drover writes nothing to disk. No directory is created, no `.cursor`
 file is maintained, no follow stream is opened. The
-`/containers/{id}/logs/files*` endpoints return `409 LoggingNotEnabled`.
+`/workers/{id}/logs/files*` endpoints return `409 LoggingNotEnabled`.
 Historical-log queries fall through to Docker's own log driver: if you
 have `--log-driver=loki` (or journald, or fluentd) at the daemon level,
-that's where your container logs live.
+that's where your worker logs live.
 
 Only the exact string `"true"` enables capture. `"1"`, `"yes"`,
 `"True"`, and `""` are all treated as off; this keeps the toggle
@@ -69,7 +69,7 @@ unambiguous.
     └── .cursor
 ```
 
-- One directory per Drover container ID.
+- One directory per Drover worker ID.
 - Files are named `0.log`, `1.log`, … with monotonically-increasing
   integer suffixes. `ls`, `cat *.log`, and any log shipper that reads
   in alphabetical-by-name order will get them in chronological order
@@ -110,10 +110,10 @@ ADR in `docs/decisions/` walks through why we made this trade-off.
 
 ### Reads on the active file race with the writer
 
-`GET /containers/{id}/logs/files/{filename}` opens the file read-only
+`GET /workers/{id}/logs/files/{filename}` opens the file read-only
 and streams its contents back. There is no lock, so a read on the
 currently-active log file may race with an in-flight write — operators
-on a busy container can see a truncated final line. Each complete
+on a busy worker can see a truncated final line. Each complete
 record is `\n`-terminated, so log shippers handle the partial last line
 gracefully (it'll either parse on the next iteration after the writer
 finishes, or be discarded). The same race applies if you `tail -f` the
@@ -183,26 +183,26 @@ each Drover container's output in Loki without doing anything else —
 
 ## 5. Disk usage and the "two copies" trade-off
 
-When `DROVER_ENABLE_CONTAINER_LOGS=true`, every container's stdout
+When `DROVER_ENABLE_WORKER_LOGS=true`, every worker's stdout
 exists in two places:
 
 1. Whatever Docker's daemon log driver writes (default
    `/var/lib/docker/containers/{docker_id}/{docker_id}-json.log` for
    `json-file`).
-2. Drover's capture under `/var/lib/drover/logs/{container_id}/`.
+2. Drover's capture under `/var/lib/drover/logs/{worker_id}/`.
 
 The two paths exist for different reasons — Docker's path is for the
 operator's own logging stack, Drover's path is for Drover's retention
 guarantee — so by default both are kept. To avoid the duplication:
 
 - **Disable Drover's capture** for operators who already have a log
-  pipeline: unset `DROVER_ENABLE_CONTAINER_LOGS` (or set it to any
+  pipeline: unset `DROVER_ENABLE_WORKER_LOGS` (or set it to any
   value other than `"true"`). Live tails still work via
-  `GET /containers/{id}/logs` (proxying Docker's logs API).
+  `GET /workers/{id}/logs` (proxying Docker's logs API).
 - **Disable Docker's per-container copy** by setting
   `--log-driver=none` at the daemon level (or per-service in compose).
   Drover keeps capturing because we use the Docker logs API stream, not
-  the disk file. Live tails via `GET /containers/{id}/logs` will return
+  the disk file. Live tails via `GET /workers/{id}/logs` will return
   empty, but on-disk history at `/logs/files` is intact.
 
 There is no built-in size cap on `/var/lib/drover/logs/` itself.
@@ -240,14 +240,14 @@ because they read directly from Docker.
 
 ## 7. Lifecycle and retention guarantees
 
-| Container event | What happens to `/var/lib/drover/logs/{id}/` |
+| Worker event | What happens to `/var/lib/drover/logs/{id}/` |
 |---|---|
-| `initializing`, after Docker `start_container` succeeds | Directory created. `0.log` opened. Capture begins **before** the guest agent connects. This catches init-failure output. |
+| `initializing`, after Docker `start_container` succeeds | Directory created. `0.log` opened. Capture begins **before** the worker agent connects. This catches init-failure output. |
 | `initializing` → `running` | No log-layer change; capture is already running. |
 | `initializing` → `error` (init timeout, init Docker failure) | Capture stops cleanly. `.cursor` is persisted. Directory is **kept** so the operator can post-mortem the failed init. |
 | `running` → `stopped` | Capture stops cleanly. `.cursor` is persisted. Directory is kept. |
 | `stopped` → `running` (resume) | Capture restarts using `since=<.cursor>` to bridge the gap. New records append to the existing top file (or rotate if it's full). |
-| any non-destroyed state → `destroyed` | Directory is removed. This applies to `error` and `initializing` rows too — a destroyed container has no logs. |
+| any non-destroyed state → `destroyed` | Directory is removed. This applies to `error` and `initializing` rows too — a destroyed worker has no logs. |
 | Orchestrator restart | The startup sync re-opens a follow stream for each `running` row, using the persisted `.cursor` so the gap is small. May produce up to one second of duplicate records (Docker's `since=` parameter is integer-second precision). |
 
 Permission note: the orchestrator runs as UID 1000. The Dockerfile
@@ -262,17 +262,17 @@ process lifetime.
 
 ## 8. Live tail
 
-`GET /containers/{id}/logs` proxies Docker's logs API directly and
+`GET /workers/{id}/logs` proxies Docker's logs API directly and
 returns `text/plain`. It does **not** read from `/var/lib/drover/logs/`
 in the current implementation; it is purely a live tail of Docker's
 own buffer. A follow-up plan will broaden this endpoint with consistent
 pagination (`since`/`until`/`limit`/`offset`) and have it read from
 disk when retention is enabled. Until then:
 
-- Want the last 200 lines from the live container? `GET .../logs?tail=200`.
-- Want the full retained history (including for stopped containers)?
+- Want the last 200 lines from the live worker? `GET .../logs?tail=200`.
+- Want the full retained history (including for stopped workers)?
   `GET .../logs/files`, then fetch each file under `/logs/files/{filename}`.
 
 The two endpoints don't share data: the live tail is bounded by
 whatever Docker's log driver retains, and the on-disk history is
-bounded by destroy.
+bounded by worker destroy.

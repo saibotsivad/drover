@@ -2,7 +2,7 @@
 
 Drover is a container orchestration tool primarily meant for homelab work.
 
-You run an orchestrator which exposes an API through which you can launch ephemeral micro-containers.
+You run an orchestrator which exposes an API through which you can launch ephemeral workers.
 
 Think of it something like a function-as-a-service where the functions are lightweight Linux operating systems.
 
@@ -11,15 +11,15 @@ Think of it something like a function-as-a-service where the functions are light
 | Term | Definition |
 |---|---|
 | **Host** | Bare metal machine running Docker in [rootless](https://docs.docker.com/engine/security/rootless/) mode |
-| **Orchestrator** | Docker container managing the micro-container fleet |
-| **Micro-container** | Short-lived ephemeral containers managed by the orchestrator |
-| **Privileged micro-container** | Micro-container with access to the host Docker socket, for build and setup tasks |
+| **Orchestrator** | Docker container managing the worker fleet |
+| **Worker** | Short-lived ephemeral workers managed by the orchestrator |
+| **Privileged worker** | Worker with access to the host Docker socket, for build and setup tasks |
 
 ---
 
 ## Overview
 
-The orchestrator is the core application, it runs as a Docker container on the host. It exposes a REST API for callers to create, command, stop, resume, and destroy micro-containers. Each micro-container is an instance of an operator-managed image, launched on demand, communicated with via a Unix socket, and stopped or destroyed when no longer needed.
+The orchestrator is the core application, it runs as a Docker container on the host. It exposes a REST API for callers to create, command, stop, resume, and destroy workers. Each worker is an instance of an operator-managed image, launched on demand, communicated with via a Unix socket, and stopped or destroyed when no longer needed.
 
 This is conceptually similar to AWS Lambda: a caller creates an image and sends commands, the orchestrator handles all lifecycle details. Arbitrary images are not permitted, only specifically named images on the host are available.
 
@@ -27,7 +27,7 @@ This is conceptually similar to AWS Lambda: a caller creates an image and sends 
 
 ## Command-Line Client
 
-The `drover` CLI is a single-binary client for the orchestrator REST API. It lets you list images, launch and manage micro-containers, and run exec commands from a terminal or script without hand-writing HTTP requests. It authenticates through the `DROVER_API_URL` and `DROVER_API_KEY` environment variables, prints JSON to stdout so output composes with `jq`, and ships as a cross-compiled binary installed via the umbrella release's `install.sh`.
+The `drover` CLI is a single-binary client for the orchestrator REST API. It lets you list images, launch and manage workers, and run exec commands from a terminal or script without hand-writing HTTP requests. It authenticates through the `DROVER_API_URL` and `DROVER_API_KEY` environment variables, prints JSON to stdout so output composes with `jq`, and ships as a cross-compiled binary installed via the umbrella release's `install.sh`.
 
 - Usage reference (commands, flags, JSON output, exit codes): [docs/cli.md](docs/cli.md)
 - Installation: see [docs/releases.md](docs/releases.md#installation)
@@ -41,8 +41,8 @@ To run this system, the host requires:
 
 1. **Docker in rootless mode** running as the operator user
 2. **The orchestrator container** started with the mounts described below
-3. **At least one micro-container image** built with the required Drover labels (`drover.managed=true` and `drover.name=<name>`) so the orchestrator has something to launch (see [Image Management](#image-management))
-4. (Optional) **A privileged container image** built and available on the host (required only if privileged micro-containers will be used)
+3. **At least one worker image** built with the required Drover labels (`drover.managed=true` and `drover.name=<name>`) so the orchestrator has something to launch (see [Image Management](#image-management))
+4. (Optional) **A privileged worker image** built and available on the host (required only if privileged workers will be used)
 
 ---
 
@@ -55,9 +55,9 @@ The orchestrator container internally uses the following bindable paths, the ope
 | In-container path | Purpose |
 |---|---|
 | `/var/lib/drover/data/` | Orchestrator database (SQLite) and config files. |
-| `/var/lib/drover/logs/` | Orchestrator logs and (if configured) the captured micro-container stdout/stderr |
+| `/var/lib/drover/logs/` | Orchestrator logs and (if configured) the captured worker stdout/stderr |
 | `/var/run/docker.sock` | Host Docker daemon socket, **must** be bind-mounted in from the host. |
-| `/var/run/drover/sockets/` | Per-micro-container Unix socket directory, **must** be bind-mounted in from the host path. (The orchestrator entrypoint chowns this directory to UID 1000 on startup.) |
+| `/var/run/drover/sockets/` | Per-worker Unix socket directory, **must** be bind-mounted in from the host path. (The orchestrator entrypoint chowns this directory to UID 1000 on startup.) |
 
 The Docker socket of the **host** container is usually in one of two places:
 - `/run/user/1000/docker.sock` in **rootless** mode
@@ -71,15 +71,15 @@ The orchestrator is built on FastAPI (with Uvicorn), aiosqlite for async SQLite 
 
 ### Responsibilities
 
-- Exposes a REST API for micro-container lifecycle management
-- Maintains state in SQLite (for each micro-container: container ID, image, privileged flag, status, socket path, other metadata)
-- Creates Unix sockets per micro-container in the shared socket directory before a container is started
-- Issues Docker API calls to create, start, stop, and destroy micro-containers
-- Routes commands and responses between API callers and micro-containers via those sockets
+- Exposes a REST API for worker lifecycle management
+- Maintains state in SQLite (for each worker: worker ID, image, privileged flag, status, socket path, other metadata)
+- Creates Unix sockets per worker in the shared socket directory before a worker is started
+- Issues Docker API calls to create, start, stop, and destroy workers
+- Routes commands and responses between API callers and workers via those sockets
 
 ### Security
 
-- Standard micro-containers run under gVisor (`--runtime=runsc`) for syscall interception
+- Standard workers run under gVisor (`--runtime=runsc`) for syscall interception
 - Orchestrator itself runs as UID 1000 to match the rootless Docker daemon
 
 ### Environment variables
@@ -87,16 +87,16 @@ The orchestrator is built on FastAPI (with Uvicorn), aiosqlite for async SQLite 
 | Variable | Required | Default | Description |
 |---|---|---|---|
 | `DROVER_API_KEY` | No | _(unset)_ | SHA-256 hash of the API key. When set, all API requests (except `GET /health`) require a valid `Authorization: Bearer <key>` header. See [Authentication](#authentication). |
-| `PRIVILEGED_IMAGE` | No | _(unset)_ | Docker image for privileged micro-containers. If unset, privileged container requests are rejected. |
+| `PRIVILEGED_IMAGE` | No | _(unset)_ | Docker image for privileged workers. If unset, privileged worker requests are rejected. |
 | `REAPER_INTERVAL_SECONDS` | No | `5` | How often (in seconds) the idle-timeout reaper runs. |
-| `DROVER_INIT_TIMEOUT_SECONDS` | No | `20` | Maximum time a container may spend in `initializing` or `resuming` before the watchdog transitions it to `error`. Covers both first init and the resume-after-stop handshake. |
+| `DROVER_INIT_TIMEOUT_SECONDS` | No | `20` | Maximum time a worker may spend in `initializing` or `resuming` before the watchdog transitions it to `error`. Covers both first init and the resume-after-stop handshake. |
 | `LOG_LEVEL` | No | `INFO` | Python log level (`DEBUG`, `INFO`, `WARNING`, `ERROR`). |
-| `DROVER_ENABLE_CONTAINER_LOGS` | No | _(unset)_ | When set to the string `true`, Drover captures each micro-container's stdout/stderr through the orchestrator. See [docs/observability.md](docs/observability.md). |
-| `DROVER_LOG_MAX_FILE_BYTES` | No | `10485760` (10 MiB) | Per-file size threshold for log rotation of orchestrator-captured micro-container logs. Ignored when capture is disabled. |
+| `DROVER_ENABLE_WORKER_LOGS` | No | _(unset)_ | When set to the string `true`, Drover captures each worker's stdout/stderr through the orchestrator. See [docs/observability.md](docs/observability.md). |
+| `DROVER_LOG_MAX_FILE_BYTES` | No | `10485760` (10 MiB) | Per-file size threshold for log rotation of orchestrator-captured worker logs. Ignored when capture is disabled. |
 
-### Container log retention
+### Worker log retention
 
-When `DROVER_ENABLE_CONTAINER_LOGS=true` on the orchestrator, Drover captures each micro-container's stdout/stderr to the orchestrator volume under the bindable path `/var/lib/drover/logs/` so that log history survives micro-container
+When `DROVER_ENABLE_WORKER_LOGS=true` on the orchestrator, Drover captures each worker's stdout/stderr to the orchestrator volume under the bindable path `/var/lib/drover/logs/` so that log history survives worker
 and orchestrator lifecycle events. See [docs/observability.md](docs/observability.md) for full retention model, on-disk format, and log-shipper examples.
 
 ---
@@ -143,7 +143,7 @@ docker run -e DROVER_API_KEY="a1b2c3d4..." ...
 3. Include the **plain-text key** in API requests:
 
 ```
-curl -H "Authorization: Bearer m7x...Qf8" http://localhost:8000/containers
+curl -H "Authorization: Bearer m7x...Qf8" http://localhost:8000/workers
 ```
 
 ### How It Works
@@ -156,9 +156,9 @@ The `GET /health` endpoint is always accessible without authentication so that l
 
 ---
 
-## Micro-Container
+## Worker
 
-Both standard and privileged micro-containers share the same lifecycle, socket protocol, and timeout mechanics. The only differences are the image used and the sockets mounted into them.
+Both standard and privileged workers share the same lifecycle, socket protocol, and timeout mechanics. The only differences are the image used and the sockets mounted into them.
 
 ### Mounts
 
@@ -168,21 +168,21 @@ Both standard and privileged micro-containers share the same lifecycle, socket p
 | `/run/docker.sock` | No | Passes through host Docker socket |
 | gVisor runtime | Yes | No |
 
-A privileged micro-container uses the image named by `PRIVILEGED_IMAGE` directly and is not subject to the `drover.managed` label requirement. It also bypasses gVisor, allowing for more system interop as needed.
+A privileged worker uses the image named by `PRIVILEGED_IMAGE` directly and is not subject to the `drover.managed` label requirement. It also bypasses gVisor, allowing for more system interop as needed.
 
-To bind-mount the host Docker socket into a privileged micro-container, the orchestrator needs the socket's path **on the host**, not its in-container path — Docker resolves nested bind-mount sources against the host filesystem, not against the orchestrator's view. The orchestrator discovers the host path at startup by self-inspecting through the Docker API: it asks Docker for its own container's record and reads the `Source` of the mount whose `Destination` is `/var/run/docker.sock`. No environment variable is needed; the host path you set in the compose volume binding is what gets used.
+To bind-mount the host Docker socket into a privileged worker, the orchestrator needs the socket's path **on the host**, not its in-container path — Docker resolves nested bind-mount sources against the host filesystem, not against the orchestrator's view. The orchestrator discovers the host path at startup by self-inspecting through the Docker API: it asks Docker for its own container's record and reads the `Source` of the mount whose `Destination` is `/var/run/docker.sock`. No environment variable is needed; the host path you set in the compose volume binding is what gets used.
 
 ### Socket Protocol
 
-The socket at `/var/run/drover/sockets/orchestrator.sock` is the single bidirectional communication channel, carrying newline-delimited JSON. The orchestrator bind-mounts a per-container folder into the micro-container at `/var/run/drover/sockets/`; the guest agent connects once at startup and maintains a persistent connection.
+The socket at `/var/run/drover/sockets/orchestrator.sock` is the single bidirectional communication channel, carrying newline-delimited JSON. The orchestrator bind-mounts a per-worker folder into the worker at `/var/run/drover/sockets/`; the worker agent connects once at startup and maintains a persistent connection.
 
-**Inbound (orchestrator-to-container):**
+**Inbound (orchestrator-to-worker):**
 
 ```json
 { "type": "command", "id": "abc123", "exec": "git clone https://github.com/org/repo" }
 ```
 
-**Outbound (container-to-orchestrator):**
+**Outbound (worker-to-orchestrator):**
 
 ```json
 { "type": "ready" }
@@ -193,26 +193,26 @@ The socket at `/var/run/drover/sockets/orchestrator.sock` is the single bidirect
 { "type": "done" }
 ```
 
-The `ready` message is sent once after the guest agent finishes its startup work (see [Container Initialization](docs/container-initialization.md)). The orchestrator transitions the container from `initializing` to `running` only when this message arrives.
+The `ready` message is sent once after the worker agent finishes its startup work (see [Worker Initialization](docs/worker-initialization.md)). The orchestrator transitions the worker from `initializing` to `running` only when this message arrives.
 
 The normal stdout captured by Docker logs is unstructured debug output only, it has no semantic meaning to the orchestrator or Drover overall.
 
 ### Done Signal
 
-A container can send `{"type": "done"}` to indicate it has finished its work and is ready to be stopped. The orchestrator immediately initiates the `running → stopping → stopped` transition, without waiting for the idle timeout. This is useful for short-lived containers that complete a task and want to release resources promptly.
+A worker can send `{"type": "done"}` to indicate it has finished its work and is ready to be stopped. The orchestrator immediately initiates the `running → stopping → stopped` transition, without waiting for the idle timeout. This is useful for short-lived workers that complete a task and want to release resources promptly.
 
 ### Timeout and Auto-Stop
 
-Each container provides an idle timeout set at creation time. The orchestrator tracks `last_seen` per container, updated on every inbound socket message (including heartbeats). A background task periodically checks all running containers and stops any where `now - last_seen > timeout`.
+Each worker provides an idle timeout set at creation time. The orchestrator tracks `last_seen` per worker, updated on every inbound socket message (including heartbeats). A background task periodically checks all running workers and stops any where `now - last_seen > timeout`.
 
 This means:
 
-- A container that never connects is stopped after timeout
-- A container that finishes work and goes quiet is stopped after timeout
-- A container whose process crashes stops sending heartbeats and is stopped after timeout
-- A container that sends a `done` signal is stopped immediately
+- A worker that never connects is stopped after timeout
+- A worker that finishes work and goes quiet is stopped after timeout
+- A worker whose process crashes stops sending heartbeats and is stopped after timeout
+- A worker that sends a `done` signal is stopped immediately
 
-The guest agent is responsible for sending heartbeats at an interval shorter than the configured timeout. To shut down early, the agent can send a `done` signal.
+The worker agent is responsible for sending heartbeats at an interval shorter than the configured timeout. To shut down early, the agent can send a `done` signal.
 
 ---
 
@@ -230,17 +230,17 @@ Workload images are identified by two Docker labels baked in at build time:
 
 An image without both required labels is invisible to Drover. The `drover.*` namespace is reserved for future Drover-specific metadata (templates, versions, etc.).
 
-The optional `drover.capabilities` label advertises which capability-gated features a container supports; the orchestrator rejects requests for an undeclared capability and the webapp hides the corresponding controls. See [docs/capabilities.md](docs/capabilities.md) for the authoritative reference.
+The optional `drover.capabilities` label advertises which capability-gated features a worker supports; the orchestrator rejects requests for an undeclared capability and the webapp hides the corresponding controls. See [docs/capabilities.md](docs/capabilities.md) for the authoritative reference.
 
 Because labels are baked into the image and survive re-tagging, the same image can be pulled from any registry (e.g. `ghcr.io/saibotsivad/drover-builder:latest`) and the orchestrator will still recognise it by label.
 
 List and validation operations use `docker image ls --filter label=drover.managed=true`.
 
-The privileged image is operator-supplied, named by the `PRIVILEGED_IMAGE` env var, and is not managed through the image or container API.
+The privileged image is operator-supplied, named by the `PRIVILEGED_IMAGE` env var, and is not managed through the image or worker API.
 
 ### Image Build
 
-Because a privileged micro-container has access to the host Docker socket and shares the same lifecycle as any other container, image building is just another container workload that the Drover operator manages.
+Because a privileged worker has access to the host Docker socket and shares the same lifecycle as any other worker, image building is just another worker workload that the Drover operator manages.
 
 The only constraint is that the resulting image must carry the required labels. In a `Dockerfile`:
 
@@ -288,16 +288,16 @@ Compose has no way to attach labels to an image it merely pulls — it can only 
 
 ---
 
-## Container API
+## Worker API
 
 | Method | Path | Description |
 |---|---|---|
-| `POST` | `/containers` | Start a micro-container from a managed image |
-| `GET` | `/containers/{id}` | Get current state and metadata |
-| `POST` | `/containers/{id}/exec` | Send a command |
-| `POST` | `/containers/{id}/stop` | Stop the container (resumable) |
-| `POST` | `/containers/{id}/resume` | Resume a stopped container |
-| `DELETE` | `/containers/{id}` | Stop and destroy the container |
+| `POST` | `/workers` | Start a worker from a managed image |
+| `GET` | `/workers/{id}` | Get current state and metadata |
+| `POST` | `/workers/{id}/exec` | Send a command |
+| `POST` | `/workers/{id}/stop` | Stop the worker (resumable) |
+| `POST` | `/workers/{id}/resume` | Resume a stopped worker |
+| `DELETE` | `/workers/{id}` | Stop and destroy the worker |
 
 ### Create Request Example
 
@@ -316,7 +316,7 @@ Compose has no way to attach labels to an image it merely pulls — it can only 
 
 ### Request Validation
 
-All fields on the create request are validated before the container is created.
+All fields on the create request are validated before the worker is created.
 
 | Field | Constraints |
 |---|---|
@@ -330,17 +330,17 @@ All fields on the create request are validated before the container is created.
 
 ## Lifecycle State Machine
 
-Applies equally to standard and privileged containers.
+Applies equally to standard and privileged workers.
 
 ```mermaid
 stateDiagram-v2
-    [*] --> initializing: POST /containers
-    initializing --> running: guest agent sends ready
+    [*] --> initializing: POST /workers
+    initializing --> running: worker agent sends ready
     initializing --> error: init failure / timeout / crash
     running --> stopping: POST /stop (or idle timeout or done signal)
     stopping --> stopped: Docker confirms stop
     stopped --> resuming: POST /resume
-    resuming --> running: guest agent sends ready
+    resuming --> running: worker agent sends ready
     resuming --> error: resume failure / timeout / crash
     running --> destroying: DELETE
     stopped --> destroying: DELETE
@@ -349,19 +349,19 @@ stateDiagram-v2
     error --> [*]
 ```
 
-A stopped container retains its filesystem layer and can be resumed. Destroyed containers are fully removed.
+A stopped worker retains its filesystem layer and can be resumed. Destroyed workers are fully removed.
 
-`POST /containers` returns immediately with status `initializing`. The Docker create/start work and the guest-agent startup happen in the background; the container is ready to accept exec commands only once status reaches `running`. `POST /containers/{id}/resume` mirrors this: it returns immediately with status `resuming`, then transitions to `running` only after Docker starts the container *and* the guest agent reconnects and sends a `ready` message. See [Container Initialization](docs/container-initialization.md) for the full flow.
+`POST /workers` returns immediately with status `initializing`. The Docker create/start work and the worker-agent startup happen in the background; the worker is ready to accept exec commands only once status reaches `running`. `POST /workers/{id}/resume` mirrors this: it returns immediately with status `resuming`, then transitions to `running` only after Docker starts the worker *and* the worker agent reconnects and sends a `ready` message. See [Worker Initialization](docs/worker-initialization.md) for the full flow.
 
-When initialization or resume fails (Docker error, timeout, or an orchestrator restart mid-transition), the container moves to `error` with an `error_code` field explaining the cause:
+When initialization or resume fails (Docker error, timeout, or an orchestrator restart mid-transition), the worker moves to `error` with an `error_code` field explaining the cause:
 
 | `error_code` | Meaning |
 |---|---|
 | `init_docker_error` | Docker create or start call failed during initialization. |
 | `init_timeout` | Initialization did not complete within `DROVER_INIT_TIMEOUT_SECONDS`. |
 | `resume_docker_error` | Docker start call failed during resume. |
-| `resume_timeout` | Resume did not complete within `DROVER_INIT_TIMEOUT_SECONDS` (guest agent did not reconnect and send `ready` in time). |
-| `orchestrator_crash` | The orchestrator restarted while the container was still in `initializing` or `resuming`. |
+| `resume_timeout` | Resume did not complete within `DROVER_INIT_TIMEOUT_SECONDS` (worker agent did not reconnect and send `ready` in time). |
+| `orchestrator_crash` | The orchestrator restarted while the worker was still in `initializing` or `resuming`. |
 
 The intermediate states (`stopping`, `resuming`, `destroying`) are transient guard rails. The API returns `409 Conflict` if you attempt an action that conflicts with a transition already in progress.
 
@@ -371,13 +371,13 @@ The intermediate states (`stopping`, `resuming`, `destroying`) are transient gua
 
 The test suite is split into two independent test runs:
 
-**Orchestrator tests** (`tests/`): Unit tests for ID generation, config, models, database, and the container manager state machine. Uses pytest-asyncio for async fixture and test support.
+**Orchestrator tests** (`tests/`): Unit tests for ID generation, config, models, database, and the worker manager state machine. Uses pytest-asyncio for async fixture and test support.
 
 ```
 pytest tests/ -v
 ```
 
-**Executor tests** (`executor/tests/`): Tests for the guest-agent library — wire protocol encode/decode, real subprocess execution with streaming, and full agent lifecycle against mock Unix socket servers. These run with pytest-asyncio disabled to avoid event-loop conflicts on Python 3.12; async tests are executed via a custom conftest hook using `loop.run_until_complete()` (see `executor/tests/conftest.py` for details).
+**Executor tests** (`executor/tests/`): Tests for the worker-agent library — wire protocol encode/decode, real subprocess execution with streaming, and full agent lifecycle against mock Unix socket servers. These run with pytest-asyncio disabled to avoid event-loop conflicts on Python 3.12; async tests are executed via a custom conftest hook using `loop.run_until_complete()` (see `executor/tests/conftest.py` for details).
 
 ```
 pytest executor/tests/ -v -p no:asyncio -p no:anyio

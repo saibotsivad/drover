@@ -1,7 +1,7 @@
 # Drover Capabilities
 
 The `drover.capabilities` image label advertises which capability-gated
-features a container launched from that image actually supports. It is the
+features a worker launched from that image actually supports. It is the
 single source of truth that both the orchestrator (enforcement) and the
 webapp (UI gating) consult.
 
@@ -42,7 +42,7 @@ capability-gated feature is denied for that image. There is no implicit
 allowlist — a capability must be explicitly named to be granted.
 
 The same deny-if-unknown rule applies when an image can no longer be
-resolved (deleted or renamed after a container was launched from it): the
+resolved (deleted or renamed after a worker was launched from it): the
 orchestrator denies the request rather than assuming the capability is
 present, and the webapp hides the corresponding control.
 
@@ -53,12 +53,12 @@ here before it appears on any image label.
 
 | Key | What it grants | Which images should declare it |
 |---|---|---|
-| `exec` | The container responds to exec requests via the orchestrator socket. Commands submitted through `POST /containers/{id}/execs` (and the "Exec Commands" UI) are queued and executed by the guest agent (`drover-executor`). | All images that ship `drover-executor` as their `CMD`. |
+| `exec` | The worker responds to exec requests via the orchestrator socket. Commands submitted through `POST /workers/{id}/execs` (and the "Exec Commands" UI) are queued and executed by the worker agent (`drover-executor`). | All images that ship `drover-executor` as their `CMD`. |
 
 ## Adding a new capability
 
 1. Add a row to the capability reference table above.
-2. Add enforcement in the orchestrator (`orchestrator/container_manager.py`)
+2. Add enforcement in the orchestrator (`orchestrator/worker_manager.py`)
    so requests that need the capability are rejected with `422` when it is
    absent.
 3. Update the webapp so the relevant control is hidden when the image does

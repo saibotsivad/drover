@@ -1,4 +1,4 @@
-"""Tests for ContainerManager state machine logic with mocked Docker and sockets."""
+"""Tests for WorkerManager state machine logic with mocked Docker and sockets."""
 
 import asyncio
 from datetime import datetime, timezone
@@ -6,19 +6,19 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from orchestrator.container_manager import (
+from orchestrator.worker_manager import (
     CapabilityNotSupported,
-    ContainerManager,
-    ContainerNotConnected,
-    ContainerNotFound,
-    ContainerStateConflict,
+    WorkerManager,
+    WorkerNotConnected,
+    WorkerNotFound,
+    WorkerStateConflict,
     ImageNotFound,
     PrivilegedNotConfigured,
     _docker_state_to_status,
 )
-from orchestrator.docker_client import ContainerNotFoundError
+from orchestrator.errors import WorkerNotFoundError
 from orchestrator.log_capture import LogCaptureManager
-from orchestrator.models import ContainerStatus, CreateContainerRequest
+from orchestrator.models import WorkerStatus, CreateWorkerRequest
 
 
 @pytest.fixture
@@ -39,11 +39,11 @@ def docker():
         ]
     )
     mock.inspect_image = AsyncMock(return_value={})
-    mock.create_container = AsyncMock(return_value={"Id": "docker_abc123"})
-    mock.start_container = AsyncMock()
-    mock.stop_container = AsyncMock()
-    mock.remove_container = AsyncMock()
-    mock.inspect_container = AsyncMock(
+    mock.create_worker = AsyncMock(return_value={"Id": "docker_abc123"})
+    mock.start_worker = AsyncMock()
+    mock.stop_worker = AsyncMock()
+    mock.remove_worker = AsyncMock()
+    mock.inspect_worker = AsyncMock(
         return_value={"State": {"Status": "running"}}
     )
     return mock
@@ -70,7 +70,7 @@ def log_capture(config):
 
 @pytest.fixture
 def manager(config, db, docker, sockets, log_capture):
-    return ContainerManager(
+    return WorkerManager(
         config, db, docker, sockets, log_capture,
         host_docker_sock="/var/run/docker.sock",
         host_socket_dir="/var/run/drover/sockets",
@@ -80,7 +80,7 @@ def manager(config, db, docker, sockets, log_capture):
 # -- helpers ----------------------------------------------------------------
 
 
-async def _drain_pending_init(manager, container_id):
+async def _drain_pending_init(manager, worker_id):
     """Await the background init/resume task and cancel its watchdog.
 
     Used when the test does NOT want to simulate a successful ready (e.g.
@@ -88,10 +88,10 @@ async def _drain_pending_init(manager, container_id):
     completes, or when forcing a Docker failure).  Without this drain the
     pending watchdog leaks into the next test.
     """
-    task = manager._init_tasks.get(container_id)
+    task = manager._init_tasks.get(worker_id)
     if task:
         await task
-    watchdog = manager._init_watchdogs.pop(container_id, None)
+    watchdog = manager._init_watchdogs.pop(worker_id, None)
     if watchdog and not watchdog.done():
         watchdog.cancel()
         try:
@@ -100,48 +100,48 @@ async def _drain_pending_init(manager, container_id):
             pass
 
 
-async def _await_init(manager, container_id):
+async def _await_init(manager, worker_id):
     """Wait for the background init task and cancel the watchdog."""
-    task = manager._init_tasks.get(container_id)
+    task = manager._init_tasks.get(worker_id)
     if task:
         await task
-    await manager.on_container_ready(container_id)
+    await manager.on_worker_ready(worker_id)
 
 
 async def _create_running(manager, db, **kwargs):
-    """Create a container and simulate its guest agent sending ``ready``.
+    """Create a worker and simulate its worker agent sending ``ready``.
 
-    Many tests need a container in ``running`` state to exercise stop,
+    Many tests need a worker in ``running`` state to exercise stop,
     resume, exec, and destroy paths.  This helper awaits the background
     init, cancels the watchdog, and flips the DB row to ``running``.
     """
-    resp = await manager.create_container(CreateContainerRequest(**kwargs))
+    resp = await manager.create_worker(CreateWorkerRequest(**kwargs))
     await _await_init(manager, resp.id)
     await db.execute_insert(
-        "UPDATE containers SET status = 'running' "
+        "UPDATE workers SET status = 'running' "
         "WHERE id = ? AND status = 'initializing'",
         (resp.id,),
     )
     return resp
 
 
-async def _resume_to_running(manager, db, container_id):
-    """Resume a stopped container and simulate ``ready`` from the agent.
+async def _resume_to_running(manager, db, worker_id):
+    """Resume a stopped worker and simulate ``ready`` from the agent.
 
     Mirrors ``_create_running``: awaits the background resume task,
     cancels the watchdog, and flips the DB row from ``resuming`` to
     ``running``.  Tests that exercise resume end-to-end go through this
     helper to match the production handshake.
     """
-    resp = await manager.resume_container(container_id)
-    task = manager._init_tasks.get(container_id)
+    resp = await manager.resume_worker(worker_id)
+    task = manager._init_tasks.get(worker_id)
     if task:
         await task
-    await manager.on_container_ready(container_id)
+    await manager.on_worker_ready(worker_id)
     await db.execute_insert(
-        "UPDATE containers SET status = 'running', stopped_at = NULL "
+        "UPDATE workers SET status = 'running', stopped_at = NULL "
         "WHERE id = ? AND status = 'resuming'",
-        (container_id,),
+        (worker_id,),
     )
     return resp
 
@@ -151,11 +151,11 @@ async def _resume_to_running(manager, db, container_id):
 
 async def test_create_container_returns_initializing(manager, docker, sockets, db):
     """create_container returns immediately with status=initializing."""
-    resp = await manager.create_container(
-        CreateContainerRequest(image="python-runner", timeout_seconds=300)
+    resp = await manager.create_worker(
+        CreateWorkerRequest(image="python-runner", timeout_seconds=300)
     )
     assert resp.image == "python-runner"
-    assert resp.status == ContainerStatus.initializing
+    assert resp.status == WorkerStatus.initializing
     assert resp.privileged is False
     assert resp.timeout_seconds == 300
     assert resp.error_code is None
@@ -166,29 +166,29 @@ async def test_create_container_returns_initializing(manager, docker, sockets, d
 
     # Phase 2 runs in the background and uses the resolved image ID.
     await _await_init(manager, resp.id)
-    docker.create_container.assert_called_once()
-    create_arg = docker.create_container.call_args.args[0]
+    docker.create_worker.assert_called_once()
+    create_arg = docker.create_worker.call_args.args[0]
     assert create_arg["Image"] == "sha256:image_abc123"
-    docker.start_container.assert_called_once_with("docker_abc123")
+    docker.start_worker.assert_called_once_with("docker_abc123")
     sockets.create_socket.assert_called_once_with(resp.id)
 
-    # Remains initializing until the guest agent sends ready
-    fetched = await manager.get_container(resp.id)
-    assert fetched.status == ContainerStatus.initializing
+    # Remains initializing until the worker agent sends ready
+    fetched = await manager.get_worker(resp.id)
+    assert fetched.status == WorkerStatus.initializing
 
 
 async def test_create_container_image_not_found(manager, docker):
     docker.list_images.return_value = []
     with pytest.raises(ImageNotFound):
-        await manager.create_container(
-            CreateContainerRequest(image="nonexistent")
+        await manager.create_worker(
+            CreateWorkerRequest(image="nonexistent")
         )
 
 
 async def test_create_privileged_not_configured(manager):
     with pytest.raises(PrivilegedNotConfigured):
-        await manager.create_container(
-            CreateContainerRequest(image="test", privileged=True)
+        await manager.create_worker(
+            CreateWorkerRequest(image="test", privileged=True)
         )
 
 
@@ -207,20 +207,20 @@ async def test_create_privileged_with_config(config, db, docker, sockets):
         log_dir=config.log_dir,
         log_max_file_bytes=config.log_max_file_bytes,
     )
-    mgr = ContainerManager(
+    mgr = WorkerManager(
         priv_config, db, docker, sockets,
         LogCaptureManager(priv_config, docker=None),
         host_docker_sock="/host/path/docker.sock",
         host_socket_dir="/var/run/drover/sockets",
     )
     resp = await mgr.create_container(
-        CreateContainerRequest(image="ignored", privileged=True)
+        CreateWorkerRequest(image="ignored", privileged=True)
     )
     assert resp.privileged is True
     # Privileged containers use the configured image directly; no label lookup.
     docker.list_images.assert_not_called()
     await _await_init(mgr, resp.id)
-    create_arg = docker.create_container.call_args.args[0]
+    create_arg = docker.create_worker.call_args.args[0]
     assert create_arg["Image"] == "my-priv-image"
     # The privileged bind must use the resolved HOST docker.sock path,
     # not the in-container path — Docker resolves bind sources against
@@ -229,7 +229,7 @@ async def test_create_privileged_with_config(config, db, docker, sockets):
     binds = create_arg["HostConfig"]["Binds"]
     assert "/host/path/docker.sock:/run/docker.sock" in binds
     # The per-container socket FOLDER (host path) is bound into the
-    # micro-container at the fixed guest socket directory.
+    # worker at the fixed guest socket directory.
     assert (
         f"/var/run/drover/sockets/{resp.id}:/var/run/drover/sockets" in binds
     )
@@ -239,42 +239,42 @@ async def test_create_docker_failure_transitions_to_error(
     manager, docker, sockets, db
 ):
     """Docker start failure transitions the container to error with init_docker_error."""
-    docker.start_container.side_effect = RuntimeError("docker start failed")
-    resp = await manager.create_container(
-        CreateContainerRequest(image="test-img")
+    docker.start_worker.side_effect = RuntimeError("docker start failed")
+    resp = await manager.create_worker(
+        CreateWorkerRequest(image="test-img")
     )
     await _await_init(manager, resp.id)
 
-    fetched = await manager.get_container(resp.id)
-    assert fetched.status == ContainerStatus.error
+    fetched = await manager.get_worker(resp.id)
+    assert fetched.status == WorkerStatus.error
     assert fetched.error_code == "init_docker_error"
 
     # Cleanup ran: socket destroyed, Docker container force-removed
     sockets.destroy_socket.assert_called_once_with(resp.id)
-    docker.remove_container.assert_called_once_with("docker_abc123", force=True)
+    docker.remove_worker.assert_called_once_with("docker_abc123", force=True)
 
 
 async def test_ready_transitions_to_running_via_callback(
     manager, docker, sockets, db
 ):
     """A successful ready update + callback yields status=running and no watchdog."""
-    resp = await manager.create_container(
-        CreateContainerRequest(image="test-img")
+    resp = await manager.create_worker(
+        CreateWorkerRequest(image="test-img")
     )
     await _await_init(manager, resp.id)
 
     # Simulate the socket manager handling a ready message
     await db.execute_insert(
-        "UPDATE containers SET status = 'running' "
+        "UPDATE workers SET status = 'running' "
         "WHERE id = ? AND status = 'initializing'",
         (resp.id,),
     )
     # Watchdog should already be gone (cancelled by _await_init), but calling
     # again must be safe.
-    await manager.on_container_ready(resp.id)
+    await manager.on_worker_ready(resp.id)
 
-    fetched = await manager.get_container(resp.id)
-    assert fetched.status == ContainerStatus.running
+    fetched = await manager.get_worker(resp.id)
+    assert fetched.status == WorkerStatus.running
     assert resp.id not in manager._init_watchdogs
 
 
@@ -282,7 +282,7 @@ async def test_ready_transitions_to_running_via_callback(
 
 
 async def test_list_containers_empty(manager):
-    assert await manager.list_containers() == []
+    assert await manager.list_workers() == []
 
 
 async def test_list_containers_returns_all_newest_first(manager, db):
@@ -290,22 +290,22 @@ async def test_list_containers_returns_all_newest_first(manager, db):
     second = await _create_running(manager, db, image="img-b", label="beta")
     third = await _create_running(manager, db, image="img-c", label="gamma")
 
-    listed = await manager.list_containers()
+    listed = await manager.list_workers()
     assert [c.id for c in listed] == [third.id, second.id, first.id]
     assert [c.label for c in listed] == ["gamma", "beta", "alpha"]
-    assert all(c.status == ContainerStatus.running for c in listed)
+    assert all(c.status == WorkerStatus.running for c in listed)
 
 
 async def test_list_containers_includes_destroyed(manager, db):
     """Destroyed rows stay in history; the UI can decide what to show."""
     alive = await _create_running(manager, db, image="img-alive")
     doomed = await _create_running(manager, db, image="img-doomed")
-    await manager.destroy_container(doomed.id)
+    await manager.destroy_worker(doomed.id)
 
-    listed = await manager.list_containers()
+    listed = await manager.list_workers()
     statuses = {c.id: c.status for c in listed}
-    assert statuses[alive.id] == ContainerStatus.running
-    assert statuses[doomed.id] == ContainerStatus.destroyed
+    assert statuses[alive.id] == WorkerStatus.running
+    assert statuses[doomed.id] == WorkerStatus.destroyed
 
 
 # -- get --------------------------------------------------------------------
@@ -313,46 +313,46 @@ async def test_list_containers_includes_destroyed(manager, db):
 
 async def test_get_container(manager, db):
     resp = await _create_running(manager, db, image="test-img")
-    fetched = await manager.get_container(resp.id)
+    fetched = await manager.get_worker(resp.id)
     assert fetched.id == resp.id
-    assert fetched.status == ContainerStatus.running
+    assert fetched.status == WorkerStatus.running
 
 
 async def test_get_container_not_found(manager):
-    with pytest.raises(ContainerNotFound):
-        await manager.get_container("NONEXISTENT0000000000000000")
+    with pytest.raises(WorkerNotFound):
+        await manager.get_worker("NONEXISTENT0000000000000000")
 
 
 async def test_get_container_syncs_with_docker_stopped(manager, docker, db):
     """If Docker says container is stopped but DB says running, sync it."""
     resp = await _create_running(manager, db, image="test-img")
-    docker.inspect_container.return_value = {"State": {"Status": "exited"}}
+    docker.inspect_worker.return_value = {"State": {"Status": "exited"}}
 
-    fetched = await manager.get_container(resp.id)
-    assert fetched.status == ContainerStatus.stopped
+    fetched = await manager.get_worker(resp.id)
+    assert fetched.status == WorkerStatus.stopped
 
 
 async def test_get_container_docker_gone_marks_destroyed(manager, docker, db):
     resp = await _create_running(manager, db, image="test-img")
-    docker.inspect_container.side_effect = ContainerNotFoundError(404, "gone")
+    docker.inspect_worker.side_effect = WorkerNotFoundError(404, "gone")
 
-    fetched = await manager.get_container(resp.id)
-    assert fetched.status == ContainerStatus.destroyed
+    fetched = await manager.get_worker(resp.id)
+    assert fetched.status == WorkerStatus.destroyed
 
 
 async def test_get_container_initializing_does_not_touch_docker(
     manager, docker, db
 ):
     """While initializing, get_container does not try to sync with Docker."""
-    resp = await manager.create_container(
-        CreateContainerRequest(image="test-img")
+    resp = await manager.create_worker(
+        CreateWorkerRequest(image="test-img")
     )
     await _await_init(manager, resp.id)
-    docker.inspect_container.reset_mock()
+    docker.inspect_worker.reset_mock()
 
-    fetched = await manager.get_container(resp.id)
-    assert fetched.status == ContainerStatus.initializing
-    docker.inspect_container.assert_not_called()
+    fetched = await manager.get_worker(resp.id)
+    assert fetched.status == WorkerStatus.initializing
+    docker.inspect_worker.assert_not_called()
 
 
 # -- stop -------------------------------------------------------------------
@@ -360,31 +360,31 @@ async def test_get_container_initializing_does_not_touch_docker(
 
 async def test_stop_container(manager, docker, sockets, db):
     resp = await _create_running(manager, db, image="test-img")
-    stopped = await manager.stop_container(resp.id)
-    assert stopped.status == ContainerStatus.stopped
+    stopped = await manager.stop_worker(resp.id)
+    assert stopped.status == WorkerStatus.stopped
     assert stopped.stopped_at is not None
     assert stopped.transition_timeout_seconds == 10
     sockets.close_socket.assert_called_once_with(resp.id)
-    docker.stop_container.assert_called_once()
+    docker.stop_worker.assert_called_once()
 
 
 async def test_stop_already_stopped_raises_conflict(manager, db):
     resp = await _create_running(manager, db, image="test-img")
-    await manager.stop_container(resp.id)
+    await manager.stop_worker(resp.id)
 
-    with pytest.raises(ContainerStateConflict):
-        await manager.stop_container(resp.id)
+    with pytest.raises(WorkerStateConflict):
+        await manager.stop_worker(resp.id)
 
 
 async def test_stop_initializing_raises_conflict(manager, db):
     """Cannot stop a container that is still initializing."""
-    resp = await manager.create_container(
-        CreateContainerRequest(image="test-img")
+    resp = await manager.create_worker(
+        CreateWorkerRequest(image="test-img")
     )
     await _await_init(manager, resp.id)
 
-    with pytest.raises(ContainerStateConflict):
-        await manager.stop_container(resp.id)
+    with pytest.raises(WorkerStateConflict):
+        await manager.stop_worker(resp.id)
 
 
 # -- resume -----------------------------------------------------------------
@@ -393,58 +393,58 @@ async def test_stop_initializing_raises_conflict(manager, db):
 async def test_resume_container_returns_resuming(manager, docker, sockets, db):
     """resume_container returns immediately with status=resuming."""
     resp = await _create_running(manager, db, image="test-img")
-    await manager.stop_container(resp.id)
+    await manager.stop_worker(resp.id)
 
     # Reset mocks so we can verify resume-specific calls
     sockets.create_socket.reset_mock()
-    docker.start_container.reset_mock()
+    docker.start_worker.reset_mock()
 
-    resumed = await manager.resume_container(resp.id)
-    assert resumed.status == ContainerStatus.resuming
+    resumed = await manager.resume_worker(resp.id)
+    assert resumed.status == WorkerStatus.resuming
     assert resumed.transition_timeout_seconds == 20  # init_timeout_seconds from config
 
     # Drain the background resume task and cancel its watchdog so the
     # event loop has nothing pending when the test exits.  Status remains
-    # ``resuming`` until the guest agent's ready arrives.
+    # ``resuming`` until the worker agent's ready arrives.
     await _drain_pending_init(manager, resp.id)
     sockets.create_socket.assert_called_once_with(resp.id)
-    docker.start_container.assert_called_once()
+    docker.start_worker.assert_called_once()
 
-    fetched = await manager.get_container(resp.id)
-    assert fetched.status == ContainerStatus.resuming
+    fetched = await manager.get_worker(resp.id)
+    assert fetched.status == WorkerStatus.resuming
 
 
 async def test_resume_to_running_after_ready(manager, db):
-    """Status flips to running only after the guest agent's ready arrives."""
+    """Status flips to running only after the worker agent's ready arrives."""
     resp = await _create_running(manager, db, image="test-img")
-    await manager.stop_container(resp.id)
+    await manager.stop_worker(resp.id)
 
     resumed = await _resume_to_running(manager, db, resp.id)
-    assert resumed.status == ContainerStatus.resuming
+    assert resumed.status == WorkerStatus.resuming
 
-    fetched = await manager.get_container(resp.id)
-    assert fetched.status == ContainerStatus.running
+    fetched = await manager.get_worker(resp.id)
+    assert fetched.status == WorkerStatus.running
     assert fetched.stopped_at is None
 
 
 async def test_resume_docker_failure_marks_error(manager, docker, db):
     """Docker start failure during resume transitions row to error."""
     resp = await _create_running(manager, db, image="test-img")
-    await manager.stop_container(resp.id)
+    await manager.stop_worker(resp.id)
 
-    docker.start_container.side_effect = RuntimeError("docker boom")
-    await manager.resume_container(resp.id)
+    docker.start_worker.side_effect = RuntimeError("docker boom")
+    await manager.resume_worker(resp.id)
     await _drain_pending_init(manager, resp.id)
 
-    fetched = await manager.get_container(resp.id)
-    assert fetched.status == ContainerStatus.error
+    fetched = await manager.get_worker(resp.id)
+    assert fetched.status == WorkerStatus.error
     assert fetched.error_code == "resume_docker_error"
 
 
 async def test_resume_running_raises_conflict(manager, db):
     resp = await _create_running(manager, db, image="test-img")
-    with pytest.raises(ContainerStateConflict):
-        await manager.resume_container(resp.id)
+    with pytest.raises(WorkerStateConflict):
+        await manager.resume_worker(resp.id)
 
 
 # -- destroy ----------------------------------------------------------------
@@ -452,55 +452,55 @@ async def test_resume_running_raises_conflict(manager, db):
 
 async def test_destroy_running_container(manager, docker, sockets, db):
     resp = await _create_running(manager, db, image="test-img")
-    destroyed = await manager.destroy_container(resp.id)
-    assert destroyed.status == ContainerStatus.destroyed
+    destroyed = await manager.destroy_worker(resp.id)
+    assert destroyed.status == WorkerStatus.destroyed
     assert destroyed.transition_timeout_seconds == 10
     sockets.destroy_socket.assert_called_once_with(resp.id)
-    docker.remove_container.assert_called_once()
+    docker.remove_worker.assert_called_once()
 
 
 async def test_destroy_stopped_container(manager, docker, sockets, db):
     resp = await _create_running(manager, db, image="test-img")
-    await manager.stop_container(resp.id)
+    await manager.stop_worker(resp.id)
     sockets.destroy_socket.reset_mock()
 
-    destroyed = await manager.destroy_container(resp.id)
-    assert destroyed.status == ContainerStatus.destroyed
+    destroyed = await manager.destroy_worker(resp.id)
+    assert destroyed.status == WorkerStatus.destroyed
     assert destroyed.stopped_at is not None  # preserves original stopped_at
 
 
 async def test_destroy_already_destroyed_raises_conflict(manager, db):
     resp = await _create_running(manager, db, image="test-img")
-    await manager.destroy_container(resp.id)
-    with pytest.raises(ContainerStateConflict):
-        await manager.destroy_container(resp.id)
+    await manager.destroy_worker(resp.id)
+    with pytest.raises(WorkerStateConflict):
+        await manager.destroy_worker(resp.id)
 
 
 async def test_destroy_error_container_without_docker_id(
     manager, docker, sockets, db
 ):
     """An errored container with no docker_id can still be destroyed."""
-    docker.create_container.side_effect = RuntimeError("boom")
-    resp = await manager.create_container(
-        CreateContainerRequest(image="test-img")
+    docker.create_worker.side_effect = RuntimeError("boom")
+    resp = await manager.create_worker(
+        CreateWorkerRequest(image="test-img")
     )
     await _await_init(manager, resp.id)
 
     # Sanity: errored with no docker_id persisted
     row = await db.fetchone(
-        "SELECT docker_id, status FROM containers WHERE id = ?", (resp.id,)
+        "SELECT docker_id, status FROM workers WHERE id = ?", (resp.id,)
     )
     assert row["docker_id"] is None
     assert row["status"] == "error"
 
-    docker.stop_container.reset_mock()
-    docker.remove_container.reset_mock()
+    docker.stop_worker.reset_mock()
+    docker.remove_worker.reset_mock()
 
-    destroyed = await manager.destroy_container(resp.id)
-    assert destroyed.status == ContainerStatus.destroyed
+    destroyed = await manager.destroy_worker(resp.id)
+    assert destroyed.status == WorkerStatus.destroyed
     # No docker calls attempted when docker_id is NULL
-    docker.stop_container.assert_not_called()
-    docker.remove_container.assert_not_called()
+    docker.stop_worker.assert_not_called()
+    docker.remove_worker.assert_not_called()
 
 
 # -- exec -------------------------------------------------------------------
@@ -515,26 +515,26 @@ async def test_exec_command(manager, sockets, db):
 
 async def test_exec_on_stopped_raises_conflict(manager, db):
     resp = await _create_running(manager, db, image="test-img")
-    await manager.stop_container(resp.id)
-    with pytest.raises(ContainerStateConflict):
+    await manager.stop_worker(resp.id)
+    with pytest.raises(WorkerStateConflict):
         await manager.exec_command(resp.id, "echo hello")
 
 
 async def test_exec_on_initializing_raises_conflict(manager, db):
     """Exec must fail with 409 while the container is still initializing."""
-    resp = await manager.create_container(
-        CreateContainerRequest(image="test-img")
+    resp = await manager.create_worker(
+        CreateWorkerRequest(image="test-img")
     )
     await _await_init(manager, resp.id)
 
-    with pytest.raises(ContainerStateConflict):
+    with pytest.raises(WorkerStateConflict):
         await manager.exec_command(resp.id, "echo hello")
 
 
 async def test_exec_not_connected_raises(manager, sockets, db):
     resp = await _create_running(manager, db, image="test-img")
     sockets.is_connected.return_value = False
-    with pytest.raises(ContainerNotConnected):
+    with pytest.raises(WorkerNotConnected):
         await manager.exec_command(resp.id, "echo hello")
 
 
@@ -551,7 +551,7 @@ async def test_exec_image_without_exec_capability_raises(manager, docker, socket
     with pytest.raises(CapabilityNotSupported) as exc:
         await manager.exec_command(resp.id, "echo hello")
     assert exc.value.status_code == 422
-    # No command was queued or sent to the guest agent.
+    # No command was queued or sent to the worker agent.
     sockets.send_command.assert_not_called()
     assert await manager.list_commands(resp.id) == []
 
@@ -621,11 +621,11 @@ async def test_list_commands_newest_first(manager, db):
 
 
 async def test_list_commands_unknown_container(manager):
-    with pytest.raises(ContainerNotFound):
+    with pytest.raises(WorkerNotFound):
         await manager.list_commands("does-not-exist")
 
 
-# -- sync_containers (startup reconciliation) ------------------------------
+# -- sync_workers (startup reconciliation) ---------------------------------
 
 
 async def test_sync_running_container_still_running(manager, docker, sockets, db):
@@ -634,12 +634,12 @@ async def test_sync_running_container_still_running(manager, docker, sockets, db
     sockets.create_socket.reset_mock()
 
     # Docker says still running
-    docker.inspect_container.return_value = {"State": {"Status": "running"}}
-    await manager.sync_containers()
+    docker.inspect_worker.return_value = {"State": {"Status": "running"}}
+    await manager.sync_workers()
 
     sockets.create_socket.assert_called_once_with(resp.id)
-    fetched = await manager.get_container(resp.id)
-    assert fetched.status == ContainerStatus.running
+    fetched = await manager.get_worker(resp.id)
+    assert fetched.status == WorkerStatus.running
 
 
 async def test_sync_running_container_now_stopped(manager, docker, sockets, db):
@@ -647,71 +647,71 @@ async def test_sync_running_container_now_stopped(manager, docker, sockets, db):
     resp = await _create_running(manager, db, image="test-img")
     sockets.create_socket.reset_mock()
 
-    docker.inspect_container.return_value = {"State": {"Status": "exited"}}
-    await manager.sync_containers()
+    docker.inspect_worker.return_value = {"State": {"Status": "exited"}}
+    await manager.sync_workers()
 
     sockets.create_socket.assert_not_called()
-    fetched = await manager.get_container(resp.id)
-    assert fetched.status == ContainerStatus.stopped
+    fetched = await manager.get_worker(resp.id)
+    assert fetched.status == WorkerStatus.stopped
 
 
 async def test_sync_running_container_gone(manager, docker, sockets, db):
     """Running in DB but Docker container gone → mark destroyed."""
     resp = await _create_running(manager, db, image="test-img")
-    docker.inspect_container.side_effect = ContainerNotFoundError(404, "gone")
-    await manager.sync_containers()
+    docker.inspect_worker.side_effect = WorkerNotFoundError(404, "gone")
+    await manager.sync_workers()
 
     # Reset side_effect so get_container can re-fetch from DB
-    docker.inspect_container.side_effect = None
-    docker.inspect_container.return_value = {"State": {"Status": "running"}}
+    docker.inspect_worker.side_effect = None
+    docker.inspect_worker.return_value = {"State": {"Status": "running"}}
 
-    fetched = await manager.get_container(resp.id)
-    assert fetched.status == ContainerStatus.destroyed
+    fetched = await manager.get_worker(resp.id)
+    assert fetched.status == WorkerStatus.destroyed
 
 
 async def test_sync_stopped_container_still_stopped(manager, docker, sockets, db):
     """Stopped in DB and Docker agrees → no status change, no socket."""
     resp = await _create_running(manager, db, image="test-img")
-    await manager.stop_container(resp.id)
+    await manager.stop_worker(resp.id)
     sockets.create_socket.reset_mock()
 
-    docker.inspect_container.return_value = {"State": {"Status": "exited"}}
-    await manager.sync_containers()
+    docker.inspect_worker.return_value = {"State": {"Status": "exited"}}
+    await manager.sync_workers()
 
     sockets.create_socket.assert_not_called()
-    fetched = await manager.get_container(resp.id)
-    assert fetched.status == ContainerStatus.stopped
+    fetched = await manager.get_worker(resp.id)
+    assert fetched.status == WorkerStatus.stopped
 
 
 async def test_sync_stopped_container_gone(manager, docker, sockets, db):
     """Stopped in DB but Docker container gone → mark destroyed."""
     resp = await _create_running(manager, db, image="test-img")
-    await manager.stop_container(resp.id)
+    await manager.stop_worker(resp.id)
 
-    docker.inspect_container.side_effect = ContainerNotFoundError(404, "gone")
-    await manager.sync_containers()
+    docker.inspect_worker.side_effect = WorkerNotFoundError(404, "gone")
+    await manager.sync_workers()
 
-    docker.inspect_container.side_effect = None
-    docker.inspect_container.return_value = {"State": {"Status": "running"}}
+    docker.inspect_worker.side_effect = None
+    docker.inspect_worker.return_value = {"State": {"Status": "running"}}
 
-    fetched = await manager.get_container(resp.id)
-    assert fetched.status == ContainerStatus.destroyed
+    fetched = await manager.get_worker(resp.id)
+    assert fetched.status == WorkerStatus.destroyed
 
 
 async def test_sync_skips_destroyed_containers(manager, docker, sockets, db):
     """Already-destroyed containers should not be inspected at all."""
     resp = await _create_running(manager, db, image="test-img")
-    await manager.destroy_container(resp.id)
-    docker.inspect_container.reset_mock()
+    await manager.destroy_worker(resp.id)
+    docker.inspect_worker.reset_mock()
 
-    await manager.sync_containers()
-    docker.inspect_container.assert_not_called()
+    await manager.sync_workers()
+    docker.inspect_worker.assert_not_called()
 
 
 async def test_sync_no_containers(manager, docker, db):
     """Empty database → sync completes without errors."""
-    await manager.sync_containers()
-    docker.inspect_container.assert_not_called()
+    await manager.sync_workers()
+    docker.inspect_worker.assert_not_called()
 
 
 async def test_sync_skips_transitional_states(manager, docker, sockets, db):
@@ -719,22 +719,22 @@ async def test_sync_skips_transitional_states(manager, docker, sockets, db):
     resp = await _create_running(manager, db, image="test-img")
     # Manually set to a transitional state
     await db.execute_insert(
-        "UPDATE containers SET status = 'stopping' WHERE id = ?",
+        "UPDATE workers SET status = 'stopping' WHERE id = ?",
         (resp.id,),
     )
 
-    docker.inspect_container.return_value = {"State": {"Status": "exited"}}
-    await manager.sync_containers()
+    docker.inspect_worker.return_value = {"State": {"Status": "exited"}}
+    await manager.sync_workers()
 
-    row = await db.fetchone("SELECT status FROM containers WHERE id = ?", (resp.id,))
+    row = await db.fetchone("SELECT status FROM workers WHERE id = ?", (resp.id,))
     assert row["status"] == "stopping"
 
 
 async def test_sync_initializing_rows_become_error(manager, docker, sockets, db):
     """Containers stuck in initializing after restart are transitioned to error."""
     # Create a container but do not send ready — it stays in initializing.
-    resp = await manager.create_container(
-        CreateContainerRequest(image="test-img")
+    resp = await manager.create_worker(
+        CreateWorkerRequest(image="test-img")
     )
     await _await_init(manager, resp.id)
 
@@ -743,45 +743,45 @@ async def test_sync_initializing_rows_become_error(manager, docker, sockets, db)
     manager._init_tasks.clear()
     manager._init_watchdogs.clear()
 
-    docker.inspect_container.reset_mock()
-    await manager.sync_containers()
+    docker.inspect_worker.reset_mock()
+    await manager.sync_workers()
 
-    # sync_containers should skip the initializing row during reconciliation
+    # sync_workers should skip the initializing row during reconciliation
     # and not inspect Docker for it.
-    docker.inspect_container.assert_not_called()
+    docker.inspect_worker.assert_not_called()
 
     # After the pass, the row is transitioned to error with orchestrator_crash.
-    fetched = await manager.get_container(resp.id)
-    assert fetched.status == ContainerStatus.error
+    fetched = await manager.get_worker(resp.id)
+    assert fetched.status == WorkerStatus.error
     assert fetched.error_code == "orchestrator_crash"
 
 
 async def test_sync_skips_error_containers(manager, docker, sockets, db):
     """Containers already in error are not reconciled."""
-    docker.start_container.side_effect = RuntimeError("boom")
-    resp = await manager.create_container(
-        CreateContainerRequest(image="test-img")
+    docker.start_worker.side_effect = RuntimeError("boom")
+    resp = await manager.create_worker(
+        CreateWorkerRequest(image="test-img")
     )
     await _await_init(manager, resp.id)
-    docker.inspect_container.reset_mock()
+    docker.inspect_worker.reset_mock()
 
-    await manager.sync_containers()
-    docker.inspect_container.assert_not_called()
+    await manager.sync_workers()
+    docker.inspect_worker.assert_not_called()
 
 
 # -- helper: _docker_state_to_status ---------------------------------------
 
 
 def test_docker_state_running():
-    assert _docker_state_to_status({"State": {"Status": "running"}}) == ContainerStatus.running
+    assert _docker_state_to_status({"State": {"Status": "running"}}) == WorkerStatus.running
 
 
 def test_docker_state_exited():
-    assert _docker_state_to_status({"State": {"Status": "exited"}}) == ContainerStatus.stopped
+    assert _docker_state_to_status({"State": {"Status": "exited"}}) == WorkerStatus.stopped
 
 
 def test_docker_state_dead():
-    assert _docker_state_to_status({"State": {"Status": "dead"}}) == ContainerStatus.stopped
+    assert _docker_state_to_status({"State": {"Status": "dead"}}) == WorkerStatus.stopped
 
 
 def test_docker_state_unknown():
@@ -799,7 +799,7 @@ def test_docker_state_empty():
 # Use a real LogCaptureManager backed by a tmp_path directory and a fake
 # Docker stream so that the on-disk side effects (directory, .cursor,
 # discard) are observable end-to-end.  These tests catch mismatches
-# between ContainerManager call sites and LogCaptureManager method
+# between WorkerManager call sites and LogCaptureManager method
 # signatures that a mocked manager would silently accept.
 
 
@@ -846,7 +846,7 @@ def log_capture_real(log_config, streamer):
 
 @pytest.fixture
 def manager_with_logs(log_config, db, docker, sockets, log_capture_real):
-    return ContainerManager(
+    return WorkerManager(
         log_config, db, docker, sockets, log_capture_real,
         host_docker_sock="/var/run/docker.sock",
         host_socket_dir="/var/run/drover/sockets",
@@ -867,7 +867,7 @@ async def _await_first_log_line(log_capture, container_id, timeout=2.0):
 
 async def test_init_starts_log_capture(manager_with_logs, log_capture_real, db):
     resp = await manager_with_logs.create_container(
-        CreateContainerRequest(image="test-img")
+        CreateWorkerRequest(image="test-img")
     )
     await _await_init(manager_with_logs, resp.id)
     await _await_first_log_line(log_capture_real, resp.id)
@@ -878,9 +878,9 @@ async def test_init_starts_log_capture(manager_with_logs, log_capture_real, db):
 async def test_init_does_not_start_capture_when_docker_start_fails(
     manager_with_logs, log_capture_real, docker, db
 ):
-    docker.start_container.side_effect = RuntimeError("docker boom")
+    docker.start_worker.side_effect = RuntimeError("docker boom")
     resp = await manager_with_logs.create_container(
-        CreateContainerRequest(image="test-img")
+        CreateWorkerRequest(image="test-img")
     )
     await _await_init(manager_with_logs, resp.id)
     # _fail_init runs and removes/discards nothing for a never-captured
@@ -903,14 +903,14 @@ async def test_fail_init_persists_cursor_and_keeps_directory(
 ):
     """After _fail_init, the directory survives so the operator can inspect."""
     resp = await manager_with_logs.create_container(
-        CreateContainerRequest(image="test-img")
+        CreateWorkerRequest(image="test-img")
     )
     await _await_init(manager_with_logs, resp.id)
     await _await_first_log_line(log_capture_real, resp.id)
 
     # Trigger _fail_init manually (the watchdog would do this for init_timeout).
     docker_row = await db.fetchone(
-        "SELECT docker_id FROM containers WHERE id = ?", (resp.id,)
+        "SELECT docker_id FROM workers WHERE id = ?", (resp.id,)
     )
     await manager_with_logs._fail_init(
         resp.id, "init_timeout", docker_row["docker_id"]
@@ -981,9 +981,9 @@ async def test_destroy_error_container_discards_logs(
     manager_with_logs, log_capture_real, docker, db
 ):
     """A container that errored during init still gets its directory removed."""
-    docker.start_container.side_effect = RuntimeError("boom")
+    docker.start_worker.side_effect = RuntimeError("boom")
     resp = await manager_with_logs.create_container(
-        CreateContainerRequest(image="test-img")
+        CreateWorkerRequest(image="test-img")
     )
     await _await_init(manager_with_logs, resp.id)
     # No capture directory exists (Docker never started), but destroy must
@@ -1003,9 +1003,9 @@ async def test_sync_running_container_restarts_log_capture(
     await log_capture_real.shutdown()
     streamer.calls.clear()
 
-    docker.inspect_container.return_value = {"State": {"Status": "running"}}
-    await manager_with_logs.sync_containers()
-    # sync_containers issues exactly one start with the persisted cursor.
+    docker.inspect_worker.return_value = {"State": {"Status": "running"}}
+    await manager_with_logs.sync_workers()
+    # sync_workers issues exactly one start with the persisted cursor.
     assert len(streamer.calls) == 1
     assert isinstance(streamer.calls[-1]["since"], int)
     await log_capture_real.shutdown()

@@ -1,6 +1,6 @@
 import { Router, urlencoded } from 'express';
-import { containerRow } from '../views/partials/containers-list.js';
-import { commandRows } from '../views/partials/container-detail.js';
+import { workerRow } from '../views/partials/workers-list.js';
+import { commandRows } from '../views/partials/worker-detail.js';
 import { describeOrchestratorError, renderOrchestratorError } from '../views/partials/errors.js';
 import { launchFormPage } from '../views/partials/launch-form.js';
 import { html } from '../views/render.js';
@@ -28,7 +28,7 @@ export function createActionsRouter({ orchestrator }) {
 	const router = Router();
 	router.use(urlencoded({ extended: false, limit: '64kb' }));
 
-	router.post('/containers', async (req, res) => {
+	router.post('/workers', async (req, res) => {
 		const body = req.body || {};
 		const values = {
 			image: typeof body.image === 'string' ? body.image.trim() : '',
@@ -54,8 +54,8 @@ export function createActionsRouter({ orchestrator }) {
 		}
 
 		try {
-			const container = await orchestrator.postJson('/containers', payload);
-			res.set('HX-Redirect', `/views/containers/${container.id}`);
+			const worker = await orchestrator.postJson('/workers', payload);
+			res.set('HX-Redirect', `/views/workers/${worker.id}`);
 			res.status(201).type('html').send('');
 		} catch (err) {
 			const { status } = describeOrchestratorError(err);
@@ -67,25 +67,25 @@ export function createActionsRouter({ orchestrator }) {
 		}
 	});
 
-	router.post('/containers/:id/stop', async (req, res) => {
+	router.post('/workers/:id/stop', async (req, res) => {
 		try {
-			const container = await orchestrator.postJson(
-				`/containers/${encodeURIComponent(req.params.id)}/stop`,
+			const worker = await orchestrator.postJson(
+				`/workers/${encodeURIComponent(req.params.id)}/stop`,
 			);
-			sendFragment(res, containerRow(container));
+			sendFragment(res, workerRow(worker));
 		} catch (err) {
 			const { status } = describeOrchestratorError(err);
-			sendFragment(res, html`<tr id="container-${req.params.id}" class="error-row">
+			sendFragment(res, html`<tr id="worker-${req.params.id}" class="error-row">
 				<td colspan="6">${renderOrchestratorError(err)}</td>
 			</tr>`, status);
 		}
 	});
 
-	router.post('/containers/:id/resume', async (req, res) => {
+	router.post('/workers/:id/resume', async (req, res) => {
 		const id = req.params.id;
 		try {
-			await orchestrator.postJson(`/containers/${encodeURIComponent(id)}/resume`);
-			res.set('HX-Redirect', `/views/containers/${id}`);
+			await orchestrator.postJson(`/workers/${encodeURIComponent(id)}/resume`);
+			res.set('HX-Redirect', `/views/workers/${id}`);
 			res.status(200).type('html').send('');
 		} catch (err) {
 			const { status } = describeOrchestratorError(err);
@@ -93,13 +93,13 @@ export function createActionsRouter({ orchestrator }) {
 		}
 	});
 
-	router.post('/containers/:id/execs', async (req, res) => {
+	router.post('/workers/:id/execs', async (req, res) => {
 		const encodedId = encodeURIComponent(req.params.id);
 		const body = req.body || {};
 		const command = typeof body.command === 'string' ? body.command.trim() : '';
 		try {
-			await orchestrator.postJson(`/containers/${encodedId}/execs`, { command });
-			const commands = await orchestrator.getJson(`/containers/${encodedId}/execs`);
+			await orchestrator.postJson(`/workers/${encodedId}/execs`, { command });
+			const commands = await orchestrator.getJson(`/workers/${encodedId}/execs`);
 			sendFragment(res, html`${commandRows(req.params.id, Array.isArray(commands) ? commands : [])}`);
 		} catch (err) {
 			const { status } = describeOrchestratorError(err);
@@ -107,13 +107,13 @@ export function createActionsRouter({ orchestrator }) {
 		}
 	});
 
-	router.delete('/containers/:id', async (req, res) => {
+	router.delete('/workers/:id', async (req, res) => {
 		try {
-			await orchestrator.del(`/containers/${encodeURIComponent(req.params.id)}`);
+			await orchestrator.del(`/workers/${encodeURIComponent(req.params.id)}`);
 			res.status(200).type('html').send('');
 		} catch (err) {
 			const { status } = describeOrchestratorError(err);
-			sendFragment(res, html`<tr id="container-${req.params.id}" class="error-row">
+			sendFragment(res, html`<tr id="worker-${req.params.id}" class="error-row">
 				<td colspan="6">${renderOrchestratorError(err)}</td>
 			</tr>`, status);
 		}

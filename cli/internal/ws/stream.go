@@ -15,8 +15,8 @@ import (
 // readLimit is generous so a single large output frame isn't truncated.
 const readLimit = 32 << 20 // 32 MiB
 
-// URL converts an http(s) base URL into the per-container WebSocket URL.
-func URL(baseURL, containerID string) (string, error) {
+// URL converts an http(s) base URL into the per-worker WebSocket URL.
+func URL(baseURL, workerID string) (string, error) {
 	u, err := url.Parse(baseURL)
 	if err != nil {
 		return "", err
@@ -27,7 +27,7 @@ func URL(baseURL, containerID string) (string, error) {
 	case "https":
 		u.Scheme = "wss"
 	}
-	u.Path = strings.TrimRight(u.Path, "/") + "/containers/" + url.PathEscape(containerID) + "/ws"
+	u.Path = strings.TrimRight(u.Path, "/") + "/workers/" + url.PathEscape(workerID) + "/ws"
 	return u.String(), nil
 }
 
@@ -40,9 +40,9 @@ type frame struct {
 	ExitCode  *int   `json:"exit_code"`
 }
 
-// Stream dials the per-container WebSocket, then writes every frame whose
+// Stream dials the per-worker WebSocket, then writes every frame whose
 // command_id matches to out verbatim (one JSON object per line, no
-// re-marshalling). Frames for other commands and container log frames are
+// re-marshalling). Frames for other commands and worker log frames are
 // dropped. It returns the exit code carried by the matching status:complete
 // frame. The context cancels the dial and the read loop (Ctrl-C).
 func Stream(ctx context.Context, wsURL, apiKey, commandID string, out io.Writer) (int, error) {
