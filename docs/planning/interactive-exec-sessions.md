@@ -5,10 +5,10 @@ transport) is decided and specified in
 [`docs/interactive-sessions.md`](../interactive-sessions.md), with its
 per-container socket-folder groundwork already landed in `main`; Axis 2
 (client↔orchestrator endpoints) is decided here. Axes 3–4 (executor PTY
-implementation, Go CLI) are sketched. One cross-cutting open question remains
-(idle-reaper interaction). This plan defers to the spec for the lifecycle and
-covers the implementation work and the remaining axes. Nothing here is built
-yet beyond the landed socket folder.
+implementation, Go CLI) are sketched. All cross-cutting design questions are
+resolved, including the idle-reaper interaction. This plan defers to the spec
+for the lifecycle and covers the implementation work and the remaining axes.
+Nothing here is built yet beyond the landed socket folder.
 
 ## Goal / Desired Outcome
 
@@ -373,24 +373,44 @@ The capability key is **`interactive`** (per the spec), gated in
 `container_manager` and advertised on interactive-capable images, per
 `docs/capabilities.md`'s "Adding a new capability" steps.
 
-## Open Questions
+## Resolved: idle-timeout reaper interaction
 
 Axis 1 (transport/lifecycle, capability, persistence, snapshot fidelity,
 pause/resume plane) and Axis 2 (endpoints, auth, concurrent attach, PTY
-framing) are fully resolved above. One cross-cutting question remains:
+framing) are resolved in their sections above. The one remaining cross-cutting
+question — how interactive sessions interact with the container idle reaper —
+is now decided:
 
-- **Idle-timeout reaper interaction.** The `sessions` table's coarse activity
-  timestamps give operators *visibility*, but the existing container idle
-  reaper keys off guest **heartbeats**, not session activity. A long-lived
-  interactive session where the operator is reading (not typing) still gets
-  heartbeats from the guest agent, so this is likely already safe — but confirm
-  that an attached session can't be reaped out from under a connected operator,
-  and decide whether an *unattached but running* session should keep its
-  container alive at all (arguably it should not, so the normal idle timeout
-  applies and reaps the container, taking the abandoned session with it).
+**Containers with a running session are not reaped.** The idle reaper today
+stops a running container whose `last_seen` (guest heartbeat) is older than its
+`timeout_seconds`. That model would happily reap a container out from under a
+live interactive session, which is wrong: the expected usage is to start a
+container, start a session running a long or manually-stopped process, and then
+*close the WebSocket* while the process keeps running. Keying off heartbeats or
+WS-attachment would kill exactly that case. So the reaper gains an additional
+gate: **skip any container that has a non-`closed` row in the `sessions`
+table.** A container becomes reapable again only once all its sessions are
+terminal.
+
+This deliberately decouples reaping from WS-attachment: an *unattached but still
+running* session keeps its container alive, because the running process is the
+thing the user cares about, not the client connection.
+
+The cost of this decision is captured as a risk below; the team is treating the
+mitigation as a UX problem, not a programmatic one.
 
 ## Risks and Mitigations
 
+- **Abandoned sessions pin containers open.** Because a container with any
+  non-`closed` session is exempt from the idle reaper (see Resolved, above), a
+  user who leaves a session running — intentionally or by forgetting one — keeps
+  the container alive indefinitely, consuming resources past the normal idle
+  timeout. This is the accepted cost of not reaping live sessions. **Mitigation
+  is being planned by the team as a UX issue, not a programmatic one:** rather
+  than auto-closing sessions (which would defeat the purpose), surface
+  long-running / abandoned sessions to the user — e.g. alerts driven off the
+  `sessions` table's coarse activity timestamps and the listing endpoint — so a
+  human can decide to end them. The exact UX is TBD by the team.
 - **Folder cleanup vs. orphaned rows (Axis 1):** `destroy_socket`'s current
   `rmdir` won't remove a populated `sessions/` subtree, and a blind delete would
   leave `sessions` rows stuck non-terminal. Mitigation is the decided explicit
@@ -415,6 +435,10 @@ framing) are fully resolved above. One cross-cutting question remains:
   table (the Database section lists `containers` / `commands` /
   `command_messages`).
 - `orchestrator/database.py` — add the `sessions` table to `_SCHEMA`.
+- `orchestrator/README.md` — note in the Container lifecycle / reaper section
+  that a container with a non-`closed` session is exempt from the idle reaper.
+  (The reaper code in `container_manager.py` gains the corresponding session
+  check.)
 - `docs/interactive-sessions.md` is the canonical home for the in-container
   socket-path contract that third-party executor implementations build against
   (per the path-ownership decision); keep that path spec authoritative there.
