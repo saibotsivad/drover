@@ -1,11 +1,14 @@
 # Interactive Exec Sessions
 
-**Status:** Draft — Axis 1 (orchestrator↔guest transport) is decided and now
-specified in [`docs/interactive-sessions.md`](../interactive-sessions.md); its
-per-container socket-folder groundwork has landed in `main`. The per-session
-sockets on top of it, plus Axes 2–4, are still to build. This plan defers to
-that spec for the lifecycle and covers only the implementation work and the
-remaining axes.
+**Status:** Draft, ready for team review — Axis 1 (orchestrator↔guest
+transport) is decided and specified in
+[`docs/interactive-sessions.md`](../interactive-sessions.md), with its
+per-container socket-folder groundwork already landed in `main`; Axis 2
+(client↔orchestrator endpoints) is decided here. Axes 3–4 (executor PTY
+implementation, Go CLI) are sketched. One cross-cutting open question remains
+(idle-reaper interaction). This plan defers to the spec for the lifecycle and
+covers the implementation work and the remaining axes. Nothing here is built
+yet beyond the landed socket folder.
 
 ## Goal / Desired Outcome
 
@@ -54,8 +57,9 @@ no-stdin runner) supports the command model but none of the interactive needs
 directly. The design question is *where* to add the bidirectional, per-session
 plumbing.
 
-There are **three independent axes**. Axis 1 is decided; Axes 2–4 still list
-options where there is no single obviously-correct answer.
+The work splits into **four axes**. Axes 1 and 2 (the two transports) are
+decided below; Axes 3 and 4 (executor PTY implementation, Go CLI) are sketched
+and proceed once the transports are settled.
 
 ---
 
@@ -262,8 +266,8 @@ drives pause/resume:
 
 Reconnect is just a new WS to the same `session_id` (no new `session_start`),
 which is why attach is a `GET …/ws` on an existing resource rather than part of
-create. Whether a second concurrent WS to the same session is rejected or
-takes over is an open question below.
+create. A session is **single-writer**: at most one live WS at a time, and a
+second concurrent attach is rejected (see Resolved, below).
 
 **`DELETE /containers/{id}/sessions/{session_id}`** — terminate. Sends
 `session_terminate`, waits for the guest's `session_terminated` ack, then
@@ -297,17 +301,24 @@ browser clients that can't set WS headers, compared with the same constant-time
 auth mechanism is introduced — this resolves the "Auth on the client endpoint"
 open question.
 
-### Open questions (Axis 2)
+### Resolved (Axis 2)
 
-- **Concurrent attach.** If a second WS opens for a session that already has a
-  live client, does the orchestrator reject it (`409`-style close) or let it
-  take over (and pause/close the first)? Single-writer is simplest; "take over"
-  is friendlier for a stale-connection reconnect. Leaning reject-second for v1.
-- **PTY framing over the WS.** Raw binary WS frames (PTY bytes are binary; the
-  data plane is already byte-verbatim) vs. a JSON/base64 envelope to carry
-  `resize` alongside `stdin`. Leaning **binary frames for PTY data + a small
-  JSON control frame for `resize`**, but the exact framing is unsettled — see
-  Open Questions.
+- **Concurrent attach — single writer.** A session has at most one live `…/ws`
+  client at a time. If a second WS opens while one is already attached, the
+  orchestrator rejects it (close with a `1008`-style policy violation). This is
+  the simplest correct behaviour; "take over" semantics for stale-connection
+  reconnects can be added later if needed. (A client that genuinely lost its
+  connection will be detected as a disconnect — triggering `session_pty_pause`
+  — and can then reconnect normally.)
+- **PTY framing over the WS — binary for PTY, JSON for control.** PTY bytes
+  travel as **raw binary** WS frames in both directions (the data plane is
+  byte-verbatim, so no envelope/base64 overhead). Control messages such as
+  `resize` travel as **JSON-stringified text** frames, each an object with a
+  `type` property (e.g. `{"type":"resize","cols":120,"rows":40}`) so the schema
+  can be extended later. The two are told apart by WS frame type: a receiver
+  checks whether a frame is binary (PTY) or text (JSON control) — in a browser,
+  `typeof event.data === "string"` ⇒ JSON, otherwise binary PTY. The snapshot
+  is just PTY bytes, so it rides the binary path like any other output.
 
 ## Axis 3 — Executor PTY mechanics (new)
 
@@ -360,21 +371,19 @@ The capability key is **`interactive`** (per the spec), gated in
 
 ## Open Questions
 
-These are the cross-cutting questions still unsettled. The spec covers Axis 1
-transport/lifecycle only; capability, concurrency, persistence, snapshot
-fidelity, pause/resume plane (Axis 1), and client-endpoint **auth** (Axis 2)
-are all resolved above.
+Axis 1 (transport/lifecycle, capability, persistence, snapshot fidelity,
+pause/resume plane) and Axis 2 (endpoints, auth, concurrent attach, PTY
+framing) are fully resolved above. One cross-cutting question remains:
 
-- **PTY framing over the client WS (Axis 2):** binary WS frames for PTY bytes
-  vs. a JSON/base64 envelope — and how `resize` rides alongside `stdin`.
-  Leaning binary for PTY data plus a small JSON control frame for `resize`.
-- **Concurrent attach (Axis 2):** reject a second WS to an already-attached
-  session vs. take-over. Leaning reject-second for v1.
-- **Idle-timeout reaper interaction:** the spec's coarse per-session timestamps
-  give operator *visibility*, but it does not say whether a live (unattached)
-  session counts as container activity for the existing idle reaper, which keys
-  off guest heartbeats. Confirm an active interactive session can't be reaped
-  out from under a connected operator.
+- **Idle-timeout reaper interaction.** The `sessions` table's coarse activity
+  timestamps give operators *visibility*, but the existing container idle
+  reaper keys off guest **heartbeats**, not session activity. A long-lived
+  interactive session where the operator is reading (not typing) still gets
+  heartbeats from the guest agent, so this is likely already safe — but confirm
+  that an attached session can't be reaped out from under a connected operator,
+  and decide whether an *unattached but running* session should keep its
+  container alive at all (arguably it should not, so the normal idle timeout
+  applies and reaps the container, taking the abandoned session with it).
 
 ## Risks and Mitigations
 
