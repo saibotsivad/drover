@@ -70,12 +70,20 @@ are in-guest state that die with the container.
 A session is started exactly once. There is no separate "attach" step;
 reconnecting a client is handled by pause/resume, below.
 
+There is no start timeout. A guest that neither dials nor replies
+`session_rejected` simply produces no data; the operator who started the session
+ends it and starts a new one.
+
 ### Transmitting
 
 The guest feeds PTY output into the emulator at all times, so the screen model is
 always current. While transmitting, the guest first sends a full screen
 **snapshot** over the data plane, then streams live PTY output. The default state
 of a freshly started session is transmitting.
+
+The snapshot carries the **visible screen only**. Scrollback is not preserved: a
+client that connects or reconnects sees the current screen, not the history that
+produced it.
 
 On the data plane:
 
@@ -102,6 +110,13 @@ orchestrator pauses when the client disconnects and resumes when a client
 (re)connects. Because the emulator is kept current even while paused, resume
 always reflects the true present screen, no matter how much output the shell
 produced while paused. "Paused" never means the session ended.
+
+A paused session keeps a live shell and emulator running with no client
+attached, and nothing reaps one whose client never returns. To make such a
+session visible, the orchestrator tracks two coarse per-session timestamps: the
+last time it received data from the client, and the last time the guest sent
+data. These are approximate — enough to tell that a session has been idle for
+hours or days — and exist so an operator can find and end abandoned sessions.
 
 ### Termination
 
@@ -158,26 +173,21 @@ signal.
 - **On container destroy:** the entire `{container_id}/` tree, including
   `sessions/`, is removed.
 
+A session socket left behind by an orchestrator crash is ignored; it is removed
+when its container is destroyed and the whole tree goes away.
+
+## Concurrency
+
+A container may run any number of simultaneous interactive sessions. There are
+no built-in limits on session count, and no separate controls beyond the
+resources the operator gives the container.
+
 ## Capability
 
 Interactive sessions require the container's image to advertise the
 `interactive` capability in its `drover.capabilities` label. The orchestrator is
 the authoritative gate and refuses sessions for images that do not advertise it.
 See `docs/capabilities.md`.
-
-## Open questions
-
-- **Stale session sockets.** How `sessions/` is swept for sockets left behind by
-  an orchestrator crash, on container start, stop, and destroy.
-- **Unresponsive guest at start.** The timeout and error path when a guest
-  neither dials the session socket nor replies `session_rejected`.
-- **Abandoned paused sessions.** What reaps a paused session whose client never
-  returns, and whether an unattached running session counts as activity for the
-  container idle-timeout reaper.
-- **Snapshot fidelity.** Whether a snapshot carries only the visible screen or
-  also includes scrollback.
-- **Concurrency.** How many simultaneous sessions a container allows, and what
-  the guest does when asked to exceed that limit.
 
 ## Related
 
