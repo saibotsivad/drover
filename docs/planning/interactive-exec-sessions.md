@@ -329,12 +329,16 @@ guest-side implementation of it in `drover-executor`:
 
 - Allocate a PTY (`pty.openpty` / `os.openpty` + `create_subprocess_exec`, or
   `pty.fork`), launch the operator's login shell (`$SHELL` or `/bin/sh`).
-- Hold the authoritative screen model in an **in-memory terminal emulator**.
-  Candidate: `pyte` (pure-Python VT-compatible `Screen`; its base `Screen` is
-  visible-grid-only, which matches the spec's visible-screen-only snapshot). It
-  is a **new external dependency**, which the executor has so far avoided (see
-  the executor README's "zero external dependencies" claim) — a deliberate
-  trade-off to weigh, vs. a vendored/minimal emulator.
+- Hold the authoritative screen model in an **in-memory terminal emulator**:
+  **`pyte`** (pure-Python VT-compatible `Screen`; its base `Screen` is
+  visible-grid-only, which matches the spec's visible-screen-only snapshot).
+  This is a deliberate exception to the executor's "zero external dependencies"
+  posture (see the executor README). We want to stay very minimal on
+  dependencies and would even take small ones in-house, but a correct VT
+  terminal emulator is a large enough lift that we don't want to own it right
+  now. **Trigger to revisit:** if we find we use only a small slice of `pyte`'s
+  surface area, or it becomes hard to maintain for our needs, investigate
+  vendoring or building just the functionality we require.
 - Apply `resize` to **both** the PTY (`fcntl.ioctl(fd, termios.TIOCSWINSZ, …)`)
   and the emulator screen (`Screen.resize`) so snapshots stay correctly
   dimensioned.
