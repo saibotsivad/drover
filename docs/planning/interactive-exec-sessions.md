@@ -112,13 +112,19 @@ container automatically.
   each). It gains a session dimension: a set of session servers/connections per
   container. A real but contained refactor.
 - The orchestrator must create the `sessions/` subdir when starting a session.
-- ⚠️ **`destroy_socket` cleanup bug.** To honor the spec's "remove the entire
-  `{container_id}/` tree including `sessions/`", note that today
-  `destroy_socket` does `unlink(orchestrator.sock)` then `os.rmdir(container_dir)`
-  (swallowing `OSError`). `rmdir` fails on a non-empty directory, so any
-  leftover `sessions/{…}.sock` would silently orphan the folder. This must
-  become a recursive removal (e.g. `shutil.rmtree`) or an explicit `sessions/`
-  sweep before the `rmdir`.
+- **`destroy_socket` does an explicit session sweep.** Today `destroy_socket`
+  does `unlink(orchestrator.sock)` then `os.rmdir(container_dir)` (swallowing
+  `OSError`); `rmdir` fails on a non-empty directory, so any leftover
+  `sessions/{…}.sock` would silently orphan the folder. The decided behaviour:
+  before removing the container directory, **iterate the `sessions/` folder, and
+  for each session socket mark its row `closed` in the `sessions` table (see
+  Database) then unlink the file**. After the sweep, remove the (now empty)
+  `sessions/` subdir and `orchestrator.sock`, then `rmdir` the container dir.
+  The same sweep runs on container **stop** (mark rows closed + unlink
+  sockets), since no session survives a stop — the only difference is stop keeps
+  the folder and `orchestrator.sock` for resume. The explicit per-session sweep
+  is preferred over a blind `shutil.rmtree` precisely because each session needs
+  its DB row reconciled, not just its file deleted.
 
 ### Open questions / unresolved (Axis 1)
 
@@ -130,10 +136,75 @@ container automatically.
   defined so orchestrator and executor can't drift. (The host path stays
   separate and self-discovered — `DROVER_SOCKETS_DIR` / `self._host_socket_dir`
   — and is not part of this in-container contract.)
-- **Per-session timestamp storage.** The spec calls for two coarse per-session
-  timestamps for operator visibility. Decide where they live (in-memory on the
-  orchestrator vs. a DB row) and whether an operator-facing listing endpoint is
-  needed to surface them.
+- **Operator-facing listing endpoint.** The `sessions` table (see Database)
+  gives durable per-session state, but whether to expose it via a REST/WS
+  listing route (and a webapp view) for operators to find and end abandoned
+  sessions is still open.
+
+### Database — new `sessions` table
+
+Sessions get their own table, one row per interactive session, modelled on the
+existing `commands` table (ULID `TEXT` PK, FK to `containers(id)`, ISO-8601
+`TEXT` timestamps, nullable `exit_code INTEGER`, a `status` column with a
+textual default, and a `container_id` index). The two coarse activity
+timestamps the spec calls for live here as columns so they survive across the
+paused-with-no-client window and are queryable by an operator.
+
+```sql
+CREATE TABLE IF NOT EXISTS sessions (
+    id                   TEXT PRIMARY KEY,           -- ULID, orchestrator-generated
+    container_id         TEXT NOT NULL,
+    status               TEXT NOT NULL DEFAULT 'starting',
+    created_at           TEXT NOT NULL,              -- ISO 8601
+    last_client_data_at  TEXT,                       -- last byte received FROM the client
+    last_guest_data_at   TEXT,                       -- last byte sent BY the guest
+    exit_code            INTEGER,                    -- NULL until terminal
+    exit_status          TEXT,                       -- how it ended (see below); NULL until terminal
+    FOREIGN KEY (container_id) REFERENCES containers(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_sessions_container_id
+    ON sessions(container_id);
+```
+
+Column notes:
+
+- **`id`** — ULID, generated like `command_id` (orchestrator-authoritative,
+  lexicographically sortable by creation time). It is the `session_id` carried
+  on every control-plane message.
+- **`status`** — lifecycle state, mirroring how `containers.status` /
+  `commands.status` are textual. Proposed values:
+  - `starting` — `session_start` sent, guest has not yet dialed.
+  - `running` — guest dialed and the PTY/emulator is live (covers both
+    transmitting and PTY-paused; pause/resume is *not* a session-lifecycle
+    state and so is deliberately not stored here).
+  - `closed` — terminal. The row is retained for audit, like `containers`
+    rows after destruction.
+- **`last_client_data_at` / `last_guest_data_at`** — the spec's two coarse
+  activity timestamps. Updated approximately (not on every byte — e.g. coalesced
+  to at most once per few seconds) so they don't become a write hotspot; "idle
+  for hours/days" granularity is all that's required.
+- **`exit_code`** — the shell's exit code, set from `session_pty_stop` for a
+  guest-initiated exit; `NULL` for sessions that never ran a shell to completion
+  (e.g. rejected, or orchestrator/operator-terminated).
+- **`exit_status`** — *how* the session ended, since `exit_code` alone can't
+  distinguish a clean shell exit from a forced teardown. Proposed values:
+  `shell_exit` (guest-initiated via `session_pty_stop`), `terminated`
+  (orchestrator/operator `session_terminate`), `rejected` (guest sent
+  `session_rejected`), `container_stopped` (swept on container stop/destroy).
+
+Lifecycle → table writes:
+
+- **start:** INSERT `status='starting'`, `created_at` set.
+- **guest dials:** UPDATE `status='running'`.
+- **`session_rejected`:** UPDATE `status='closed'`, `exit_status='rejected'`.
+- **data flowing:** UPDATE the relevant `last_*_data_at` (coalesced).
+- **`session_pty_stop`:** UPDATE `status='closed'`, `exit_status='shell_exit'`,
+  `exit_code=N`.
+- **`session_terminate` → `session_terminated`:** UPDATE `status='closed'`,
+  `exit_status='terminated'`.
+- **container stop/destroy sweep:** UPDATE any non-`closed` row to
+  `status='closed'`, `exit_status='container_stopped'`, then unlink the socket.
 
 ## Axis 2 — Client ↔ orchestrator transport
 
@@ -219,10 +290,11 @@ snapshot fidelity, and pause/resume plane are resolved above).
 
 ## Risks and Mitigations
 
-- **Recursive folder cleanup (Axis 1):** `destroy_socket`'s current `rmdir`
-  won't remove a `sessions/` subtree; switch to a recursive removal or sweep
-  `sessions/` first. (Per the spec, a crash-leftover session socket is
-  otherwise harmless — it's removed when the container is destroyed.)
+- **Folder cleanup vs. orphaned rows (Axis 1):** `destroy_socket`'s current
+  `rmdir` won't remove a populated `sessions/` subtree, and a blind delete would
+  leave `sessions` rows stuck non-terminal. Mitigation is the decided explicit
+  sweep (mark each row `closed` then unlink, before `rmdir`) — see the
+  `SocketManager` and Database notes in Axis 1.
 - **Raw-mode terminal corruption:** always restore terminal state via
   `defer`, including on panic/signal.
 - **Leaked PTYs / zombie shells:** kill the process group on
@@ -236,6 +308,9 @@ snapshot fidelity, and pause/resume plane are resolved above).
 - `docs/capabilities.md` — add the `interactive` capability row.
 - `docs/cli.md` — document `drover exec <id>` interactive behaviour.
 - `executor/README.md` — document the new PTY hook/override.
-- `orchestrator/README.md` — document the new client WS endpoint.
+- `orchestrator/README.md` — document the new client WS endpoint and the new
+  `sessions` table (the Database section lists `containers` / `commands` /
+  `command_messages`).
+- `orchestrator/database.py` — add the `sessions` table to `_SCHEMA`.
 - New ADR(s) once adopted: the transport choice (Axis 1) and the `interactive`
   capability decision are both ADR-worthy.
