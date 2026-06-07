@@ -126,20 +126,26 @@ container automatically.
   is preferred over a blind `shutil.rmtree` precisely because each session needs
   its DB row reconciled, not just its file deleted.
 
-### Open questions / unresolved (Axis 1)
+### Resolved within this plan (Axis 1)
 
-- **Path constant ownership.** The in-container path is already a *shared*
-  contract: the orchestrator owns `SOCKET_DIR` + `ORCHESTRATOR_SOCKET_NAME`
-  (`config.py`), while the executor independently hardcodes the same
-  `/var/run/drover/sockets/orchestrator.sock` as its default. Adding `sessions/`
-  + the session-socket naming extends that shared contract. Decide where it is
-  defined so orchestrator and executor can't drift. (The host path stays
-  separate and self-discovered — `DROVER_SOCKETS_DIR` / `self._host_socket_dir`
-  — and is not part of this in-container contract.)
-- **Operator-facing listing endpoint.** The `sessions` table (see Database)
-  gives durable per-session state, but whether to expose it via a REST/WS
-  listing route (and a webapp view) for operators to find and end abandoned
-  sessions is still open.
+- **Path constant ownership.** The in-container path
+  (`/var/run/drover/sockets/`, `orchestrator.sock`, the `sessions/` subdir, and
+  `sessions/{session_id}.sock`) is defined as a **specification in the docs**,
+  not shared via code or environment variables. The orchestrator enforces it in
+  practice by being the side that sets the bind mounts, and the in-container
+  relative path never changes, so there is nothing to pass around at runtime.
+  This is deliberate: it lets other engineers build their own executor-like
+  in-container application against a documented, stable contract rather than
+  against our Python `config.py` constants. (The host path stays separate and
+  self-discovered — `DROVER_SOCKETS_DIR` / `self._host_socket_dir` — and is not
+  part of this in-container contract.)
+- **Operator-facing listing endpoint.** Add a per-container
+  `GET /containers/{id}/sessions` that lists all sessions for the container,
+  newest first, as a snapshot — mirroring `GET /containers/{id}/execs`. Each
+  entry comes from the `sessions` row: `id`, `status`, `created_at`,
+  `last_client_data_at`, `last_guest_data_at`, `exit_code`, `exit_status`. Keep
+  it simple — no filters. (Consistent pagination across all list endpoints is
+  already tracked separately in `TODO.md`.)
 
 ### Database — new `sessions` table
 
@@ -308,9 +314,13 @@ snapshot fidelity, and pause/resume plane are resolved above).
 - `docs/capabilities.md` — add the `interactive` capability row.
 - `docs/cli.md` — document `drover exec <id>` interactive behaviour.
 - `executor/README.md` — document the new PTY hook/override.
-- `orchestrator/README.md` — document the new client WS endpoint and the new
-  `sessions` table (the Database section lists `containers` / `commands` /
-  `command_messages`).
+- `orchestrator/README.md` — document the new client WS endpoint, the
+  `GET /containers/{id}/sessions` listing route (in the API reference table
+  alongside the `execs` routes), and the new `sessions` table (the Database
+  section lists `containers` / `commands` / `command_messages`).
 - `orchestrator/database.py` — add the `sessions` table to `_SCHEMA`.
+- `docs/interactive-sessions.md` is the canonical home for the in-container
+  socket-path contract that third-party executor implementations build against
+  (per the path-ownership decision); keep that path spec authoritative there.
 - New ADR(s) once adopted: the transport choice (Axis 1) and the `interactive`
   capability decision are both ADR-worthy.
