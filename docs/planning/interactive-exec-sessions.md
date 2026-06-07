@@ -212,23 +212,102 @@ Lifecycle → table writes:
 - **container stop/destroy sweep:** UPDATE any non-`closed` row to
   `status='closed'`, `exit_status='container_stopped'`, then unlink the socket.
 
-## Axis 2 — Client ↔ orchestrator transport
+## Axis 2 — Client ↔ orchestrator transport — **DECIDED**
 
-**Option 2A — Extend the existing `/containers/{id}/ws`.** Start reading
-client→server frames on the same socket and route `stdin`/`resize` to the
-session.
-- *Pro:* one endpoint; the ADR anticipated exactly this.
-- *Con:* that endpoint currently also multiplexes Docker logs for *all*
-  watchers; overloading it with a 1:1 interactive session muddies its
-  contract.
+A **dedicated set of session endpoints**, not an extension of the existing
+`/containers/{id}/ws` log-fanout socket. That socket multiplexes Docker logs +
+exec output to *many* watchers; an interactive session is 1:1 with a client and
+needs its own auth/lifecycle/close semantics, so it gets its own resource tree
+under `/containers/{id}/sessions`. This also keeps a clean split: REST manages
+the session *resource* and lifecycle; a single WebSocket carries the *data
+plane* for one attached client.
 
-**Option 2B — New dedicated endpoint, e.g. `/containers/{id}/attach` (or
-`/execs/{session_id}/attach`).** A purpose-built bidirectional WS for one
-interactive session.
-- *Pro:* clean, single-purpose contract; auth/lifecycle/close semantics don't
-  have to coexist with the log-fanout endpoint; easier to reason about exit
-  codes and resize.
-- *Con:* second WS endpoint to maintain.
+### Endpoints
+
+```
+POST   /containers/{id}/sessions                  Start a session; returns {session_id}
+GET    /containers/{id}/sessions                  List sessions (newest first)   [Axis 1]
+GET    /containers/{id}/sessions/{session_id}     Get session DB state
+GET    /containers/{id}/sessions/{session_id}/ws  Attach: bidirectional PTY WebSocket
+DELETE /containers/{id}/sessions/{session_id}     Terminate the session
+```
+
+**`POST /containers/{id}/sessions`** — the only place the **`interactive`
+capability gate** runs (`422` if the image doesn't advertise it, mirroring
+`exec`). On success the orchestrator, in order: generates the `session_id`
+(ULID), creates and listens on the session socket, INSERTs the `sessions` row
+(`status='starting'`), sends `session_start` over the control plane, and
+returns `201 {"session_id": "…"}`. The body is empty — a session needs no
+parameters beyond the container. Returns `404` for an unknown container and
+`409` if the container isn't `running`.
+
+**`GET /containers/{id}/sessions/{session_id}`** — returns the `sessions` row
+verbatim (`id`, `status`, `created_at`, `last_client_data_at`,
+`last_guest_data_at`, `exit_code`, `exit_status`). Works regardless of whether
+the session is currently attached or even still running — it reads the DB, so a
+`closed` session is still inspectable for audit. `404` if the row doesn't
+exist.
+
+**`GET /containers/{id}/sessions/{session_id}/ws`** — the **attach** point. A
+bidirectional WebSocket bridging the client to the session socket's data plane:
+PTY output (and the snapshot) flow WS→client; `stdin` and `resize` flow
+client→WS→guest. The orchestrator forwards bytes verbatim (it never parses the
+data plane). This endpoint *is* "the orchestrator's view of the client" that
+drives pause/resume:
+
+- **On WS connect:** the orchestrator sends `session_pty_resume` on the control
+  plane → the guest emits a fresh snapshot, then live output.
+- **On WS disconnect:** the orchestrator sends `session_pty_pause` → the guest
+  stops transmitting but keeps the session live.
+
+Reconnect is just a new WS to the same `session_id` (no new `session_start`),
+which is why attach is a `GET …/ws` on an existing resource rather than part of
+create. Whether a second concurrent WS to the same session is rejected or
+takes over is an open question below.
+
+**`DELETE /containers/{id}/sessions/{session_id}`** — terminate. Sends
+`session_terminate`, waits for the guest's `session_terminated` ack, then
+unlinks the socket and marks the row `closed` / `exit_status='terminated'`
+(see Axis 1 cleanup). Idempotent: deleting an already-`closed` session is a
+no-op `200/204`. Chosen as `DELETE` to parallel `DELETE /containers/{id}`
+(graceful, no body) rather than `PUT`, which would imply a state replacement we
+don't model.
+
+### Why DELETE and not a `/kill` with a signal
+
+`session_terminate` carries no signal today — it's a full teardown of the
+shell/PTY/emulator. An operator who wants to send a signal *to the shell*
+(Ctrl-C, `SIGTERM`) can already do it as `stdin` over the data plane **while
+attached**; that needs no new REST verb. A REST kill is therefore only useful
+for a *detached* abandoned session, where "tear it down" is exactly what
+`DELETE` already means. So v1 keeps termination signal-free. If a detached
+"send signal N to the shell" capability is wanted later, the better-shaped
+addition is `POST /containers/{id}/sessions/{session_id}/signal` with
+`{"signal": N}` (and a matching control-plane message), not overloading
+terminate — recorded as a possible extension, not in scope.
+
+### Authentication
+
+All five endpoints reuse the standard API auth. The three plain REST routes go
+through `auth_middleware` like every other REST endpoint. The `…/ws` route
+authenticates explicitly in-handler, reusing the **exact** scheme from
+`websockets.py`: `Authorization: Bearer <token>`, falling back to `?token=` for
+browser clients that can't set WS headers, compared with the same constant-time
+`hash_api_key` check, closing with `1008 Policy Violation` on failure. No new
+auth mechanism is introduced — this resolves the "Auth on the client endpoint"
+open question.
+
+### Open questions (Axis 2)
+
+- **Concurrent attach.** If a second WS opens for a session that already has a
+  live client, does the orchestrator reject it (`409`-style close) or let it
+  take over (and pause/close the first)? Single-writer is simplest; "take over"
+  is friendlier for a stale-connection reconnect. Leaning reject-second for v1.
+- **PTY framing over the WS.** Raw binary WS frames (PTY bytes are binary; the
+  data plane is already byte-verbatim) vs. a JSON/base64 envelope to carry
+  `resize` alongside `stdin`. Leaning **binary frames for PTY data + a small
+  JSON control frame for `resize`**, but the exact framing is unsettled — see
+  Open Questions.
 
 ## Axis 3 — Executor PTY mechanics (new)
 
@@ -269,9 +348,10 @@ guest-side implementation of it in `drover-executor`:
   `orchestrator.sock` inside) has landed in `main`; remaining work is the
   `sessions/` subfolder and per-session sockets on top of it (see Axis 1
   above).
-- **Axis 2: 2B** — a dedicated client WS endpoint keeps the overloaded
-  log-fanout WS contract clean and gives interactive sessions their own
-  lifecycle/exit semantics. Still open for discussion.
+- **Axis 2: decided** — a dedicated session resource tree under
+  `/containers/{id}/sessions` (POST to start, GET for state, `…/ws` to attach,
+  DELETE to terminate), reusing the existing API auth incl. the WS
+  Bearer/`?token=` scheme (see Axis 2 above).
 - **Axes 3 & 4** proceed regardless of the transport choices.
 
 The capability key is **`interactive`** (per the spec), gated in
@@ -280,14 +360,16 @@ The capability key is **`interactive`** (per the spec), gated in
 
 ## Open Questions
 
-These are the cross-cutting questions the spec does **not** settle (it covers
-Axis 1 transport/lifecycle only; capability, concurrency, persistence,
-snapshot fidelity, and pause/resume plane are resolved above).
+These are the cross-cutting questions still unsettled. The spec covers Axis 1
+transport/lifecycle only; capability, concurrency, persistence, snapshot
+fidelity, pause/resume plane (Axis 1), and client-endpoint **auth** (Axis 2)
+are all resolved above.
 
-- **PTY output framing (Axis 2):** base64 vs. a binary WS frame type between
-  client and orchestrator, to avoid bloating interactive latency.
-- **Auth on the client endpoint (Axis 2):** reuse the WS Bearer/`?token=`
-  scheme from `websockets.py` verbatim.
+- **PTY framing over the client WS (Axis 2):** binary WS frames for PTY bytes
+  vs. a JSON/base64 envelope — and how `resize` rides alongside `stdin`.
+  Leaning binary for PTY data plus a small JSON control frame for `resize`.
+- **Concurrent attach (Axis 2):** reject a second WS to an already-attached
+  session vs. take-over. Leaning reject-second for v1.
 - **Idle-timeout reaper interaction:** the spec's coarse per-session timestamps
   give operator *visibility*, but it does not say whether a live (unattached)
   session counts as container activity for the existing idle reaper, which keys
@@ -314,10 +396,11 @@ snapshot fidelity, and pause/resume plane are resolved above).
 - `docs/capabilities.md` — add the `interactive` capability row.
 - `docs/cli.md` — document `drover exec <id>` interactive behaviour.
 - `executor/README.md` — document the new PTY hook/override.
-- `orchestrator/README.md` — document the new client WS endpoint, the
-  `GET /containers/{id}/sessions` listing route (in the API reference table
-  alongside the `execs` routes), and the new `sessions` table (the Database
-  section lists `containers` / `commands` / `command_messages`).
+- `orchestrator/README.md` — document the full `/containers/{id}/sessions`
+  route set (POST start, GET list, GET one, `…/ws` attach, DELETE terminate) in
+  the API reference table alongside the `execs` routes, and the new `sessions`
+  table (the Database section lists `containers` / `commands` /
+  `command_messages`).
 - `orchestrator/database.py` — add the `sessions` table to `_SCHEMA`.
 - `docs/interactive-sessions.md` is the canonical home for the in-container
   socket-path contract that third-party executor implementations build against
