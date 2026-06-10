@@ -157,21 +157,31 @@ For each container row not already terminal (`destroyed` / `error`):
       the Docker-derived status.
     - Still `running` ⇒ **re-listen on the control socket** (`create_socket`)
       and resume log capture.
-- **Intent (adds active liveness):** for a row that the DB and Docker agree is
-  `running` *and* whose control socket file exists, re-listening is not enough —
-  the guest may be wedged, or the container may be a zombie. After re-listening,
-  the orchestrator should **ping** the guest and wait for a **pong**:
+- **Intent — `initializing` / `resuming` rows are stopped, not removed.** These
+  rows *were* interrupted mid-transition, but the Docker container may already be
+  running and may hold user state worth keeping. Reconciliation should **stop**
+  the container (leaving it `stopped`, resumable) and mark it with a clear reason
+  rather than force-removing it. Destroying it discards potentially valuable
+  micro-container state for no reason — a stop is reversible, a remove is not.
+- **Intent — active liveness for `running` rows.** For a row that the DB and
+  Docker agree is `running` *and* whose control socket file exists, re-listening
+  is not enough — the guest may be wedged, or the container may be a zombie.
+  After re-listening, the orchestrator should **ping** the guest and wait for a
+  **pong**:
   - pong within the timeout ⇒ confirmed alive, leave `running`.
   - no pong within the reaper timeout (or no socket file, or the guest never
-    re-dials) ⇒ stop/remove the container via Docker and mark it terminal with a
-    specific reason such as `unreachable_after_orchestrator_restart`.
+    re-dials) ⇒ stop the container via Docker (again, **stop**, not remove —
+    preserve state) and mark it terminal with a specific reason such as
+    `unreachable_after_orchestrator_restart`.
   - Docker reports it is **not** running (exited while we were down) ⇒ mark
     terminal with `exited_while_orchestrator_offline`.
-- **Gap:** the ping/pong handshake and the two specific reasons above don't
-  exist yet. Today a wedged-but-`running` container is simply re-listened and
-  left alone, and a container that exited while the orchestrator was offline is
-  marked with the generic Docker-derived `stopped`, losing the "while we were
-  offline" nuance.
+- **Gap:** two deltas from today. (1) The ping/pong handshake and the specific
+  reasons above don't exist; a wedged-but-`running` container is simply
+  re-listened and left alone, and a container that exited while offline is marked
+  with the generic Docker-derived `stopped`. (2) **Today, `initializing` /
+  `resuming` rows are force-*removed*** (`error` / `orchestrator_crash`, Docker
+  container deleted) — the intent above changes this to a non-destructive stop so
+  user state on the micro-container survives.
 
 #### 2. Exec commands
 
@@ -179,14 +189,26 @@ For each container row not already terminal (`destroyed` / `error`):
   orchestrator crashed stays that way forever. Any output the guest produced
   during the gap is lost (it was written to a dropped socket), and there is no
   catch-up.
-- **Intent (for discussion):** at minimum, reconcile orphaned in-flight
-  commands to a terminal state with a specific reason (e.g.
-  `orchestrator_offline`) so they don't appear perpetually running. Whether to
-  attempt *recovery* of a command still running in the guest (re-attach and keep
-  streaming) is an open question — it is lower value than session recovery
-  because exec is already a poll/replay model, but the same control socket is
-  available to do it.
-- **Gap:** command reconciliation is entirely unimplemented.
+- **Intent — mark orphaned commands failed; let the user judge the container.**
+  Reconciliation marks any in-flight (`pending` / `running`) command terminal
+  with a clear failed reason (e.g. `orchestrator_offline`) so it doesn't appear
+  perpetually running. The orchestrator does **not** try to reason about whether
+  the command itself actually succeeded inside the guest — that's lost
+  information across the gap — so it marks the *command* failed and leaves it to
+  the user to inspect the container and decide what really happened.
+- **Intent — keep capturing output, but mark the restart in the stream.** Even
+  though the command is marked failed, the guest may keep running and, once the
+  control socket is re-established after restart, **more output for that command
+  can still stream in**. We should keep persisting those messages exactly as we
+  do now (don't drop late output), and write a **marker into the message stream**
+  at the point the orchestrator restarted — a sentinel `command_messages` entry
+  carrying the restart timestamp — so anyone reading the log can see "the
+  orchestrator restarted here; everything below arrived after reconciliation
+  marked the command failed." This keeps the audit trail honest without trying to
+  un-fail the command.
+- **Gap:** command reconciliation is entirely unimplemented — no mark-failed
+  pass, no restart marker in the stream, and late output after a re-established
+  socket is currently lost because the row is never reconciled to begin with.
 
 #### 3. Interactive sessions
 
@@ -367,12 +389,18 @@ additions (names open for bikeshedding), to be applied consistently across
    (re-listen + guest re-dial + resume) as the target, with kill only as the
    fallback when the container is gone or the guest doesn't re-establish.
 2. **Ping/pong vs. passive heartbeat** for the restart liveness check (above).
-3. **Exec-command reconciliation** — mark-orphaned-terminal only, or also attempt
-   re-attach to a still-running command?
-4. **Micro-container race recovery** — recovering a guest that was mid-dial or
+3. **Micro-container race recovery** — recovering a guest that was mid-dial or
    mid-handshake when the orchestrator crashed may have edge cases worth a
    dedicated, separately-scoped hardening pass rather than blocking this work.
-5. **Final naming** of the error/exit reasons in the registry above.
+4. **Final naming** of the error/exit reasons in the registry above.
+
+**Recently decided** (folded into the sections above):
+
+- *Exec-command reconciliation* — mark orphaned commands **failed**, do **not**
+  attempt to re-judge or recover them; keep capturing any late output after the
+  socket is re-established and write a restart marker into the message stream.
+- *`initializing` / `resuming` containers on restart* — **stop, don't remove**,
+  to preserve user state on the micro-container.
 
 Once these are settled, the follow-up is a sweep of `docs/interactive-sessions.md`,
 `docs/exec-commands.md`, the orchestrator `README.md`, and the relevant code
