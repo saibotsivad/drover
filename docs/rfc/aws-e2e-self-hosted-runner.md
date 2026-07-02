@@ -36,17 +36,17 @@ Two things motivate this, one primary and one secondary.
    root-owned Docker. So the single most important thing we ship (the documented
    operator install) is the one thing our e2e never actually runs against.
 
-2. **A clean, isolated Docker daemon we control (secondary).** The original ask
-   was for a "fully isolated and clean Docker install so we aren't mutating
-   state and muddying tests." Worth stating plainly: **GitHub-hosted runners
-   already provide isolation** — each run is a fresh, discarded VM. So isolation
-   alone does not justify EC2. What EC2 *adds* is **control**: we choose the
-   daemon mode (rootless), the `daemon.json`, the gVisor version and flags, the
-   kernel/instance type, and we pin all of it in a reproducible image instead of
-   inheriting "whatever `ubuntu-latest` is this month."
+2. **A clean, isolated Docker daemon we control (secondary).** A stated goal is
+   a fully isolated, clean Docker install so runs don't mutate shared state or
+   muddy results. **GitHub-hosted runners already provide that isolation** —
+   each run is a fresh, discarded VM — so isolation alone does not justify EC2.
+   What EC2 *adds* is **control**: we choose the daemon mode (rootless), the
+   `daemon.json`, the gVisor version and flags, the kernel/instance type, and we
+   pin all of it in a reproducible image instead of inheriting whatever the
+   hosted `ubuntu-latest` image happens to be at a given time.
 
-If isolation were the only goal, we would not build this. The case rests on
-fidelity to the documented install and control over the daemon.
+The case rests on fidelity to the documented install and control over the
+daemon, not on isolation alone.
 
 ## Background: how e2e works today
 
@@ -102,12 +102,12 @@ flowchart TD
     E -->|native job result| H["pr-e2e-labels → e2e:aws:pass / e2e:aws:failing"]
 ```
 
-### Why self-hosted runner over "fire-and-report"
+### Why a self-hosted runner rather than "fire-and-report"
 
-The original brainstorm imagined GitHub kicking off an AWS "template" that runs
-the work and then reports back via an API call. That works, but the
-**ephemeral self-hosted runner** shape is strictly less plumbing for the same
-outcome:
+An alternative design has GitHub launch an AWS resource (e.g. a CloudFormation
+stack) that runs the suite and reports back via an API call, then
+self-terminates. That works, but the **ephemeral self-hosted runner** shape is
+strictly less plumbing for the same outcome:
 
 - **Reporting is native.** The e2e job is a real GitHub job, so status, the
   Checks UI, and artifact upload all work as they do today. We do **not** build
@@ -183,10 +183,10 @@ These are not optional for a lane that spends money and holds cloud credentials:
 
 ## Scriptable for an AI agent (without handing out AWS keys)
 
-A contributor — or an AI agent "given permission" — should be able to kick this
-off against a working branch **without ever touching AWS credentials**. The
-cleanest design keeps GitHub as the sole holder of AWS access (via OIDC) and
-gives the agent only a thin wrapper:
+A contributor — or an AI agent granted permission to contribute — should be able
+to kick this off against a working branch **without ever touching AWS
+credentials**. The design keeps GitHub as the sole holder of AWS access (via
+OIDC) and gives the caller only a thin wrapper:
 
 ```bash
 # scripts/e2e-aws.sh  (sketch)
@@ -194,9 +194,9 @@ gh workflow run e2e-aws.yml --ref "$BRANCH"
 gh run watch     # surface pass/fail + artifact link
 ```
 
-So "if given permission" reduces to "the agent holds a scoped `gh` token with
-`actions:write`" — a much smaller blast radius than distributing AWS keys, and
-every run is auditable in the Actions log.
+Triggering therefore requires only a scoped `gh` token with `actions:write` — a
+much smaller blast radius than distributing AWS keys, and every run is auditable
+in the Actions log.
 
 ## What's involved
 
@@ -266,10 +266,10 @@ Things that do **not** change:
   but never tests the rootless install path — the primary motivation.
 - **Fire-and-report CloudFormation template.** GitHub launches a stack whose
   `UserData` runs the suite and reports back via the Commit Status / Check Run
-  API, then self-terminates. Matches the original mental model and fully
-  decouples AWS from Actions, but we own token threading, reliable callback (even
-  on crash), and log retrieval (S3/CloudWatch). Kept as a fallback if we ever
-  want the AWS side independent of GitHub Actions.
+  API, then self-terminates. This fully decouples AWS from GitHub Actions, but we
+  own token threading, reliable callback (even on crash), and log retrieval
+  (S3/CloudWatch). Kept as a fallback if the AWS side ever needs to be
+  independent of GitHub Actions.
 - **Static AWS keys in GitHub secrets** instead of OIDC. Rejected: long-lived
   cloud credentials in CI are exactly the blast-radius we don't want, especially
   for an agent-triggerable lane.
