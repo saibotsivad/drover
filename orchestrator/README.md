@@ -296,7 +296,7 @@ The orchestrator and guest agents communicate over a per-container Unix socket u
 {"type": "command", "id": "<cmd_id>", "exec": "git clone ..."}
 ```
 
-The [executor](../executor/README.md) library implements this protocol for Python-based guest agents. For other languages or shells, write directly to the socket. See the main README for a minimal bash example.
+The [executor](../executor/README.md) library implements this protocol for Python-based guest agents. For other languages or shells, write directly to the socket. See [docs/container-initialization.md](../docs/container-initialization.md) for a minimal bash example.
 
 ## Database
 
