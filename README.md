@@ -1,406 +1,234 @@
 # Drover
 
-Drover is a container orchestration tool primarily meant for homelab work.
+Drover is a container orchestration tool for homelab work. You run a single
+long-lived **orchestrator** that exposes a REST API, and through that API
+you launch **ephemeral micro-containers** on demand: lightweight, isolated
+Linux environments that spin up to do a job and are stopped or destroyed
+when they're done.
 
-You run an orchestrator which exposes an API through which you can launch ephemeral micro-containers.
+Think of it as a function-as-a-service where the "functions" are whole
+micro Linux operating systems. A caller asks the orchestrator to launch a
+named image, sends it commands, streams back the output, and lets the
+orchestrator handle every lifecycle detail in between. As with AWS Lambda,
+callers never touch Docker directly and arbitrary images are not
+permitted — only specifically labeled images installed on the host are
+available to launch.
 
-Think of it something like a function-as-a-service where the functions are lightweight Linux operating systems.
-
-## Terminology
+## Concepts
 
 | Term | Definition |
 |---|---|
-| **Host** | Bare metal machine running Docker in [rootless](https://docs.docker.com/engine/security/rootless/) mode |
-| **Orchestrator** | Docker container managing the micro-container fleet |
-| **Micro-container** | Short-lived ephemeral containers managed by the orchestrator |
-| **Privileged micro-container** | Micro-container with access to the host Docker socket, for build and setup tasks |
+| **Host** | Bare-metal machine running Docker in [rootless](https://docs.docker.com/engine/security/rootless/) mode. |
+| **Orchestrator** | The long-lived Docker container that manages the micro-container fleet and serves the API. |
+| **Micro-container** | A short-lived, ephemeral container launched and managed by the orchestrator. |
+| **Privileged micro-container** | A micro-container with access to the host Docker socket, used for build and setup tasks. |
 
----
+## How it works
 
-## Overview
-
-The orchestrator is the core application, it runs as a Docker container on the host. It exposes a REST API for callers to create, command, stop, resume, and destroy micro-containers. Each micro-container is an instance of an operator-managed image, launched on demand, communicated with via a Unix socket, and stopped or destroyed when no longer needed.
-
-This is conceptually similar to AWS Lambda: a caller creates an image and sends commands, the orchestrator handles all lifecycle details. Arbitrary images are not permitted, only specifically named images on the host are available.
-
----
-
-## Command-Line Client
-
-The `drover` CLI is a single-binary client for the orchestrator REST API. It lets you list images, launch and manage micro-containers, and run exec commands from a terminal or script without hand-writing HTTP requests. It authenticates through the `DROVER_API_URL` and `DROVER_API_KEY` environment variables, prints JSON to stdout so output composes with `jq`, and ships as a cross-compiled binary installed via the umbrella release's `install.sh`.
-
-- Usage reference (commands, flags, JSON output, exit codes): [docs/cli.md](docs/cli.md)
-- Installation: see [docs/releases.md](docs/releases.md#installation)
-- Contributing (build/test/lint, layout): [cli/README.md](cli/README.md)
-
----
-
-## Host Setup
-
-To run this system, the host requires:
-
-1. **Docker in rootless mode** running as the operator user
-2. **The orchestrator container** started with the mounts described below
-3. **At least one micro-container image** built with the required Drover labels (`drover.managed=true` and `drover.name=<name>`) so the orchestrator has something to launch (see [Image Management](#image-management))
-4. (Optional) **A privileged container image** built and available on the host (required only if privileged micro-containers will be used)
-
----
-
-## Orchestrator Container
-
-### Container paths and host bindings
-
-The orchestrator container internally uses the following bindable paths, the operator binds host paths to the in-container locations.
-
-| In-container path | Purpose |
-|---|---|
-| `/var/lib/drover/data/` | Orchestrator database (SQLite) and config files. |
-| `/var/lib/drover/logs/` | Orchestrator logs and (if configured) the captured micro-container stdout/stderr |
-| `/var/run/docker.sock` | Host Docker daemon socket, **must** be bind-mounted in from the host. |
-| `/var/run/drover/sockets/` | Per-micro-container Unix socket directory, **must** be bind-mounted in from the host path. (The orchestrator entrypoint chowns this directory to UID 1000 on startup.) |
-
-The Docker socket of the **host** container is usually in one of two places:
-- `/run/user/1000/docker.sock` in **rootless** mode
-- `/var/run/docker.sock` in **rootful** mode
-
-The sample [`docker-compose.yml`](docker-compose.yml) shows recommended host bindings.
-
-### Dependencies
-
-The orchestrator is built on FastAPI (with Uvicorn), aiosqlite for async SQLite access, and httpx for Docker API communication. Notably, there is no Docker Python SDK — the orchestrator talks directly to the Docker Engine REST API over the mounted Unix socket via httpx. This keeps the dependency tree minimal and gives full control over API calls.
-
-### Responsibilities
-
-- Exposes a REST API for micro-container lifecycle management
-- Maintains state in SQLite (for each micro-container: container ID, image, privileged flag, status, socket path, other metadata)
-- Creates Unix sockets per micro-container in the shared socket directory before a container is started
-- Issues Docker API calls to create, start, stop, and destroy micro-containers
-- Routes commands and responses between API callers and micro-containers via those sockets
-
-### Security
-
-- Standard micro-containers run under gVisor (`--runtime=runsc`) for syscall interception
-- Orchestrator itself runs as UID 1000 to match the rootless Docker daemon
-
-### Environment variables
-
-| Variable | Required | Default | Description |
-|---|---|---|---|
-| `DROVER_API_KEY` | No | _(unset)_ | SHA-256 hash of the API key. When set, all API requests (except `GET /health`) require a valid `Authorization: Bearer <key>` header. See [Authentication](#authentication). |
-| `PRIVILEGED_IMAGE` | No | _(unset)_ | Docker image for privileged micro-containers. If unset, privileged container requests are rejected. |
-| `REAPER_INTERVAL_SECONDS` | No | `5` | How often (in seconds) the idle-timeout reaper runs. |
-| `DROVER_INIT_TIMEOUT_SECONDS` | No | `20` | Maximum time a container may spend in `initializing` or `resuming` before the watchdog transitions it to `error`. Covers both first init and the resume-after-stop handshake. |
-| `LOG_LEVEL` | No | `INFO` | Python log level (`DEBUG`, `INFO`, `WARNING`, `ERROR`). |
-| `DROVER_ENABLE_CONTAINER_LOGS` | No | _(unset)_ | When set to the string `true`, Drover captures each micro-container's stdout/stderr through the orchestrator. See [docs/observability.md](docs/observability.md). |
-| `DROVER_LOG_MAX_FILE_BYTES` | No | `10485760` (10 MiB) | Per-file size threshold for log rotation of orchestrator-captured micro-container logs. Ignored when capture is disabled. |
-
-### Container log retention
-
-When `DROVER_ENABLE_CONTAINER_LOGS=true` on the orchestrator, Drover captures each micro-container's stdout/stderr to the orchestrator volume under the bindable path `/var/lib/drover/logs/` so that log history survives micro-container
-and orchestrator lifecycle events. See [docs/observability.md](docs/observability.md) for full retention model, on-disk format, and log-shipper examples.
-
----
-
-## Authentication
-
-The orchestrator supports optional bearer-token authentication via the `DROVER_API_KEY` environment variable. When set, every API request (except `GET /health`) must include an `Authorization: Bearer <key>` header. Requests without a valid token receive a `401 Unauthorized` response.
-
-This is designed as a simple security layer for homelab use. If you plan to expose the API to the public internet, you should add additional layers of security (reverse proxy with TLS, IP allowlisting, etc.).
-
-### Setup
-
-1. Generate a key and its SHA-256 hash using the included helper script:
+The orchestrator is the core of Drover. It runs as a Docker container on
+the host and exposes a REST API to create, command, stop, resume, and
+destroy micro-containers. Each micro-container is an instance of an
+operator-provided image, launched on demand, communicated with over a Unix
+socket, and stopped or destroyed when no longer needed.
 
 ```
-python scripts/generate_api_key.py
+Host (bare metal, rootless Docker)
+└── orchestrator container
+    ├── REST API      ←  callers (CLI, webapp, scripts, CI)
+    ├── Docker client →  creates / starts / stops micro-containers
+    └── Unix sockets  ↔  guest agents inside micro-containers
 ```
 
-Example output:
+A few design choices shape the whole system:
 
-```
-Plain-text key : m7x...Qf8
-SHA-256 hash   : a1b2c3d4...
+- **Direct Docker Engine API.** The orchestrator talks to the Docker daemon
+  straight over the mounted Unix socket using `httpx` — there is no Docker
+  Python SDK. This keeps the dependency tree minimal and gives full control
+  over the API calls. It is built on FastAPI/Uvicorn with `aiosqlite` for
+  async state.
+- **Isolation by default.** Standard micro-containers run under
+  [gVisor](https://gvisor.dev/) (`--runtime=runsc`) for syscall
+  interception; only explicitly privileged containers bypass it to reach
+  the host Docker socket.
+- **Label-based image discovery.** The orchestrator only launches images
+  that carry the `drover.*` labels, so arbitrary images can never be run.
+- **Socket protocol.** Each micro-container gets a per-container Unix socket
+  carrying newline-delimited JSON. A guest agent inside the container
+  connects once, signals readiness, sends heartbeats, and streams command
+  output back. The orchestrator tracks each container through a lifecycle
+  state machine and reaps idle ones automatically.
 
-Set the hash as your environment variable:
-  export DROVER_API_KEY="a1b2c3d4..."
+For the full picture — the REST API reference, the lifecycle state machine,
+mounts, and the on-the-wire socket protocol — see the
+[orchestrator README](orchestrator/README.md). The initialization/resume
+handshake and the exec command flow are documented in
+[docs/container-initialization.md](docs/container-initialization.md) and
+[docs/exec-commands.md](docs/exec-commands.md).
 
-Pass the plain-text key in API requests:
-  curl -H 'Authorization: Bearer m7x...Qf8' http://localhost:8000/images
-```
+## Components
 
-You can also hash an existing key:
+Drover is a single repository of independently-versioned components:
 
-```
-python scripts/generate_api_key.py --key "my-secret-key"
-```
-
-2. Pass the **hash** (not the plain-text key) to the orchestrator via the `DROVER_API_KEY` environment variable:
-
-```
-docker run -e DROVER_API_KEY="a1b2c3d4..." ...
-```
-
-3. Include the **plain-text key** in API requests:
-
-```
-curl -H "Authorization: Bearer m7x...Qf8" http://localhost:8000/containers
-```
-
-### How It Works
-
-The caller sends the plain-text API key in the `Authorization: Bearer` header. The orchestrator hashes the provided key with SHA-256 and compares it (using constant-time comparison) against the pre-hashed value in `DROVER_API_KEY`. The plain-text key is never stored on the server.
-
-If `DROVER_API_KEY` is not set, authentication is disabled and all requests are allowed. The orchestrator logs a warning at startup when authentication is disabled.
-
-The `GET /health` endpoint is always accessible without authentication so that load balancers and monitoring tools can check availability.
-
----
-
-## Micro-Container
-
-Both standard and privileged micro-containers share the same lifecycle, socket protocol, and timeout mechanics. The only differences are the image used and the sockets mounted into them.
-
-### Mounts
-
-| | Standard | Privileged |
+| Component | What it is | Docs |
 |---|---|---|
-| `/var/run/drover/sockets/orchestrator.sock` | Orchestrator command socket | Orchestrator command socket |
-| `/run/docker.sock` | No | Passes through host Docker socket |
-| gVisor runtime | Yes | No |
+| **Orchestrator** | The core service: REST API, Docker orchestration, state, socket routing. | [orchestrator/README.md](orchestrator/README.md) |
+| **CLI** (`drover`) | Single-binary command-line client for the API. | [docs/cli.md](docs/cli.md) · [cli/README.md](cli/README.md) |
+| **Executor** | Python guest-agent library that runs inside micro-containers. | [executor/README.md](executor/README.md) |
+| **Webapp** | Optional htmx-based management UI that fronts the orchestrator. | [webapp/README.md](webapp/README.md) |
+| **Builder** | Reference privileged image (executor + Docker CLI + git) for building images. | [builder/README.md](builder/README.md) |
 
-A privileged micro-container uses the image named by `PRIVILEGED_IMAGE` directly and is not subject to the `drover.managed` label requirement. It also bypasses gVisor, allowing for more system interop as needed.
+## Installation
 
-To bind-mount the host Docker socket into a privileged micro-container, the orchestrator needs the socket's path **on the host**, not its in-container path — Docker resolves nested bind-mount sources against the host filesystem, not against the orchestrator's view. The orchestrator discovers the host path at startup by self-inspecting through the Docker API: it asks Docker for its own container's record and reads the `Source` of the mount whose `Destination` is `/var/run/docker.sock`. No environment variable is needed; the host path you set in the compose volume binding is what gets used.
+### Requirements
 
-### Socket Protocol
+To run Drover, the host needs:
 
-The socket at `/var/run/drover/sockets/orchestrator.sock` is the single bidirectional communication channel, carrying newline-delimited JSON. The orchestrator bind-mounts a per-container folder into the micro-container at `/var/run/drover/sockets/`; the guest agent connects once at startup and maintains a persistent connection.
+1. **Docker in rootless mode**, running as the operator user.
+2. **The `runsc` (gVisor) runtime** registered with Docker, so standard
+   micro-containers can be isolated. See
+   [docs/install-runsc-gvisor.md](docs/install-runsc-gvisor.md).
+3. **The orchestrator container**, started with the mounts described in the
+   [orchestrator README](orchestrator/README.md#mounts).
+4. **At least one micro-container image** carrying the required Drover labels
+   so the orchestrator has something to launch (see
+   [Images](#images-and-builders)).
+5. *(Optional)* **A privileged image** on the host — required only if you
+   plan to use privileged micro-containers for builds.
 
-**Inbound (orchestrator-to-container):**
+### Run the orchestrator
 
-```json
-{ "type": "command", "id": "abc123", "exec": "git clone https://github.com/org/repo" }
+The quickest path is the pinned, signed compose stack attached to each
+release. Download it and bring the stack up:
+
+```sh
+curl -fsSL -O https://github.com/saibotsivad/drover/releases/latest/download/docker-compose.yml
+docker compose up -d
 ```
 
-**Outbound (container-to-orchestrator):**
+Every image reference in the released compose file is pinned by digest, so
+a `compose up` is byte-identical to what was tested at release time. The
+[sample `docker-compose.yml`](docker-compose.yml) in this repo shows the
+recommended host bindings and can be used as a starting point for a custom
+setup. For the full release/verification story see
+[docs/releases.md](docs/releases.md).
 
-```json
-{ "type": "ready" }
-{ "type": "heartbeat" }
-{ "type": "output", "id": "abc123", "stream": "stdout", "data": "Cloning into 'repo'..." }
-{ "type": "output", "id": "abc123", "stream": "stderr", "data": "Receiving objects: 100%" }
-{ "type": "result", "id": "abc123", "exit_code": 0 }
-{ "type": "done" }
+### Install the CLI
+
+```sh
+curl -fsSL https://github.com/saibotsivad/drover/releases/latest/download/install.sh | sh
 ```
 
-The `ready` message is sent once after the guest agent finishes its startup work (see [Container Initialization](docs/container-initialization.md)). The orchestrator transitions the container from `initializing` to `running` only when this message arrives.
+The installer detects your OS/arch, verifies the binary's checksum, and
+installs `drover` to `/usr/local/bin`. Supply-chain-conscious users can
+verify the signed installer first — see
+[docs/releases.md#installation](docs/releases.md#installation).
 
-The normal stdout captured by Docker logs is unstructured debug output only, it has no semantic meaning to the orchestrator or Drover overall.
+## Using Drover
 
-### Done Signal
+Point the CLI at your orchestrator and authenticate through two environment
+variables:
 
-A container can send `{"type": "done"}` to indicate it has finished its work and is ready to be stopped. The orchestrator immediately initiates the `running → stopping → stopped` transition, without waiting for the idle timeout. This is useful for short-lived containers that complete a task and want to release resources promptly.
-
-### Timeout and Auto-Stop
-
-Each container provides an idle timeout set at creation time. The orchestrator tracks `last_seen` per container, updated on every inbound socket message (including heartbeats). A background task periodically checks all running containers and stops any where `now - last_seen > timeout`.
-
-This means:
-
-- A container that never connects is stopped after timeout
-- A container that finishes work and goes quiet is stopped after timeout
-- A container whose process crashes stops sending heartbeats and is stopped after timeout
-- A container that sends a `done` signal is stopped immediately
-
-The guest agent is responsible for sending heartbeats at an interval shorter than the configured timeout. To shut down early, the agent can send a `done` signal.
-
----
-
-## Image Management
-
-### Label Contract
-
-Workload images are identified by two Docker labels baked in at build time:
-
-| Label | Value | Required |
-|---|---|---|
-| `drover.managed` | `"true"` | yes |
-| `drover.name` | short name used to launch containers (e.g. `"python-runner"`) | yes |
-| `drover.capabilities` | comma-separated list of capability keys the image supports (e.g. `"exec"`) | no |
-
-An image without both required labels is invisible to Drover. The `drover.*` namespace is reserved for future Drover-specific metadata (templates, versions, etc.).
-
-The optional `drover.capabilities` label advertises which capability-gated features a container supports; the orchestrator rejects requests for an undeclared capability and the webapp hides the corresponding controls. See [docs/capabilities.md](docs/capabilities.md) for the authoritative reference.
-
-Because labels are baked into the image and survive re-tagging, the same image can be pulled from any registry (e.g. `ghcr.io/saibotsivad/drover-builder:latest`) and the orchestrator will still recognise it by label.
-
-List and validation operations use `docker image ls --filter label=drover.managed=true`.
-
-The privileged image is operator-supplied, named by the `PRIVILEGED_IMAGE` env var, and is not managed through the image or container API.
-
-### Image Build
-
-Because a privileged micro-container has access to the host Docker socket and shares the same lifecycle as any other container, image building is just another container workload that the Drover operator manages.
-
-The only constraint is that the resulting image must carry the required labels. In a `Dockerfile`:
-
-```dockerfile
-LABEL drover.managed="true"
-LABEL drover.name="my-image"
+```sh
+export DROVER_API_URL=https://drover.example.com
+export DROVER_API_KEY=sk-...     # the plain-text key; omit if auth is disabled
 ```
 
-Or, if the image is defined in a `docker-compose.yml`, the same labels can be applied at build time via the `labels` key on the build step:
+A minimal end-to-end flow — launch a container, run a command, tear it
+down:
 
-```yaml
-services:
-  my-image:
-    build:
-      context: ./my-image
-      labels:
-        drover.managed: "true"
-        drover.name: "my-image"
+```sh
+drover images                                   # what can I launch?
+id=$(drover start python-runner --env FOO=bar | jq -r '.id')
+drover exec "$id" -- echo "hello from a micro-container"
+drover stop "$id"                               # resumable
+drover destroy "$id"                            # permanent
 ```
 
-(These are build-time labels on the image itself, not runtime labels on a service container — keep them under `build.labels`, not the top-level `labels` field.)
+Every command prints JSON to stdout so it composes with `jq`. The full
+command, flag, and exit-code reference lives in
+[docs/cli.md](docs/cli.md). You can also drive everything from the browser
+with the optional [webapp](webapp/README.md), or call the REST API directly
+(see the [orchestrator API reference](orchestrator/README.md#api-reference)).
 
-To label a pre-built upstream image (one that doesn't already carry the Drover labels), use `dockerfile_inline` to derive a thin image that just adds them:
+## Operating your install
 
-```yaml
-services:
-  builder:
-    image: my-org/drover-builder:latest
-    build:
-      context: .
-      dockerfile_inline: |
-        FROM ghcr.io/saibotsivad/drover-builder:latest
-        LABEL drover.managed="true"
-        LABEL drover.name="builder"
-```
+Once Drover is running, these are the levers you'll reach for as a
+maintainer:
 
-Compose has no way to attach labels to an image it merely pulls — it can only add labels to images it builds — so the inline `FROM` is what makes the new labels stick. If the upstream image already carries the Drover labels (anything published from this repo does), skip the `build:` block and just `image:` it directly; labels are baked into the image and travel with it.
+- **Configuration.** The orchestrator is tuned entirely through environment
+  variables — auth, the privileged image, timeouts, the idle reaper, log
+  capture, and log level. The full table is in the
+  [orchestrator README](orchestrator/README.md#configuration).
+- **Authentication.** Bearer-token auth is optional and off by default. When
+  enabled, every request except `GET /health` requires a token. See
+  [docs/authentication.md](docs/authentication.md) for key generation and
+  setup.
+- **Observability.** Orchestrator logs are structured JSON on stdout;
+  micro-container stdout/stderr can optionally be captured to disk
+  (`DROVER_ENABLE_CONTAINER_LOGS=true`) so history survives restarts. The
+  retention model and log-shipper recipes are in
+  [docs/observability.md](docs/observability.md).
 
-### Image API
+### Images and builders
 
-| Method | Path | Description |
-|---|---|---|
-| `GET` | `/images` | List all Drover-managed images (those carrying `drover.managed=true`) |
-| `GET` | `/images/{name}` | Get status and metadata for the image whose `drover.name` matches `{name}` |
+Micro-containers launch from images that carry the `drover.managed` and
+`drover.name` labels; the orchestrator ignores everything else on the host.
+Building and labeling those images — including how to label a pre-built
+upstream image — is covered in
+[docs/image-management.md](docs/image-management.md). Which capability-gated
+features an image supports is advertised via the `drover.capabilities`
+label, documented in [docs/capabilities.md](docs/capabilities.md).
 
----
+For build/setup workloads, point `PRIVILEGED_IMAGE` at a privileged image
+such as the reference [builder](builder/README.md), which bundles the guest
+agent with the Docker CLI and git.
 
-## Container API
+## Development
 
-| Method | Path | Description |
-|---|---|---|
-| `POST` | `/containers` | Start a micro-container from a managed image |
-| `GET` | `/containers/{id}` | Get current state and metadata |
-| `POST` | `/containers/{id}/exec` | Send a command |
-| `POST` | `/containers/{id}/stop` | Stop the container (resumable) |
-| `POST` | `/containers/{id}/resume` | Resume a stopped container |
-| `DELETE` | `/containers/{id}` | Stop and destroy the container |
+### Testing
 
-### Create Request Example
+The test suite is split into independent runs:
 
-```json
-{
-  "image": "python-runner",
-  "privileged": true,
-  "env": { "SOME_VAR": "value" },
-  "label": "job-789",
-  "timeout_seconds": 300
-}
-```
+- **Orchestrator tests** (`tests/`) — unit tests for ID generation, config,
+  models, database, and the container-manager state machine:
 
-- If `privileged` is `true` and `PRIVILEGED_IMAGE` is not set, the request is rejected.
-- If `privileged` is `false` or omitted, the orchestrator validates that a Drover-managed image with a matching `drover.name` label is installed.
+  ```sh
+  pytest tests/ -v
+  ```
 
-### Request Validation
+- **Executor tests** (`executor/tests/`) — guest-agent wire protocol,
+  subprocess streaming, and full agent lifecycle against mock socket
+  servers:
 
-All fields on the create request are validated before the container is created.
+  ```sh
+  pytest executor/tests/ -v -p no:asyncio -p no:anyio
+  ```
 
-| Field | Constraints |
-|---|---|
-| `image` | Alphanumeric, dots, hyphens, and underscores only. Slashes separate path components (e.g. `myorg/my-image`). Each component must start and end with an alphanumeric character. Max 256 characters. |
-| `label` | Printable characters only (tabs and newlines are allowed, control characters are rejected). Max 1024 characters. |
-| `env` keys | POSIX-style identifiers: must start with a letter or underscore, followed by letters, digits, or underscores (`[A-Za-z_][A-Za-z0-9_]*`). Max 256 characters per key. |
-| `env` values | Max 32 768 characters (32 KB) per value. |
-| `timeout_seconds` | Must be between 1 and 86 400 (24 hours). Defaults to 300 (5 minutes). |
+- **End-to-end suite** (`e2e/`) — builds every image, brings up a real
+  multi-container stack, and asserts the full lifecycle. See
+  [e2e/README.md](e2e/README.md).
 
----
+The `test.yml` GitHub Actions workflow runs the unit suites on every PR
+alongside a Docker build and a `/health` smoke test.
 
-## Lifecycle State Machine
+### Versioning and releases
 
-Applies equally to standard and privileged containers.
+Each component is versioned independently, driven by human-authored change
+files. To bump a version, drop a YAML file under
+[`changes/`](changes/README.md) describing which project changed and how.
+On merge to `main`, a workflow rolls all pending bumps into a single release
+PR; merging that pushes per-component git tags and publishes images. The
+umbrella CalVer release then cross-links every component version into a
+signed manifest.
 
-```mermaid
-stateDiagram-v2
-    [*] --> initializing: POST /containers
-    initializing --> running: guest agent sends ready
-    initializing --> error: init failure / timeout / crash
-    running --> stopping: POST /stop (or idle timeout or done signal)
-    stopping --> stopped: Docker confirms stop
-    stopped --> resuming: POST /resume
-    resuming --> running: guest agent sends ready
-    resuming --> error: resume failure / timeout / crash
-    running --> destroying: DELETE
-    stopped --> destroying: DELETE
-    destroying --> destroyed: Docker confirms removal
-    destroyed --> [*]
-    error --> [*]
-```
+- Per-component flow and change-file format: [docs/versioning.md](docs/versioning.md)
+- Umbrella releases, manifest, and install assets: [docs/releases.md](docs/releases.md)
 
-A stopped container retains its filesystem layer and can be resumed. Destroyed containers are fully removed.
+### Design decisions
 
-`POST /containers` returns immediately with status `initializing`. The Docker create/start work and the guest-agent startup happen in the background; the container is ready to accept exec commands only once status reaches `running`. `POST /containers/{id}/resume` mirrors this: it returns immediately with status `resuming`, then transitions to `running` only after Docker starts the container *and* the guest agent reconnects and sends a `ready` message. See [Container Initialization](docs/container-initialization.md) for the full flow.
+Significant architectural choices are recorded as ADRs under
+[docs/decisions/](docs/decisions/README.md).
 
-When initialization or resume fails (Docker error, timeout, or an orchestrator restart mid-transition), the container moves to `error` with an `error_code` field explaining the cause:
+## Roadmap
 
-| `error_code` | Meaning |
-|---|---|
-| `init_docker_error` | Docker create or start call failed during initialization. |
-| `init_timeout` | Initialization did not complete within `DROVER_INIT_TIMEOUT_SECONDS`. |
-| `resume_docker_error` | Docker start call failed during resume. |
-| `resume_timeout` | Resume did not complete within `DROVER_INIT_TIMEOUT_SECONDS` (guest agent did not reconnect and send `ready` in time). |
-| `orchestrator_crash` | The orchestrator restarted while the container was still in `initializing` or `resuming`. |
-
-The intermediate states (`stopping`, `resuming`, `destroying`) are transient guard rails. The API returns `409 Conflict` if you attempt an action that conflicts with a transition already in progress.
-
----
-
-## Testing
-
-The test suite is split into two independent test runs:
-
-**Orchestrator tests** (`tests/`): Unit tests for ID generation, config, models, database, and the container manager state machine. Uses pytest-asyncio for async fixture and test support.
-
-```
-pytest tests/ -v
-```
-
-**Executor tests** (`executor/tests/`): Tests for the guest-agent library — wire protocol encode/decode, real subprocess execution with streaming, and full agent lifecycle against mock Unix socket servers. These run with pytest-asyncio disabled to avoid event-loop conflicts on Python 3.12; async tests are executed via a custom conftest hook using `loop.run_until_complete()` (see `executor/tests/conftest.py` for details).
-
-```
-pytest executor/tests/ -v -p no:asyncio -p no:anyio
-```
-
-The `test.yml` GitHub Actions workflow runs both test suites on every PR, along with a Docker build and `/health` smoke test.
-
-## Releasing
-
-Versions are driven by human-authored change files dropped into `changes/`
-as part of any PR that should bump a project's version. See
-[`docs/versioning.md`](docs/versioning.md) for the full lifecycle and the
-[`changes/README.md`](changes/README.md) quick reference for the file format.
-
-The short version: add a YAML file under `changes/` describing which
-projects the PR affects and how (`major` / `minor` / `patch` plus a
-description). When the PR merges to `main`, an `update-release-pr` workflow
-rolls all pending bumps into a single "Release: pending changes" PR on the
-`versioning` branch. Merging that PR pushes per-project git tags
-(`<project>-v<version>`), which the existing publish workflows turn into
-unprefixed Docker tags on GHCR. `executor` is versioned but not published;
-its tags are a release record only.
-
-## Open Issues
-
-See `TODO.md` for the full list of remaining work and open design decisions.
+Remaining work and open design decisions are tracked in [TODO.md](TODO.md).

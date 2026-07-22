@@ -205,8 +205,7 @@ Copy the **Server Key** line to the orchestrator's environment. Copy the
 **CLI Key** line to your shell profile (or wherever you set `DROVER_API_KEY`
 for the CLI). Use the **API Header** line when making raw HTTP requests.
 
-See [Authentication](../README.md#authentication) in the main README for
-the full setup flow.
+See [Authentication](authentication.md) for the full setup flow.
 
 ---
 
